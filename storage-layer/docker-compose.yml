@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: rag-storage-postgres
+    environment:
+      POSTGRES_DB: rag
+      POSTGRES_USER: rag
+      POSTGRES_PASSWORD: rag
+    ports:
+      - "25432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag -d rag"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rag-storage-rustfs
+    command: ["--address", ":9000", "--console-enable", "--access-key", "rustfsadmin", "--secret-key", "rustfsadmin", "/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: rustfsadmin
+      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
+    ports:
+      - "29100:9000"
+      - "29101:9001"
+    volumes:
+      - rustfs-data:/data
+
+  redis:
+    image: redis:7-alpine
+    container_name: rag-storage-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "26380:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  postgres-data:
+  rustfs-data:
+  redis-data:

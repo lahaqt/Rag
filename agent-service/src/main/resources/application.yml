@@ -1,0 +1,38 @@
+server:
+  port: 28083
+
+spring:
+  application:
+    name: rag-agent-service
+
+rag:
+  downstream:
+    query-rewrite-base-url: http://127.0.0.1:28082
+    storage-base-url: http://127.0.0.1:28081
+  retrieval:
+    top-k: 6
+    similarity-threshold: 0.0
+    retrieval-mode: hybrid
+    query-expansion-enabled: true
+    query-expansion-count: 4
+  prompt:
+    max-context-characters: 8000
+  tools:
+    web-search:
+      provider: bing
+      base-url: https://cn.bing.com
+      max-results: 5
+  llm:
+    provider: volcengine-ark
+    model: ark-code-latest
+    api-key: ${ARK_API_KEY:}
+    temperature: 0.2
+    max-tokens: 1200
+    openai-compatible:
+      base-url: https://ark.cn-beijing.volces.com/api/coding/v3
+    anthropic-compatible:
+      base-url: https://ark.cn-beijing.volces.com/api/coding
+  cors:
+    allowed-origins:
+      - http://127.0.0.1:5173
+      - http://localhost:5173
