@@ -30,16 +30,18 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { searchConversations } from './search'
+import type { SearchResult } from './search'
 import './App.css'
 
-type Message = {
+export type Message = {
   id: number
   role: 'user' | 'assistant'
   content: string
   sources?: string[]
 }
 
-type Conversation = {
+export type Conversation = {
   id: number
   title: string
   summary: string
@@ -187,6 +189,8 @@ function App() {
   const [deletingDocumentId, setDeletingDocumentId] = useState('')
   const [draft, setDraft] = useState('')
   const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [scrollToMessageId, setScrollToMessageId] = useState<number | null>(null)
   const [messagesByConversation, setMessagesByConversation] = useState(() =>
     Object.fromEntries(conversations.map((item) => [item.id, item.messages])),
   )
@@ -200,6 +204,29 @@ function App() {
   )
 
   const messages = messagesByConversation[activeId] ?? []
+
+  useEffect(() => {
+    if (!scrollToMessageId) {
+      return
+    }
+
+    const element = document.querySelector(`[data-message-id="${scrollToMessageId}"]`)
+    if (element) {
+      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      element.classList.add('highlight-message')
+      const timer = setTimeout(() => {
+        element.classList.remove('highlight-message')
+      }, 2000)
+      return () => clearTimeout(timer)
+    }
+
+    setScrollToMessageId(null)
+  }, [activeView, activeId, messages, scrollToMessageId])
+
+  const searchResults = useMemo<SearchResult[]>(
+    () => searchConversations(searchQuery, conversations, messagesByConversation),
+    [searchQuery, messagesByConversation],
+  )
   const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId)
   const uploadKnowledgeBaseId = activeKnowledgeBaseId || knowledgeBases[0]?.id || ''
   const totalDocumentCount = knowledgeBases.reduce((total, item) => total + item.documentCount, 0)
@@ -688,11 +715,74 @@ function App() {
       )}
 
       {activeView === 'search' && (
-        <section className="simple-page" aria-label="搜索对话">
-          <div className="simple-panel">
-            <Search size={24} />
-            <h1>搜索对话</h1>
-            <p>后续可在这里搜索历史会话、知识库文件和引用来源。</p>
+        <section className="search-page" aria-label="搜索对话">
+          <div className="search-container">
+            <div className="search-input-wrapper">
+              <Search size={20} />
+              <input
+                aria-label="搜索历史对话"
+                autoFocus
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="搜索历史对话…"
+                type="search"
+                value={searchQuery}
+              />
+            </div>
+
+            {searchQuery.trim() === '' ? (
+              <div className="search-empty">
+                <Search size={40} />
+                <p>输入关键词搜索历史会话</p>
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="search-empty">
+                <p>未找到相关对话</p>
+              </div>
+            ) : (
+              <div className="search-results">
+                {searchResults.map(({ conversation, matchedMessages }) => (
+                  <article className="search-result-card" key={conversation.id}>
+                    <button
+                      className="search-result-header"
+                      onClick={() => {
+                        setActiveId(conversation.id)
+                        setActiveView('chat')
+                        setScrollToMessageId(null)
+                      }}
+                      type="button"
+                    >
+                      <h3>{conversation.title}</h3>
+                      <span>{conversation.time}</span>
+                    </button>
+                    <p className="search-result-summary">{conversation.summary}</p>
+                    {matchedMessages.length > 0 && (
+                      <ul className="search-result-messages">
+                        {matchedMessages.map((message) => (
+                          <li key={message.id}>
+                            <button
+                              onClick={() => {
+                                setActiveId(conversation.id)
+                                setActiveView('chat')
+                                setScrollToMessageId(message.id)
+                              }}
+                              type="button"
+                            >
+                              <span className="search-result-role">
+                                {message.role === 'user' ? '用户' : '助手'}
+                              </span>
+                              <span className="search-result-snippet">
+                                {message.content.slice(0, 120)}
+                                {message.content.length > 120 ? '…' : ''}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
         </section>
       )}
@@ -777,7 +867,11 @@ function App() {
 
           <div className="message-list">
             {messages.map((message) => (
-              <article className={`message ${message.role}`} key={message.id}>
+              <article
+                className={`message ${message.role}`}
+                data-message-id={message.id}
+                key={message.id}
+              >
                 <div className="avatar">{message.role === 'user' ? <UserRound size={17} /> : <Sparkles size={17} />}</div>
                 <div className="message-body">
                   <div className="bubble">
