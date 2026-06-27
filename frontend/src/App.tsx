@@ -32,14 +32,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import './App.css'
 
-type Message = {
+export type Message = {
   id: number
   role: 'user' | 'assistant'
   content: string
   sources?: string[]
 }
 
-type Conversation = {
+export type Conversation = {
   id: number
   title: string
   summary: string
