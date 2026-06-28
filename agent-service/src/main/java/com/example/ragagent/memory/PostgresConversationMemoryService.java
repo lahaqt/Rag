@@ -7,7 +7,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,7 +51,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             """;
 
     private static final String SELECT_META_SQL = """
-            SELECT summary, summary_version, message_count, dialog_state, knowledge_base_id
+            SELECT summary, summary_version, dialog_state
             FROM conversation_memory
             WHERE id = ? AND expires_at > now()
             """;
@@ -60,7 +59,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
     private static final String INSERT_MEMORY_SQL = """
             INSERT INTO conversation_memory (id, expires_at)
             VALUES (?, now() + ? * interval '1 second')
-            ON CONFLICT (id) DO NOTHING
+            ON CONFLICT (id) DO UPDATE SET expires_at = EXCLUDED.expires_at, updated_at = now()
             """;
 
     private static final String SELECT_ALL_MESSAGES_SQL = """
@@ -70,11 +69,6 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
 
     private static final String SELECT_MAX_SEQ_SQL = """
             SELECT COALESCE(MAX(seq), -1) FROM conversation_messages WHERE conversation_id = ?
-            """;
-
-    private static final String SELECT_LAST_MESSAGE_SQL = """
-            SELECT role, content FROM conversation_messages
-            WHERE conversation_id = ? ORDER BY seq DESC LIMIT 1
             """;
 
     private static final String INSERT_MESSAGE_SQL = """
@@ -158,7 +152,6 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         Map<String, Object> metaRow = metaRows.get(0);
         String summary = (String) metaRow.get("summary");
         int summaryVersion = ((Number) metaRow.get("summary_version")).intValue();
-        int messageCount = ((Number) metaRow.get("message_count")).intValue();
         Map<String, String> dialogState = parseDialogState(metaRow.get("dialog_state"));
 
         List<ChatMessage> allMessages = readAllMessages(conversationId);
@@ -177,14 +170,13 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
     }
 
     private void doPersist(String conversationId, StoredMemory memory) {
-        List<ChatMessage> existingMessages = readAllMessages(conversationId);
-        int existingCount = existingMessages.size();
+        Integer maxSeq = jdbcTemplate.queryForObject(SELECT_MAX_SEQ_SQL, Integer.class, conversationId);
+        int existingCount = (maxSeq == null ? -1 : maxSeq) + 1;
 
         if (memory.messages().size() > existingCount) {
             List<ChatMessage> newMessages = memory.messages().subList(existingCount, memory.messages().size());
             for (ChatMessage message : newMessages) {
-                int seq = existingCount++;
-                jdbcTemplate.update(INSERT_MESSAGE_SQL, conversationId, seq, message.role(), message.content());
+                jdbcTemplate.update(INSERT_MESSAGE_SQL, conversationId, existingCount++, message.role(), message.content());
             }
         }
 
