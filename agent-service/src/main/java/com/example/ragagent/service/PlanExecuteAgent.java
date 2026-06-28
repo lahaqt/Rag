@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
@@ -7,40 +8,76 @@ import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
 import java.util.ArrayList;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+/**
+ * Single-agent plan-execute-reflect orchestrator.
+ *
+ * <p>Real iteration and real reflection loops:
+ * <ol>
+ *   <li>{@link ReActLoop} runs the planner-backed iteration loop (single-pass
+ *       for rule planner, multi-pass for LLM planner up to
+ *       {@code rag.agent.max-iterations}).</li>
+ *   <li>{@link AnswerGenerator} produces the initial draft.</li>
+ *   <li>{@link ReflectionCritic} reviews the draft. If it fails, the agent
+ *       re-runs {@code generate} with a reflection hint appended to the LLM
+ *       prompt, up to {@code rag.agent.max-reflection-retries} attempts.</li>
+ * </ol>
+ */
 @Service
 public class PlanExecuteAgent {
+    private static final Logger log = LoggerFactory.getLogger(PlanExecuteAgent.class);
+
+    private static final int DEFAULT_MAX_REFLECTION_RETRIES = 2;
+
     private final ReActLoop reActLoop;
     private final AnswerGenerator answerGenerator;
     private final ReflectionCritic reflectionCritic;
+    private final int maxReflectionRetries;
+
+    public PlanExecuteAgent(ReActLoop reActLoop, AnswerGenerator answerGenerator, ReflectionCritic reflectionCritic) {
+        this(reActLoop, answerGenerator, reflectionCritic, DEFAULT_MAX_REFLECTION_RETRIES);
+    }
+
+    @Autowired
+    public PlanExecuteAgent(
+            ReActLoop reActLoop,
+            AnswerGenerator answerGenerator,
+            ReflectionCritic reflectionCritic,
+            RagProperties properties
+    ) {
+        this(reActLoop,
+                answerGenerator,
+                reflectionCritic,
+                properties == null || properties.agent() == null
+                        ? DEFAULT_MAX_REFLECTION_RETRIES
+                        : Math.max(0, Math.min(properties.agent().maxReflectionRetries(), 8)));
+    }
 
     public PlanExecuteAgent(
             ReActLoop reActLoop,
             AnswerGenerator answerGenerator,
-            ReflectionCritic reflectionCritic
+            ReflectionCritic reflectionCritic,
+            int maxReflectionRetries
     ) {
         this.reActLoop = reActLoop;
         this.answerGenerator = answerGenerator;
         this.reflectionCritic = reflectionCritic;
+        this.maxReflectionRetries = Math.max(0, Math.min(maxReflectionRetries, 8));
     }
 
     public ChatResponse answer(ChatRequest request, QueryAnalysisResponse analysis) {
         List<AgentTraceStep> trace = new ArrayList<>();
-        AgentPlan plan = plan(request, analysis);
-        trace.add(new AgentTraceStep(
-                1,
-                "plan",
-                analysis.route(),
-                "",
-                "create_plan",
-                String.join(" -> ", plan.steps())
-        ));
 
-        ReActLoopResult loopResult = reActLoop.run(request, analysis, 2);
+        // Stage A — plan + iterative tool observation.
+        ReActLoopResult loopResult = reActLoop.run(request, analysis, 1);
         trace.addAll(loopResult.trace());
 
-        AnswerDraft draft = generate(request, analysis, loopResult);
+        // Stage B — generate + reflect with closed-loop retries.
+        AnswerDraft draft = generate(request, analysis, loopResult, "");
         trace.add(new AgentTraceStep(
                 trace.size() + 1,
                 "answer",
@@ -60,26 +97,66 @@ public class PlanExecuteAgent {
                 reflection.observation()
         ));
 
+        int attempts = 1;
+        String lastObservation = reflection.observation();
+        while (!reflection.passed() && attempts <= maxReflectionRetries) {
+            String reflectionHint = "previous_attempt=" + attempts
+                    + "; reflection_observation=" + lastObservation
+                    + "; 请根据当前已经检索到的事实重新生成答案，避免编造或忽略证据。";
+            AnswerDraft retryDraft = generate(request, analysis, loopResult, reflectionHint);
+            ReflectionResult retryReview = reflectionCritic.review(request, analysis, loopResult, retryDraft);
+            attempts++;
+            trace.add(new AgentTraceStep(
+                    trace.size() + 1,
+                    "answer",
+                    analysis.route(),
+                    loopResult.decision().toolName(),
+                    "regenerate",
+                    "attempt=" + attempts + "; draftFinishReason=" + retryDraft.finishReason()
+            ));
+            trace.add(new AgentTraceStep(
+                    trace.size() + 1,
+                    "reflection",
+                    analysis.route(),
+                    loopResult.decision().toolName(),
+                    "critique_retry_" + (attempts - 1),
+                    retryReview.observation()
+            ));
+            draft = retryDraft;
+            reflection = retryReview;
+            lastObservation = retryReview.observation();
+            if (reflection.passed()) {
+                break;
+            }
+        }
+        if (!reflection.passed() && attempts > maxReflectionRetries) {
+            log.warn(
+                    "PlanExecuteAgent reflection retry exhausted for query='{}'; lastObservation={}",
+                    request.query(),
+                    lastObservation
+            );
+        }
+
+        trace.add(new AgentTraceStep(
+                trace.size() + 1,
+                "reflection",
+                analysis.route(),
+                loopResult.decision().toolName(),
+                "final",
+                "passed=" + reflection.passed()
+                        + "; observation=" + reflection.observation()
+                        + "; attempts=" + attempts
+        ));
+
         return response(request, analysis, loopResult, draft, trace);
     }
 
-    private AgentPlan plan(ChatRequest request, QueryAnalysisResponse analysis) {
-        List<String> steps = new ArrayList<>();
-        steps.add("analyze_query");
-        if ("tool".equals(analysis.intent()) || "tool_invocation".equals(analysis.route())) {
-            steps.add("route_tool");
-        } else if (!isBlank(request.knowledgeBaseId())
-                && ("knowledge".equals(analysis.intent()) || "knowledge_retrieval".equals(analysis.route()))) {
-            steps.add("retrieve_knowledge");
-        } else {
-            steps.add("direct_answer");
-        }
-        steps.add("generate_answer");
-        steps.add("reflect");
-        return new AgentPlan(steps);
-    }
-
-    private AnswerDraft generate(ChatRequest request, QueryAnalysisResponse analysis, ReActLoopResult loopResult) {
+    private AnswerDraft generate(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            ReActLoopResult loopResult,
+            String reflectionHint
+    ) {
         ToolDecision decision = loopResult.decision();
         AgentToolResult toolResult = loopResult.toolResult();
         if ("web_search".equals(decision.toolName())) {
@@ -90,7 +167,7 @@ public class PlanExecuteAgent {
                         toolResult.finishReason()
                 );
             }
-            return answerGenerator.generateFromWebSearch(request, analysis, decision, loopResult.webSearchResults());
+            return answerGenerator.generateFromWebSearch(request, analysis, decision, loopResult.webSearchResults(), reflectionHint);
         }
         if ("mcp_tool".equals(decision.toolName())) {
             if (toolResult == null) {
@@ -99,9 +176,9 @@ public class PlanExecuteAgent {
             if (!toolResult.success()) {
                 return new AnswerDraft("MCP tool failed: " + safeObservation(toolResult), false, toolResult.finishReason());
             }
-            return answerGenerator.generateFromMcpTool(request, analysis, toolResult);
+            return answerGenerator.generateFromMcpTool(request, analysis, toolResult, reflectionHint);
         }
-        return answerGenerator.generate(request, analysis, loopResult.retrievalHits());
+        return answerGenerator.generate(request, analysis, loopResult.retrievalHits(), reflectionHint);
     }
 
     private ChatResponse response(
@@ -157,9 +234,5 @@ public class PlanExecuteAgent {
 
     private String safeObservation(AgentToolResult result) {
         return result.observation() == null ? "unknown error" : result.observation();
-    }
-
-    private boolean isBlank(String value) {
-        return value == null || value.isBlank();
     }
 }

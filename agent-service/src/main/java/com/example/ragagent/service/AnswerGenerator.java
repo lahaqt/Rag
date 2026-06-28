@@ -21,6 +21,15 @@ public class AnswerGenerator {
     }
 
     public AnswerDraft generate(ChatRequest request, QueryAnalysisResponse analysis, List<RetrievalHit> hits) {
+        return generate(request, analysis, hits, "");
+    }
+
+    public AnswerDraft generate(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            List<RetrievalHit> hits,
+            String reflectionHint
+    ) {
         if ("follow_up".equals(analysis.intent()) || "ask_follow_up".equals(analysis.route())) {
             return new AnswerDraft("这个问题还需要补充信息。请说明你要处理的是订单、物流、余额、退货、提交、修改地址、取消订单还是售后维修中的哪一类，并补充必要的订单号、商品或操作场景。", false, "follow_up_required");
         }
@@ -44,17 +53,23 @@ public class AnswerGenerator {
             try {
                 String answer = llmGateway.complete(
                         promptBuilder.systemPrompt(),
-                        promptBuilder.userPrompt(request, analysis, hits),
+                        promptBuilder.userPrompt(request, analysis, hits, reflectionHint),
                         properties.llm().temperature(),
                         properties.llm().maxTokens()
                 );
-                return new AnswerDraft(answer, true, "llm_generated");
+                String finishReason = reflectionHint == null || reflectionHint.isBlank()
+                        ? "llm_generated" : "llm_generated_reflection_retry";
+                return new AnswerDraft(answer, true, finishReason);
             } catch (Exception exception) {
-                return new AnswerDraft(fallbackAnswer(hits, "大模型调用失败：" + exception.getMessage()), false, "llm_failed_retrieval_fallback");
+                String finishReason = reflectionHint == null || reflectionHint.isBlank()
+                        ? "llm_failed_retrieval_fallback" : "llm_failed_retrieval_fallback_retry";
+                return new AnswerDraft(fallbackAnswer(hits, "大模型调用失败：" + exception.getMessage()), false, finishReason);
             }
         }
 
-        return new AnswerDraft(fallbackAnswer(hits, "当前未配置可用的大模型 API Key。"), false, "llm_not_configured_retrieval_fallback");
+        String finishReason = reflectionHint == null || reflectionHint.isBlank()
+                ? "llm_not_configured_retrieval_fallback" : "llm_not_configured_retrieval_fallback_retry";
+        return new AnswerDraft(fallbackAnswer(hits, "当前未配置可用的大模型 API Key。"), false, finishReason);
     }
 
     public AnswerDraft generateFromWebSearch(
@@ -62,6 +77,16 @@ public class AnswerGenerator {
             QueryAnalysisResponse analysis,
             ToolDecision toolDecision,
             List<WebSearchResult> results
+    ) {
+        return generateFromWebSearch(request, analysis, toolDecision, results, "");
+    }
+
+    public AnswerDraft generateFromWebSearch(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            ToolDecision toolDecision,
+            List<WebSearchResult> results,
+            String reflectionHint
     ) {
         if (results.isEmpty()) {
             return new AnswerDraft("联网搜索没有返回可用结果。可以换一个更具体的问题再试。", false, "web_search_no_results");
@@ -71,35 +96,59 @@ public class AnswerGenerator {
             try {
                 String answer = llmGateway.complete(
                         promptBuilder.webSearchSystemPrompt(),
-                        promptBuilder.webSearchPrompt(request, analysis, toolDecision, results),
+                        promptBuilder.webSearchPrompt(request, analysis, toolDecision, results, reflectionHint),
                         properties.llm().temperature(),
                         properties.llm().maxTokens()
                 );
-                return new AnswerDraft(answer, true, "web_search_llm_generated");
+                boolean retry = reflectionHint != null && !reflectionHint.isBlank();
+                return new AnswerDraft(answer, true,
+                        retry ? "web_search_llm_generated_retry" : "web_search_llm_generated");
             } catch (Exception exception) {
-                return new AnswerDraft(webSearchFallback(results, "大模型调用失败：" + exception.getMessage()), false, "web_search_llm_failed_fallback");
+                return new AnswerDraft(webSearchFallback(results, "大模型调用失败：" + exception.getMessage()),
+                        false,
+                        reflectionHint == null || reflectionHint.isBlank()
+                                ? "web_search_llm_failed_fallback"
+                                : "web_search_llm_failed_fallback_retry");
             }
         }
 
-        return new AnswerDraft(webSearchFallback(results, "当前未配置可用的大模型 API Key。"), false, "web_search_llm_not_configured_fallback");
+        return new AnswerDraft(webSearchFallback(results, "当前未配置可用的大模型 API Key。"),
+                false,
+                reflectionHint == null || reflectionHint.isBlank()
+                        ? "web_search_llm_not_configured_fallback"
+                        : "web_search_llm_not_configured_fallback_retry");
     }
 
     public AnswerDraft generateFromMcpTool(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult) {
+        return generateFromMcpTool(request, analysis, toolResult, "");
+    }
+
+    public AnswerDraft generateFromMcpTool(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult, String reflectionHint) {
         if (llmGateway.isConfigured()) {
             try {
                 String answer = llmGateway.complete(
                         promptBuilder.toolSystemPrompt(),
-                        promptBuilder.mcpToolPrompt(request, analysis, toolResult),
+                        promptBuilder.mcpToolPrompt(request, analysis, toolResult, reflectionHint),
                         properties.llm().temperature(),
                         properties.llm().maxTokens()
                 );
-                return new AnswerDraft(answer, true, "mcp_tool_llm_generated");
+                boolean retry = reflectionHint != null && !reflectionHint.isBlank();
+                return new AnswerDraft(answer, true,
+                        retry ? "mcp_tool_llm_generated_retry" : "mcp_tool_llm_generated");
             } catch (Exception exception) {
-                return new AnswerDraft(mcpFallback(toolResult, "大模型调用失败：" + exception.getMessage()), false, "mcp_tool_llm_failed_fallback");
+                return new AnswerDraft(mcpFallback(toolResult, "大模型调用失败：" + exception.getMessage()),
+                        false,
+                        reflectionHint == null || reflectionHint.isBlank()
+                                ? "mcp_tool_llm_failed_fallback"
+                                : "mcp_tool_llm_failed_fallback_retry");
             }
         }
 
-        return new AnswerDraft(mcpFallback(toolResult, "当前未配置可用的大模型 API Key。"), false, "mcp_tool_llm_not_configured_fallback");
+        return new AnswerDraft(mcpFallback(toolResult, "当前未配置可用的大模型 API Key。"),
+                false,
+                reflectionHint == null || reflectionHint.isBlank()
+                        ? "mcp_tool_llm_not_configured_fallback"
+                        : "mcp_tool_llm_not_configured_fallback_retry");
     }
 
     private String fallbackAnswer(List<RetrievalHit> hits, String reason) {
