@@ -3,6 +3,7 @@ package com.example.ragagent.controller;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.service.ChatOrchestrator;
+import com.example.ragagent.service.MultiAgentOrchestrator;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.util.Map;
@@ -18,10 +19,16 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/chat")
 public class ChatController {
     private final ChatOrchestrator chatOrchestrator;
+    private final MultiAgentOrchestrator multiAgentOrchestrator;
     private final ExecutorService chatExecutor;
 
-    public ChatController(ChatOrchestrator chatOrchestrator, ExecutorService chatExecutor) {
+    public ChatController(
+            ChatOrchestrator chatOrchestrator,
+            MultiAgentOrchestrator multiAgentOrchestrator,
+            ExecutorService chatExecutor
+    ) {
         this.chatOrchestrator = chatOrchestrator;
+        this.multiAgentOrchestrator = multiAgentOrchestrator;
         this.chatExecutor = chatExecutor;
     }
 
@@ -30,33 +37,54 @@ public class ChatController {
         return chatOrchestrator.answer(request);
     }
 
+    @PostMapping("/multi-agent")
+    public ChatResponse multiAgentChat(@Valid @RequestBody ChatRequest request) {
+        return multiAgentOrchestrator.answer(request);
+    }
+
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@Valid @RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(0L);
         chatExecutor.execute(() -> {
             try {
-                ChatResponse response = chatOrchestrator.answer(request);
-                emitter.send(SseEmitter.event()
-                        .name("metadata")
-                        .data(Map.of(
-                                "intent", response.intent(),
-                                "route", response.route(),
-                                "rewrittenQuery", response.rewrittenQuery(),
-                                "toolName", response.toolName(),
-                                "finishReason", response.finishReason(),
-                                "agentTrace", response.agentTrace()
-                        )));
-                for (String chunk : chunks(response.answer(), 64)) {
-                    emitter.send(SseEmitter.event().name("delta").data(Map.of("content", chunk)));
-                }
-                emitter.send(SseEmitter.event().name("citations").data(response.citations()));
-                emitter.send(SseEmitter.event().name("done").data(response));
-                emitter.complete();
+                sendResponse(emitter, chatOrchestrator.answer(request));
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
             }
         });
         return emitter;
+    }
+
+    @PostMapping(path = "/multi-agent/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter multiAgentStream(@Valid @RequestBody ChatRequest request) {
+        SseEmitter emitter = new SseEmitter(0L);
+        chatExecutor.execute(() -> {
+            try {
+                sendResponse(emitter, multiAgentOrchestrator.answer(request));
+            } catch (Exception exception) {
+                completeWithError(emitter, exception);
+            }
+        });
+        return emitter;
+    }
+
+    private void sendResponse(SseEmitter emitter, ChatResponse response) throws IOException {
+        emitter.send(SseEmitter.event()
+                .name("metadata")
+                .data(Map.of(
+                        "intent", response.intent(),
+                        "route", response.route(),
+                        "rewrittenQuery", response.rewrittenQuery(),
+                        "toolName", response.toolName(),
+                        "finishReason", response.finishReason(),
+                        "agentTrace", response.agentTrace()
+                )));
+        for (String chunk : chunks(response.answer(), 64)) {
+            emitter.send(SseEmitter.event().name("delta").data(Map.of("content", chunk)));
+        }
+        emitter.send(SseEmitter.event().name("citations").data(response.citations()));
+        emitter.send(SseEmitter.event().name("done").data(response));
+        emitter.complete();
     }
 
     private void completeWithError(SseEmitter emitter, Exception exception) {
