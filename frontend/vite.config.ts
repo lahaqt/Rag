@@ -19,6 +19,10 @@ export default defineConfig({
         target: 'http://127.0.0.1:28083',
         changeOrigin: true,
       },
+      '/api/conversations': {
+        target: 'http://127.0.0.1:28083',
+        changeOrigin: true,
+      },
       '/api': {
         target: 'http://127.0.0.1:28081',
         changeOrigin: true,

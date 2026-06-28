@@ -8,7 +8,7 @@ export interface SearchResult {
 export function searchConversations(
   query: string,
   conversations: Conversation[],
-  messagesByConversation: Record<number, Message[]>,
+  messagesByConversation: Record<string, Message[]>,
 ): SearchResult[] {
   const keyword = query.trim().toLowerCase()
   if (!keyword) {
