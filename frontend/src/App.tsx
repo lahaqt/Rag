@@ -6,7 +6,6 @@ import {
   Bot,
   Brain,
   CheckCircle2,
-  ChevronDown,
   Copy,
   Database,
   FileText,
@@ -31,7 +30,6 @@ import {
   Upload,
   UserRound,
   Wrench,
-  Zap,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
@@ -45,6 +43,7 @@ export type Message = {
   content: string
   sources?: string[]
   agentMode?: 'default' | 'multi-agent'
+  command?: SlashCommandName
   agentTrace?: AgentTraceStep[]
 }
 
@@ -57,6 +56,20 @@ export type Conversation = {
 }
 
 type ViewMode = 'chat' | 'search' | 'knowledge' | 'mcp'
+
+type SlashCommandName = 'multi-agent' | 'plan' | 'status' | 'feedback'
+
+type ParsedSlashCommand = {
+  name?: SlashCommandName
+  query: string
+}
+
+type FeedbackEntry = {
+  id: number
+  conversationId: number
+  content: string
+  createdAt: string
+}
 
 type KnowledgeBase = {
   id: string
@@ -260,6 +273,7 @@ function App() {
   const [callingMcpTool, setCallingMcpTool] = useState('')
   const [mcpToolArguments, setMcpToolArguments] = useState<Record<string, string>>({})
   const [mcpCallResult, setMcpCallResult] = useState<McpCallResult | null>(null)
+  const [feedbackEntries, setFeedbackEntries] = useState<FeedbackEntry[]>([])
   const [draft, setDraft] = useState('')
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -427,10 +441,12 @@ function App() {
     if (!text || isStreaming) {
       return
     }
-    const multiAgentCommand = '/multi-agent'
-    const isMultiAgent = text.toLowerCase().startsWith(multiAgentCommand)
-    const query = isMultiAgent ? text.slice(multiAgentCommand.length).trim() : text
-    if (!query) {
+    const parsedCommand = parseSlashCommand(text)
+    const commandName = parsedCommand.name
+    const isMultiAgent = commandName === 'multi-agent'
+    const isPlan = commandName === 'plan'
+    const query = parsedCommand.query
+    if (commandName !== 'status' && !query) {
       return
     }
 
@@ -439,6 +455,7 @@ function App() {
       role: 'user',
       content: text,
       agentMode: isMultiAgent ? 'multi-agent' : 'default',
+      command: commandName,
     }
 
     const assistantMessageId = nextMessageId.current++
@@ -449,19 +466,57 @@ function App() {
     }
 
     setDraft('')
-    setIsStreaming(true)
     setMessagesByConversation((current) => ({
       ...current,
       [activeId]: [...(current[activeId] ?? []), nextUserMessage],
     }))
 
+    if (commandName === 'status') {
+      nextAssistantMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: statusMessage(),
+        command: 'status',
+      }
+      setMessagesByConversation((current) => ({
+        ...current,
+        [activeId]: [...(current[activeId] ?? []), nextAssistantMessage],
+      }))
+      return
+    }
+
+    if (commandName === 'feedback') {
+      const createdAt = new Date().toISOString()
+      setFeedbackEntries((current) => [
+        ...current,
+        {
+          id: Date.now(),
+          conversationId: activeId,
+          content: query,
+          createdAt,
+        },
+      ])
+      nextAssistantMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: `已记录反馈。\n\n${query}`,
+        command: 'feedback',
+      }
+      setMessagesByConversation((current) => ({
+        ...current,
+        [activeId]: [...(current[activeId] ?? []), nextAssistantMessage],
+      }))
+      return
+    }
+
+    setIsStreaming(true)
     fetch(isMultiAgent ? '/api/chat/multi-agent' : '/api/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        query,
+        query: isPlan ? planQuery(query) : query,
         knowledgeBaseId: activeKnowledgeBaseId || undefined,
         conversationId: String(activeId),
         history: messages.map((message) => ({
@@ -488,6 +543,7 @@ function App() {
           role: 'assistant',
           content: chatResponse.answer,
           agentMode: isMultiAgent ? 'multi-agent' : 'default',
+          command: commandName,
           agentTrace: chatResponse.agentTrace,
           sources:
             chatResponse.citations.length > 0
@@ -504,6 +560,7 @@ function App() {
           role: 'assistant',
           content: error instanceof Error ? `Agent 问答失败：${error.message}` : 'Agent 问答失败',
           agentMode: isMultiAgent ? 'multi-agent' : 'default',
+          command: commandName,
         }
       })
       .finally(() => {
@@ -851,32 +908,82 @@ function App() {
     }))
   }
 
-  function toggleMultiAgentDraft() {
-    const command = '/multi-agent'
-    const value = draft.trimStart()
-    if (value.toLowerCase().startsWith(command)) {
-      setDraft(value.slice(command.length).trimStart())
-      return
+  function parseSlashCommand(value: string): ParsedSlashCommand {
+    if (!value.startsWith('/')) {
+      return { query: value }
     }
-    setDraft(`${command} ${draft}`.trimEnd())
+
+    const [rawCommand = '', ...rest] = value.split(/\s+/)
+    const command = rawCommand.slice(1).toLowerCase()
+    const query = rest.join(' ').trim()
+    if (isSlashCommand(command)) {
+      return { name: command, query }
+    }
+    return { query: value }
   }
 
-  function useMultiAgentCommand() {
-    const command = '/multi-agent'
+  function isSlashCommand(value: string): value is SlashCommandName {
+    return ['multi-agent', 'plan', 'status', 'feedback'].includes(value)
+  }
+
+  function planQuery(query: string) {
+    return [
+      '请先进入计划模式，只输出可执行计划，不要直接执行或假装已经完成。',
+      '计划需要包含：目标、关键步骤、接口/数据流影响、测试验证、假设与风险。',
+      '',
+      `用户目标：${query}`,
+    ].join('\n')
+  }
+
+  function statusMessage() {
+    const activeServer = activeMcpServer ? `${activeMcpServer.name} (${activeMcpServer.status})` : '未选择'
+    return [
+      '当前状态',
+      '',
+      `- 会话：${activeConversation.title}`,
+      `- 知识库：${activeKnowledgeBase?.name ?? knowledgeBases[0]?.name ?? '未选择'}`,
+      `- 文档：${totalDocumentCount} 个，分块：${totalChunkCount} 个`,
+      `- 向量：${vectorStatus ? `${vectorStatus.vectorCount} 条 / ${vectorStatus.storeProvider}` : '未加载'}`,
+      `- MCP：${mcpServers.length} 个服务，${onlineMcpCount} 个在线，${mcpToolCount} 个工具`,
+      `- 当前 MCP：${activeServer}`,
+      `- 已记录反馈：${feedbackEntries.length} 条`,
+    ].join('\n')
+  }
+
+  function setSlashCommand(command: SlashCommandName) {
     const value = draft.trimStart()
-    if (value.toLowerCase().startsWith(command)) {
-      return
-    }
-    const nextDraft = value.startsWith('/') ? `${command} ` : `${command} ${draft}`.trimEnd()
-    setDraft(nextDraft)
+    const parsed = parseSlashCommand(value)
+    const nextQuery = parsed.name ? parsed.query : draft
+    setDraft(`/${command} ${nextQuery}`.trimEnd())
+  }
+
+  function useSlashCommand(command: SlashCommandName) {
+    setSlashCommand(command)
   }
 
   function traceLabel(step: AgentTraceStep) {
     return [step.phase, step.action, step.toolName || step.route].filter(Boolean).join(' / ')
   }
 
-  const draftUsesMultiAgent = draft.trimStart().toLowerCase().startsWith('/multi-agent')
-  const showCommandMenu = draft.trimStart().startsWith('/') && !draftUsesMultiAgent
+  function commandLabel(command?: SlashCommandName) {
+    if (command === 'multi-agent') {
+      return 'Multi-Agent'
+    }
+    if (command === 'plan') {
+      return 'Plan'
+    }
+    if (command === 'status') {
+      return 'Status'
+    }
+    if (command === 'feedback') {
+      return 'Feedback'
+    }
+    return ''
+  }
+
+  const draftCommandText = draft.trimStart()
+  const draftCommandComplete = /^\/(multi-agent|plan|status|feedback)\s/.test(draftCommandText.toLowerCase())
+  const showCommandMenu = draftCommandText.startsWith('/') && !draftCommandComplete
 
   return (
     <main className={appClassName}>
@@ -1529,29 +1636,8 @@ function App() {
             <div className="model-picker">
               <Bot size={18} />
               <span>RAG Chat</span>
-              <button type="button">
-                GPT Compatible
-                <ChevronDown size={15} />
-              </button>
             </div>
             <div className="topbar-actions">
-              <button className="pill-button" type="button">
-                <Zap size={15} />
-                快速
-              </button>
-              <button className="pill-button subtle" type="button">
-                <Brain size={15} />
-                推理
-              </button>
-              <button
-                aria-pressed={draftUsesMultiAgent}
-                className={draftUsesMultiAgent ? 'pill-button multi-agent-pill active' : 'pill-button multi-agent-pill'}
-                onClick={toggleMultiAgentDraft}
-                type="button"
-              >
-                <Sparkles size={15} />
-                Multi-Agent
-              </button>
               <button
                 aria-pressed={inspectorOpen}
                 className="icon-button"
@@ -1609,10 +1695,10 @@ function App() {
               >
                 <div className="avatar">{message.role === 'user' ? <UserRound size={17} /> : <Sparkles size={17} />}</div>
                 <div className="message-body">
-                  {message.agentMode === 'multi-agent' && (
-                    <div className="agent-mode-badge">
+                  {message.command && (
+                    <div className={`agent-mode-badge command-${message.command}`}>
                       <Sparkles size={13} />
-                      Multi-Agent
+                      {commandLabel(message.command)}
                     </div>
                   )}
                   <div className="bubble">
@@ -1685,12 +1771,33 @@ function App() {
         <div className="composer-zone">
           {showCommandMenu && (
             <div className="command-menu" role="listbox" aria-label="命令">
-              <button onClick={useMultiAgentCommand} type="button">
+              <button onClick={() => useSlashCommand('multi-agent')} type="button">
                 <span>
                   <Sparkles size={15} />
                   /multi-agent
                 </span>
                 <small>启用 Supervisor 和专家 Agent 编排</small>
+              </button>
+              <button onClick={() => useSlashCommand('plan')} type="button">
+                <span>
+                  <Brain size={15} />
+                  /plan
+                </span>
+                <small>先生成执行计划，不直接执行</small>
+              </button>
+              <button onClick={() => useSlashCommand('status')} type="button">
+                <span>
+                  <Activity size={15} />
+                  /status
+                </span>
+                <small>查看知识库、向量和 MCP 状态</small>
+              </button>
+              <button onClick={() => useSlashCommand('feedback')} type="button">
+                <span>
+                  <MessageSquarePlus size={15} />
+                  /feedback
+                </span>
+                <small>记录本轮反馈</small>
               </button>
             </div>
           )}
@@ -1706,23 +1813,6 @@ function App() {
               <div className="composer-tools">
                 <button className="icon-button" title="上传文件" type="button">
                   <Paperclip size={17} />
-                </button>
-                <button className="mini-chip" type="button">
-                  <Database size={14} />
-                  企业制度库
-                </button>
-                <button className="mini-chip" type="button">
-                  <ShieldCheck size={14} />
-                  引用优先
-                </button>
-                <button
-                  aria-pressed={draftUsesMultiAgent}
-                  className={draftUsesMultiAgent ? 'mini-chip active' : 'mini-chip'}
-                  onClick={toggleMultiAgentDraft}
-                  type="button"
-                >
-                  <Sparkles size={14} />
-                  Multi-Agent
                 </button>
               </div>
               <button className="send-button" disabled={!draft.trim() || isStreaming} type="submit" title="发送">
