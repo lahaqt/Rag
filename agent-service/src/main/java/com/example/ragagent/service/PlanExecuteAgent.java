@@ -92,6 +92,15 @@ public class PlanExecuteAgent {
             }
             return answerGenerator.generateFromWebSearch(request, analysis, decision, loopResult.webSearchResults());
         }
+        if ("mcp_tool".equals(decision.toolName())) {
+            if (toolResult == null) {
+                return new AnswerDraft("MCP tool did not return a result.", false, "mcp_tool_empty_result");
+            }
+            if (!toolResult.success()) {
+                return new AnswerDraft("MCP tool failed: " + safeObservation(toolResult), false, toolResult.finishReason());
+            }
+            return answerGenerator.generateFromMcpTool(request, analysis, toolResult);
+        }
         return answerGenerator.generate(request, analysis, loopResult.retrievalHits());
     }
 

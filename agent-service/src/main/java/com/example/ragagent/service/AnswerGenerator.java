@@ -84,6 +84,24 @@ public class AnswerGenerator {
         return new AnswerDraft(webSearchFallback(results, "当前未配置可用的大模型 API Key。"), false, "web_search_llm_not_configured_fallback");
     }
 
+    public AnswerDraft generateFromMcpTool(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult) {
+        if (llmGateway.isConfigured()) {
+            try {
+                String answer = llmGateway.complete(
+                        promptBuilder.toolSystemPrompt(),
+                        promptBuilder.mcpToolPrompt(request, analysis, toolResult),
+                        properties.llm().temperature(),
+                        properties.llm().maxTokens()
+                );
+                return new AnswerDraft(answer, true, "mcp_tool_llm_generated");
+            } catch (Exception exception) {
+                return new AnswerDraft(mcpFallback(toolResult, "大模型调用失败：" + exception.getMessage()), false, "mcp_tool_llm_failed_fallback");
+            }
+        }
+
+        return new AnswerDraft(mcpFallback(toolResult, "当前未配置可用的大模型 API Key。"), false, "mcp_tool_llm_not_configured_fallback");
+    }
+
     private String fallbackAnswer(List<RetrievalHit> hits, String reason) {
         StringBuilder answer = new StringBuilder();
         answer.append(reason).append("先返回检索摘要：\n\n");
@@ -112,6 +130,14 @@ public class AnswerGenerator {
                     .append("\n");
         }
         return answer.toString().trim();
+    }
+
+    private String mcpFallback(AgentToolResult toolResult, String reason) {
+        return reason + "先返回 MCP 工具结果：\n\n" + safeObservation(toolResult);
+    }
+
+    private String safeObservation(AgentToolResult toolResult) {
+        return toolResult == null || toolResult.observation() == null ? "" : toolResult.observation();
     }
 
     private String excerpt(String value, int maxLength) {

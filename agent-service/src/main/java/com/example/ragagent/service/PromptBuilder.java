@@ -41,6 +41,16 @@ public class PromptBuilder {
                 """;
     }
 
+    public String toolSystemPrompt() {
+        return """
+                你是带 MCP 工具调用能力的问答 Agent。必须遵守：
+                1. 优先依据 MCP 工具返回的结构化结果回答。
+                2. 不要编造工具没有返回的字段、状态或业务数据。
+                3. 使用简洁中文回答，并保留关键 ID、名称、状态、时间等可核对信息。
+                4. 如果工具结果是错误或信息不足，要明确说明不能确认。
+                """;
+    }
+
     public String userPrompt(ChatRequest request, QueryAnalysisResponse analysis, List<RetrievalHit> hits) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("用户问题：").append(request.query()).append("\n");
@@ -77,6 +87,26 @@ public class PromptBuilder {
 
                 请基于上面的网页搜索结果回答用户问题。
                 如果答案依赖某个网页结果，请在对应句子后标注引用编号。
+                """);
+        return prompt.toString();
+    }
+
+    public String mcpToolPrompt(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("用户问题：").append(request.query()).append("\n");
+        prompt.append("改写后问题：").append(nullToEmpty(analysis.rewrittenQuery())).append("\n");
+        prompt.append("意图：").append(nullToEmpty(analysis.intent())).append("\n");
+        prompt.append("工具：").append(nullToEmpty(toolResult.toolName())).append("\n");
+        prompt.append("工具 query：").append(nullToEmpty(toolResult.query())).append("\n\n");
+
+        appendHistory(prompt, request.normalizedHistory());
+
+        prompt.append("MCP 工具返回：\n");
+        prompt.append(trim(nullToEmpty(toolResult.observation()), properties.prompt().maxContextCharacters()));
+        prompt.append("""
+
+                请基于上面的 MCP 工具返回回答用户问题。
+                如果工具返回不足以回答，请直接说明还缺少什么。
                 """);
         return prompt.toString();
     }

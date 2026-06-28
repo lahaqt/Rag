@@ -42,6 +42,10 @@ public record AgentToolResult(
         );
     }
 
+    public static AgentToolResult mcp(String query, boolean success, String observation, String finishReason) {
+        return new AgentToolResult("mcp_tool", query, success, observation, finishReason, List.of(), List.of());
+    }
+
     public static AgentToolResult failure(String toolName, String query, String observation, String finishReason) {
         return new AgentToolResult(toolName, query, false, observation, finishReason, List.of(), List.of());
     }
