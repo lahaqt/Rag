@@ -1,0 +1,71 @@
+﻿server:
+  port: 28081
+
+spring:
+  application:
+    name: rag-knowledge-service
+  datasource:
+    url: jdbc:postgresql://localhost:25432/rag
+    username: rag
+    password: rag
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: localhost
+      port: 26380
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+rag:
+  storage-dir: data/knowledge-bases
+  chunk-size: 500
+  chunk-overlap: 50
+  chunking:
+    strategy: recursive
+    chunk-size: 500
+    chunk-overlap: 50
+    min-chunk-size: 120
+    separators:
+      - "\n\n"
+      - "\n"
+      - "\u3002"
+      - "\uff01"
+      - "\uff1f"
+      - ";"
+      - "\uff1b"
+      - "."
+      - ","
+      - "\uff0c"
+      - " "
+      - ""
+  metadata:
+    provider: postgres
+  object-storage:
+    provider: rustfs
+    endpoint: http://localhost:29100
+    access-key: rustfsadmin
+    secret-key: rustfsadmin
+    bucket: rag-documents
+  queue:
+    provider: redis
+    stream: document-tasks
+    consumer-group: storage-indexers
+    consumer-name: knowledge-service-1
+  vector:
+    embedding:
+      provider: siliconflow
+      base-url: https://api.siliconflow.cn/v1
+      api-key: sk-jppgrqnxysqtgludkgmvbgrtdkneefylvddrvgpqychwubkq
+      model: Qwen/Qwen3-Embedding-8B
+      dimensions: 1024
+    store:
+      provider: pgvector
+      collection: rag_chunks_qwen3_1024
+      connection-url: jdbc:postgresql://localhost:25432/rag
+  cors:
+    allowed-origins:
+      - http://127.0.0.1:5173
+      - http://localhost:5173
+
