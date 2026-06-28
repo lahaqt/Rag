@@ -9,6 +9,8 @@ spring:
     username: rag
     password: rag
     driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
   data:
     redis:
       host: localhost
