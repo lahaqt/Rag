@@ -1,4 +1,4 @@
-# Logs
+﻿# Logs
 logs/
 *.log
 *.err.log
@@ -16,8 +16,8 @@ dist/
 dist-ssr/
 
 # Local runtime data
-storage-layer/data/
-storage-layer/tmp/
+knowledge-service/data/
+knowledge-service/tmp/
 *.pid
 
 # Environment and local configuration
