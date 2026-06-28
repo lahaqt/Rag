@@ -44,6 +44,8 @@ export type Message = {
   role: 'user' | 'assistant'
   content: string
   sources?: string[]
+  agentMode?: 'default' | 'multi-agent'
+  agentTrace?: AgentTraceStep[]
 }
 
 export type Conversation = {
@@ -100,14 +102,7 @@ type AgentChatResponse = {
   answer: string
   rewrittenQuery: string
   citations: ChatCitation[]
-  agentTrace?: Array<{
-    step: number
-    phase: string
-    route: string
-    toolName: string
-    action: string
-    observation: string
-  }>
+  agentTrace?: AgentTraceStep[]
   toolName?: string
   webSearchResults?: Array<{
     index: number
@@ -116,6 +111,15 @@ type AgentChatResponse = {
     snippet: string
   }>
   finishReason: string
+}
+
+type AgentTraceStep = {
+  step: number
+  phase: string
+  route: string
+  toolName: string
+  action: string
+  observation: string
 }
 
 type McpTool = {
@@ -423,11 +427,18 @@ function App() {
     if (!text || isStreaming) {
       return
     }
+    const multiAgentCommand = '/multi-agent'
+    const isMultiAgent = text.toLowerCase().startsWith(multiAgentCommand)
+    const query = isMultiAgent ? text.slice(multiAgentCommand.length).trim() : text
+    if (!query) {
+      return
+    }
 
     const nextUserMessage: Message = {
       id: nextMessageId.current++,
       role: 'user',
       content: text,
+      agentMode: isMultiAgent ? 'multi-agent' : 'default',
     }
 
     const assistantMessageId = nextMessageId.current++
@@ -444,13 +455,13 @@ function App() {
       [activeId]: [...(current[activeId] ?? []), nextUserMessage],
     }))
 
-    fetch('/api/chat', {
+    fetch(isMultiAgent ? '/api/chat/multi-agent' : '/api/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        query: text,
+        query,
         knowledgeBaseId: activeKnowledgeBaseId || undefined,
         conversationId: String(activeId),
         history: messages.map((message) => ({
@@ -476,6 +487,8 @@ function App() {
           id: assistantMessageId,
           role: 'assistant',
           content: chatResponse.answer,
+          agentMode: isMultiAgent ? 'multi-agent' : 'default',
+          agentTrace: chatResponse.agentTrace,
           sources:
             chatResponse.citations.length > 0
               ? chatResponse.citations.map(
@@ -490,6 +503,7 @@ function App() {
           id: assistantMessageId,
           role: 'assistant',
           content: error instanceof Error ? `Agent 问答失败：${error.message}` : 'Agent 问答失败',
+          agentMode: isMultiAgent ? 'multi-agent' : 'default',
         }
       })
       .finally(() => {
@@ -836,6 +850,33 @@ function App() {
       envVars: current.envVars.length > 1 ? current.envVars.filter((_, itemIndex) => itemIndex !== index) : [{ key: '', value: '' }],
     }))
   }
+
+  function toggleMultiAgentDraft() {
+    const command = '/multi-agent'
+    const value = draft.trimStart()
+    if (value.toLowerCase().startsWith(command)) {
+      setDraft(value.slice(command.length).trimStart())
+      return
+    }
+    setDraft(`${command} ${draft}`.trimEnd())
+  }
+
+  function useMultiAgentCommand() {
+    const command = '/multi-agent'
+    const value = draft.trimStart()
+    if (value.toLowerCase().startsWith(command)) {
+      return
+    }
+    const nextDraft = value.startsWith('/') ? `${command} ` : `${command} ${draft}`.trimEnd()
+    setDraft(nextDraft)
+  }
+
+  function traceLabel(step: AgentTraceStep) {
+    return [step.phase, step.action, step.toolName || step.route].filter(Boolean).join(' / ')
+  }
+
+  const draftUsesMultiAgent = draft.trimStart().toLowerCase().startsWith('/multi-agent')
+  const showCommandMenu = draft.trimStart().startsWith('/') && !draftUsesMultiAgent
 
   return (
     <main className={appClassName}>
@@ -1503,6 +1544,15 @@ function App() {
                 推理
               </button>
               <button
+                aria-pressed={draftUsesMultiAgent}
+                className={draftUsesMultiAgent ? 'pill-button multi-agent-pill active' : 'pill-button multi-agent-pill'}
+                onClick={toggleMultiAgentDraft}
+                type="button"
+              >
+                <Sparkles size={15} />
+                Multi-Agent
+              </button>
+              <button
                 aria-pressed={inspectorOpen}
                 className="icon-button"
                 onClick={() => setInspectorOpen((open) => !open)}
@@ -1559,6 +1609,12 @@ function App() {
               >
                 <div className="avatar">{message.role === 'user' ? <UserRound size={17} /> : <Sparkles size={17} />}</div>
                 <div className="message-body">
+                  {message.agentMode === 'multi-agent' && (
+                    <div className="agent-mode-badge">
+                      <Sparkles size={13} />
+                      Multi-Agent
+                    </div>
+                  )}
                   <div className="bubble">
                     <p>{message.content}</p>
                   </div>
@@ -1584,6 +1640,28 @@ function App() {
                       ))}
                     </div>
                   )}
+                  {message.role === 'assistant' && message.agentMode === 'multi-agent' && message.agentTrace && (
+                    <details className="agent-trace-panel">
+                      <summary>
+                        <span>
+                          <Brain size={14} />
+                          执行轨迹
+                        </span>
+                        <strong>{message.agentTrace.length}</strong>
+                      </summary>
+                      <ol>
+                        {message.agentTrace.map((step) => (
+                          <li key={`${message.id}-${step.step}`}>
+                            <span>{step.step}</span>
+                            <div>
+                              <strong>{traceLabel(step)}</strong>
+                              <p>{step.observation}</p>
+                            </div>
+                          </li>
+                        ))}
+                      </ol>
+                    </details>
+                  )}
                 </div>
               </article>
             ))}
@@ -1605,11 +1683,22 @@ function App() {
         </div>
 
         <div className="composer-zone">
+          {showCommandMenu && (
+            <div className="command-menu" role="listbox" aria-label="命令">
+              <button onClick={useMultiAgentCommand} type="button">
+                <span>
+                  <Sparkles size={15} />
+                  /multi-agent
+                </span>
+                <small>启用 Supervisor 和专家 Agent 编排</small>
+              </button>
+            </div>
+          )}
           <form className="composer" onSubmit={sendMessage}>
             <textarea
               aria-label="输入问题"
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="向知识库提问，或粘贴需要分析的内容"
+              placeholder="输入问题，或输入 / 打开命令"
               rows={2}
               value={draft}
             />
@@ -1625,6 +1714,15 @@ function App() {
                 <button className="mini-chip" type="button">
                   <ShieldCheck size={14} />
                   引用优先
+                </button>
+                <button
+                  aria-pressed={draftUsesMultiAgent}
+                  className={draftUsesMultiAgent ? 'mini-chip active' : 'mini-chip'}
+                  onClick={toggleMultiAgentDraft}
+                  type="button"
+                >
+                  <Sparkles size={14} />
+                  Multi-Agent
                 </button>
               </div>
               <button className="send-button" disabled={!draft.trim() || isStreaming} type="submit" title="发送">

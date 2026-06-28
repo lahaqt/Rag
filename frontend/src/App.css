@@ -1673,6 +1673,21 @@ button {
   max-width: 760px;
 }
 
+.agent-mode-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  min-height: 26px;
+  padding: 0 9px;
+  border: 1px solid rgba(54, 116, 181, 0.22);
+  border-radius: 999px;
+  color: #2b6bb6;
+  background: rgba(54, 116, 181, 0.09);
+  font-size: 12px;
+  font-weight: 720;
+}
+
 .bubble {
   width: fit-content;
   max-width: 100%;
@@ -1728,6 +1743,92 @@ button {
   font-weight: 700;
 }
 
+.agent-trace-panel {
+  max-width: 760px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: var(--soft-shadow);
+}
+
+.agent-trace-panel summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 38px;
+  padding: 0 12px;
+  cursor: pointer;
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 680;
+  list-style: none;
+}
+
+.agent-trace-panel summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-trace-panel summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.agent-trace-panel summary strong {
+  display: inline-grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  color: #fff;
+  background: #2b6bb6;
+  font-size: 11px;
+}
+
+.agent-trace-panel ol {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0 12px 12px;
+  list-style: none;
+}
+
+.agent-trace-panel li {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+.agent-trace-panel li > span {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  color: #2b6bb6;
+  background: rgba(54, 116, 181, 0.1);
+  font-size: 11px;
+  font-weight: 760;
+}
+
+.agent-trace-panel li strong {
+  display: block;
+  overflow-wrap: anywhere;
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+.agent-trace-panel li p {
+  margin: 3px 0 0;
+  overflow-wrap: anywhere;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
 .typing {
   display: inline-flex;
   gap: 6px;
@@ -1755,6 +1856,47 @@ button {
 .composer-zone {
   padding: 14px min(7vw, 90px) 24px;
   background: linear-gradient(180deg, transparent, var(--workspace) 24%);
+}
+
+.command-menu {
+  max-width: 960px;
+  margin: 0 auto 8px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--composer);
+  box-shadow: var(--soft-shadow);
+}
+
+.command-menu button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 42px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--text-strong);
+  background: transparent;
+  text-align: left;
+}
+
+.command-menu button:hover {
+  background: var(--hover);
+}
+
+.command-menu span {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 720;
+}
+
+.command-menu small {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .composer {
@@ -1796,6 +1938,13 @@ button {
 .mini-chip {
   min-height: 34px;
   font-size: 13px;
+}
+
+.mini-chip.active,
+.multi-agent-pill.active {
+  border-color: rgba(54, 116, 181, 0.32);
+  color: #245ca2;
+  background: rgba(54, 116, 181, 0.11);
 }
 
 .send-button {
