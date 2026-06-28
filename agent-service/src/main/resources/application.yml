@@ -4,6 +4,15 @@ server:
 spring:
   application:
     name: rag-agent-service
+  datasource:
+    url: jdbc:postgresql://localhost:25432/rag
+    username: rag
+    password: rag
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: localhost
+      port: 26380
 
 rag:
   downstream:
@@ -26,6 +35,18 @@ rag:
     enabled: true
     timeout-seconds: 8
     servers: []
+  agent:
+    max-iterations: 4
+    max-reflection-retries: 2
+    planner-enabled: true
+  memory:
+    provider: in-memory
+    enabled: true
+    ttl-seconds: 86400
+    recent-messages: 8
+    summarize-after-messages: 12
+    summary-max-characters: 1600
+    state-max-entries: 16
   llm:
     provider: volcengine-ark
     model: ark-code-latest

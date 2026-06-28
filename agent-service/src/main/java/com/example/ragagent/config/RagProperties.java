@@ -11,7 +11,9 @@ public record RagProperties(
         Prompt prompt,
         Llm llm,
         Tools tools,
-        Mcp mcp
+        Mcp mcp,
+        Agent agent,
+        Memory memory
 ) {
     public RagProperties {
         if (cors == null) {
@@ -42,6 +44,12 @@ public record RagProperties(
         }
         if (mcp == null) {
             mcp = new Mcp(false, 8, List.of());
+        }
+        if (agent == null) {
+            agent = new Agent(4, 2, true);
+        }
+if (memory == null) {
+            memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L);
         }
     }
 
@@ -143,6 +151,40 @@ public record RagProperties(
                 baseUrl = "https://cn.bing.com";
             }
             maxResults = maxResults == null ? 5 : Math.max(1, Math.min(maxResults, 10));
+        }
+    }
+
+    public record Agent(Integer maxIterations, Integer maxReflectionRetries, Boolean plannerEnabled) {
+        public Agent {
+            maxIterations = maxIterations == null ? 4 : Math.max(1, Math.min(maxIterations, 8));
+            maxReflectionRetries = maxReflectionRetries == null
+                    ? 2
+                    : Math.max(0, Math.min(maxReflectionRetries, 4));
+            plannerEnabled = plannerEnabled == null || plannerEnabled;
+        }
+    }
+
+public record Memory(
+            String provider,
+            Boolean enabled,
+            Integer recentMessages,
+            Integer summarizeAfterMessages,
+            Integer summaryMaxCharacters,
+            Integer stateMaxEntries,
+            Long ttlSeconds
+    ) {
+        public Memory {
+            provider = (provider == null || provider.isBlank()) ? "in-memory" : provider;
+            enabled = enabled == null || enabled;
+            recentMessages = recentMessages == null ? 8 : Math.max(2, Math.min(recentMessages, 30));
+            summarizeAfterMessages = summarizeAfterMessages == null
+                    ? 12
+                    : Math.max(recentMessages + 2, Math.min(summarizeAfterMessages, 80));
+            summaryMaxCharacters = summaryMaxCharacters == null
+                    ? 1600
+                    : Math.max(300, Math.min(summaryMaxCharacters, 6000));
+            stateMaxEntries = stateMaxEntries == null ? 16 : Math.max(4, Math.min(stateMaxEntries, 64));
+            ttlSeconds = ttlSeconds == null ? 86400L : Math.max(60L, Math.min(ttlSeconds, 604800L));
         }
     }
 
