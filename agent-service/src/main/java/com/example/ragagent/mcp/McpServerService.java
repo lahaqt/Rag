@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -79,9 +80,21 @@ public class McpServerService {
                 request.enabled()
         );
         ManagedMcpServer next = new ManagedMcpServer(definition);
+        if (definition.enabled()) {
+            try {
+                refreshServer(next);
+            } catch (Exception exception) {
+                next.close();
+                throw new IllegalArgumentException(
+                        "MCP server validation failed for " + definition.transport() + " "
+                                + (definition.isStdio() ? definition.command() : definition.endpointText())
+                                + ": " + rootMessage(exception),
+                        exception
+                );
+            }
+        }
         previous = servers.put(definition.id(), next);
-        if (previous != null && previous.tools() != null) {
-            next.markHealthy(previous.tools());
+        if (previous != null) {
             previous.close();
         }
         return next.toResponse();
@@ -97,14 +110,31 @@ public class McpServerService {
 
     public McpServerResponse refresh(String id) {
         ManagedMcpServer server = requireServer(id);
+        return refreshAndReturn(server);
+    }
+
+    @Scheduled(fixedDelayString = "${rag.mcp.health-check-interval-ms:30000}", initialDelayString = "${rag.mcp.health-check-initial-delay-ms:10000}")
+    public void superviseServerStatus() {
+        for (ManagedMcpServer server : servers.values()) {
+            if (server.definition().enabled()) {
+                refreshAndReturn(server);
+            }
+        }
+    }
+
+    private McpServerResponse refreshAndReturn(ManagedMcpServer server) {
         try {
-            List<McpToolDescriptor> tools = mcpSdkClient.listTools(server);
-            server.markHealthy(tools);
+            refreshServer(server);
         } catch (Exception exception) {
-            server.markError(exception.getMessage());
-            throw exception;
+            server.close();
+            server.markError(rootMessage(exception));
         }
         return server.toResponse();
+    }
+
+    private void refreshServer(ManagedMcpServer server) {
+        List<McpToolDescriptor> tools = mcpSdkClient.listTools(server);
+        server.markHealthy(tools);
     }
 
     public McpToolCallResponse callTool(String id, String toolName, Map<String, Object> arguments) {
@@ -304,5 +334,21 @@ public class McpServerService {
 
     private String normalize(String value) {
         return value == null ? "" : value.toLowerCase(Locale.ROOT).trim();
+    }
+
+    private String rootMessage(Throwable throwable) {
+        StringBuilder message = new StringBuilder();
+        Throwable current = throwable;
+        while (current != null) {
+            String currentMessage = current.getMessage();
+            if (currentMessage != null && !currentMessage.isBlank()) {
+                if (!message.isEmpty()) {
+                    message.append(" -> ");
+                }
+                message.append(currentMessage.trim());
+            }
+            current = current.getCause();
+        }
+        return message.isEmpty() ? throwable.getClass().getSimpleName() : message.toString();
     }
 }
