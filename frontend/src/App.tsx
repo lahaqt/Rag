@@ -1,5 +1,6 @@
 import {
   Activity,
+  Archive,
   ArrowDown,
   ArrowUp,
   BookOpen,
@@ -16,6 +17,7 @@ import {
   MoreHorizontal,
   PanelRight,
   Paperclip,
+  Pin,
   Plug,
   Plus,
   RefreshCw,
@@ -48,11 +50,16 @@ export type Message = {
 }
 
 export type Conversation = {
-  id: number
+  id: string
   title: string
   summary: string
   time: string
   messages: Message[]
+  knowledgeBaseId?: string
+  pinned?: boolean
+  archived?: boolean
+  deleted?: boolean
+  messageCount?: number
 }
 
 type ViewMode = 'chat' | 'search' | 'knowledge' | 'mcp'
@@ -66,7 +73,7 @@ type ParsedSlashCommand = {
 
 type FeedbackEntry = {
   id: number
-  conversationId: number
+  conversationId: string
   content: string
   createdAt: string
 }
@@ -112,6 +119,7 @@ type ChatCitation = {
 }
 
 type AgentChatResponse = {
+  conversationId: string
   answer: string
   rewrittenQuery: string
   citations: ChatCitation[]
@@ -179,9 +187,41 @@ type McpCallResult = {
   rawResult: string
 }
 
-const conversations: Conversation[] = [
+type JsonObject = Record<string, unknown>
+
+type ConversationRecord = {
+  id: string
+  userId: string
+  title: string
+  summary: string
+  knowledgeBaseId: string
+  pinned: boolean
+  archived: boolean
+  deleted: boolean
+  messageCount: number
+  createdAt: string
+  updatedAt: string
+  lastMessageAt: string
+}
+
+type ConversationMessageRecord = {
+  id: number
+  conversationId: string
+  seq: number
+  role: 'user' | 'assistant'
+  content: string
+  llmUsed: boolean
+  finishReason: string
+  toolName: string
+  citationsJson: string
+  createdAt: string
+}
+
+const USER_ID = 'local-user'
+
+const initialConversations: Conversation[] = [
   {
-    id: 1,
+    id: 'conversation-seed-1',
     title: 'RAG 知识问答设计',
     summary: '检索策略、引用、模型参数',
     time: '刚刚',
@@ -201,7 +241,7 @@ const conversations: Conversation[] = [
     ],
   },
   {
-    id: 2,
+    id: 'conversation-seed-2',
     title: '知识库接入',
     summary: '上传、切片、向量化状态',
     time: '12:48',
@@ -215,7 +255,7 @@ const conversations: Conversation[] = [
     ],
   },
   {
-    id: 3,
+    id: 'conversation-seed-3',
     title: '模型参数调试',
     summary: 'Temperature、Top K、引用数量',
     time: '昨天',
@@ -242,8 +282,45 @@ const sourcePreview = [
   { title: '入职流程.docx', meta: '制度章节 · 命中 0.73' },
 ]
 
+function formatDate(value?: string | null) {
+  if (!value) {
+    return '-'
+  }
+
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(value))
+}
+
+function mapConversationRecord(record: ConversationRecord): Conversation {
+  return {
+    id: record.id,
+    title: record.title || 'New conversation',
+    summary: record.summary || `${record.messageCount} messages`,
+    time: formatDate(record.lastMessageAt || record.updatedAt),
+    messages: [],
+    knowledgeBaseId: record.knowledgeBaseId,
+    pinned: record.pinned,
+    archived: record.archived,
+    deleted: record.deleted,
+    messageCount: record.messageCount,
+  }
+}
+
+function mapMessageRecord(record: ConversationMessageRecord): Message {
+  return {
+    id: Number(record.id),
+    role: record.role,
+    content: record.content,
+  }
+}
+
 function App() {
-  const [activeId, setActiveId] = useState(1)
+  const [conversationList, setConversationList] = useState<Conversation[]>(initialConversations)
+  const [activeId, setActiveId] = useState(initialConversations[0].id)
   const [activeView, setActiveView] = useState<ViewMode>('chat')
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [activeKnowledgeBaseId, setActiveKnowledgeBaseId] = useState('')
@@ -277,17 +354,22 @@ function App() {
   const [draft, setDraft] = useState('')
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
+  const [conversationQuery, setConversationQuery] = useState('')
+  const [conversationKnowledgeFilter, setConversationKnowledgeFilter] = useState('')
+  const [showArchivedConversations, setShowArchivedConversations] = useState(false)
+  const [conversationLoading, setConversationLoading] = useState(false)
+  const [conversationError, setConversationError] = useState('')
   const [scrollToMessageId, setScrollToMessageId] = useState<number | null>(null)
   const [messagesByConversation, setMessagesByConversation] = useState(() =>
-    Object.fromEntries(conversations.map((item) => [item.id, item.messages])),
+    Object.fromEntries(initialConversations.map((item) => [item.id, item.messages])) as Record<string, Message[]>,
   )
   const [isStreaming, setIsStreaming] = useState(false)
   const nextMessageId = useRef(100)
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
 
   const activeConversation = useMemo(
-    () => conversations.find((item) => item.id === activeId) ?? conversations[0],
-    [activeId],
+    () => conversationList.find((item) => item.id === activeId) ?? conversationList[0] ?? initialConversations[0],
+    [activeId, conversationList],
   )
 
   const messages = useMemo(
@@ -315,10 +397,163 @@ function App() {
     }
   }, [activeView, activeId, scrollToMessageId])
 
+  useEffect(() => {
+    let ignore = false
+
+    async function loadConversations() {
+      setConversationLoading(true)
+      setConversationError('')
+      try {
+        const params = new URLSearchParams({
+          userId: USER_ID,
+          archived: String(showArchivedConversations),
+        })
+        if (conversationKnowledgeFilter) {
+          params.set('knowledgeBaseId', conversationKnowledgeFilter)
+        }
+        if (conversationQuery.trim()) {
+          params.set('query', conversationQuery.trim())
+        }
+        const response = await fetch(`/api/conversations?${params}`)
+        if (!response.ok) {
+          throw new Error(`GET /api/conversations ${response.status}`)
+        }
+        const records = (await response.json()) as ConversationRecord[]
+        if (ignore) {
+          return
+        }
+        const nextConversations = records.map(mapConversationRecord)
+        if (nextConversations.length > 0) {
+          setConversationList(nextConversations)
+          setActiveId((current) =>
+            nextConversations.some((item) => item.id === current) ? current : nextConversations[0].id,
+          )
+        }
+      } catch (error) {
+        if (!ignore) {
+          setConversationError(error instanceof Error ? error.message : '会话加载失败')
+        }
+      } finally {
+        if (!ignore) {
+          setConversationLoading(false)
+        }
+      }
+    }
+
+    loadConversations()
+
+    return () => {
+      ignore = true
+    }
+  }, [showArchivedConversations, conversationKnowledgeFilter, conversationQuery])
+
+  useEffect(() => {
+    if (!activeId || activeId.startsWith('conversation-seed-')) {
+      return
+    }
+    let ignore = false
+
+    async function loadMessages() {
+      try {
+        const response = await fetch(`/api/conversations/${encodeURIComponent(activeId)}/messages?userId=${USER_ID}`)
+        if (!response.ok) {
+          throw new Error(`GET /api/conversations/${activeId}/messages ${response.status}`)
+        }
+        const records = (await response.json()) as ConversationMessageRecord[]
+        if (!ignore) {
+          setMessagesByConversation((current) => ({
+            ...current,
+            [activeId]: records.map(mapMessageRecord),
+          }))
+        }
+      } catch (error) {
+        if (!ignore) {
+          setConversationError(error instanceof Error ? error.message : '消息加载失败')
+        }
+      }
+    }
+
+    loadMessages()
+
+    return () => {
+      ignore = true
+    }
+  }, [activeId])
+
+  async function createConversation() {
+    setConversationError('')
+    try {
+      const response = await fetch('/api/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: USER_ID,
+          title: 'New conversation',
+          knowledgeBaseId: activeKnowledgeBaseId,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`POST /api/conversations ${response.status}`)
+      }
+      const conversation = mapConversationRecord((await response.json()) as ConversationRecord)
+      setConversationList((current) => [conversation, ...current])
+      setMessagesByConversation((current) => ({ ...current, [conversation.id]: [] }))
+      setActiveId(conversation.id)
+      setActiveView('chat')
+    } catch (error) {
+      setConversationError(error instanceof Error ? error.message : '新建会话失败')
+    }
+  }
+
+  async function updateConversation(id: string, patch: Partial<ConversationRecord>) {
+    setConversationError('')
+    try {
+      const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: USER_ID, ...patch }),
+      })
+      if (!response.ok) {
+        throw new Error(`PATCH /api/conversations/${id} ${response.status}`)
+      }
+      const conversation = mapConversationRecord((await response.json()) as ConversationRecord)
+      setConversationList((current) =>
+        patch.deleted
+          ? current.filter((item) => item.id !== id)
+          : current.map((item) => (item.id === id ? { ...item, ...conversation } : item)),
+      )
+      if (patch.deleted && activeId === id) {
+        const next = conversationList.find((item) => item.id !== id)
+        if (next) {
+          setActiveId(next.id)
+        }
+      }
+    } catch (error) {
+      setConversationError(error instanceof Error ? error.message : '会话更新失败')
+    }
+  }
+
   const searchResults = useMemo<SearchResult[]>(
-    () => searchConversations(searchQuery, conversations, messagesByConversation),
-    [searchQuery, messagesByConversation],
+    () => searchConversations(searchQuery, conversationList, messagesByConversation),
+    [searchQuery, conversationList, messagesByConversation],
   )
+  const visibleConversations = useMemo(() => {
+    return [...conversationList]
+      .filter((item) => Boolean(item.archived) === showArchivedConversations)
+      .filter((item) => !conversationKnowledgeFilter || item.knowledgeBaseId === conversationKnowledgeFilter)
+      .filter((item) => {
+        const keyword = conversationQuery.trim().toLowerCase()
+        if (!keyword) {
+          return true
+        }
+        const messagesText = (messagesByConversation[item.id] ?? [])
+          .map((message) => message.content)
+          .join(' ')
+          .toLowerCase()
+        return [item.title, item.summary, messagesText].join(' ').toLowerCase().includes(keyword)
+      })
+      .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)))
+  }, [conversationList, showArchivedConversations, conversationKnowledgeFilter, conversationQuery, messagesByConversation])
   const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId)
   const uploadKnowledgeBaseId = activeKnowledgeBaseId || knowledgeBases[0]?.id || ''
   const totalDocumentCount = knowledgeBases.reduce((total, item) => total + item.documentCount, 0)
@@ -528,6 +763,7 @@ function App() {
           retrievalMode: 'hybrid',
           queryExpansionEnabled: true,
           queryExpansionCount: 4,
+          userId: USER_ID,
         },
       }),
     })
@@ -538,6 +774,7 @@ function App() {
         return (await response.json()) as AgentChatResponse
       })
       .then((chatResponse) => {
+        const serverConversationId = chatResponse.conversationId || activeId
         nextAssistantMessage = {
           id: assistantMessageId,
           role: 'assistant',
@@ -553,6 +790,21 @@ function App() {
                 )
               : chatResponse.webSearchResults?.map((result) => `${result.title} / ${result.url}`),
         }
+        setConversationList((current) =>
+          current.map((item) =>
+            item.id === activeId || item.id === serverConversationId
+              ? {
+                  ...item,
+                  id: serverConversationId,
+                  title: item.title === 'New conversation' ? query.slice(0, 60) : item.title,
+                  summary: chatResponse.answer.slice(0, 140),
+                  time: '刚刚',
+                  knowledgeBaseId: activeKnowledgeBaseId || item.knowledgeBaseId,
+                  messageCount: (item.messageCount ?? messages.length) + 2,
+                }
+              : item,
+          ),
+        )
       })
       .catch((error) => {
         nextAssistantMessage = {
@@ -649,19 +901,6 @@ function App() {
     }
   }
 
-  function formatDate(value?: string | null) {
-    if (!value) {
-      return '-'
-    }
-
-    return new Intl.DateTimeFormat('zh-CN', {
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    }).format(new Date(value))
-  }
-
   function formatSize(size: number) {
     if (size < 1024) {
       return `${size} B`
@@ -671,6 +910,15 @@ function App() {
     }
 
     return `${(size / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  async function apiErrorMessage(response: Response, fallback: string) {
+    try {
+      const body = (await response.json()) as { message?: string }
+      return body.message || fallback
+    } catch {
+      return fallback
+    }
   }
 
   const appClassName = [
@@ -707,7 +955,7 @@ function App() {
       })
 
       if (!response.ok) {
-        throw new Error(`${mcpForm.id ? 'PUT' : 'POST'} /api/mcp/servers ${response.status}`)
+        throw new Error(await apiErrorMessage(response, `${mcpForm.id ? 'PUT' : 'POST'} /api/mcp/servers ${response.status}`))
       }
 
       const savedServer = (await response.json()) as McpServer
@@ -737,7 +985,7 @@ function App() {
         method: 'DELETE',
       })
       if (!response.ok) {
-        throw new Error(`DELETE /api/mcp/servers/${server.id} ${response.status}`)
+        throw new Error(await apiErrorMessage(response, `DELETE /api/mcp/servers/${server.id} ${response.status}`))
       }
       setMcpServers((current) => current.filter((item) => item.id !== server.id))
       setSelectedMcpServerId((current) => (current === server.id ? '' : current))
@@ -757,7 +1005,7 @@ function App() {
         method: 'POST',
       })
       if (!response.ok) {
-        throw new Error(`POST /api/mcp/servers/${server.id}/refresh ${response.status}`)
+        throw new Error(await apiErrorMessage(response, `POST /api/mcp/servers/${server.id}/refresh ${response.status}`))
       }
       const refreshedServer = (await response.json()) as McpServer
       setMcpServers((current) => current.map((item) => (item.id === refreshedServer.id ? refreshedServer : item)))
@@ -778,16 +1026,22 @@ function App() {
     try {
       const rawArguments = mcpToolArguments[key]?.trim() || '{}'
       const parsedArguments = JSON.parse(rawArguments) as Record<string, unknown>
+      const normalizedArguments = normalizeToolArguments(tool, parsedArguments)
+      validateToolArguments(tool, normalizedArguments)
+      const normalizedArgumentsText = JSON.stringify(normalizedArguments, null, 2)
+      if (normalizedArgumentsText !== rawArguments) {
+        setMcpToolArguments((current) => ({ ...current, [key]: normalizedArgumentsText }))
+      }
       const response = await fetch(`/api/mcp/servers/${server.id}/tools/${encodeURIComponent(tool.name)}/call`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ arguments: parsedArguments }),
+        body: JSON.stringify({ arguments: normalizedArguments }),
       })
 
       if (!response.ok) {
-        throw new Error(`POST /api/mcp/servers/${server.id}/tools/${tool.name}/call ${response.status}`)
+        throw new Error(await apiErrorMessage(response, `POST /api/mcp/servers/${server.id}/tools/${tool.name}/call ${response.status}`))
       }
 
       setMcpCallResult((await response.json()) as McpCallResult)
@@ -837,7 +1091,7 @@ function App() {
         }),
       })
       if (!response.ok) {
-        throw new Error(`PUT /api/mcp/servers/${server.id} ${response.status}`)
+        throw new Error(await apiErrorMessage(response, `PUT /api/mcp/servers/${server.id} ${response.status}`))
       }
       const updatedServer = (await response.json()) as McpServer
       setMcpServers((current) => current.map((item) => (item.id === updatedServer.id ? updatedServer : item)))
@@ -851,6 +1105,218 @@ function App() {
       return '{}'
     }
     return JSON.stringify(schema, null, 2)
+  }
+
+  function normalizeToolArguments(tool: McpTool, argumentsValue: Record<string, unknown>) {
+    if (!isJsonObject(tool.inputSchema) || !isJsonObject(tool.inputSchema.properties)) {
+      return argumentsValue
+    }
+
+    const canonicalNames = Object.keys(tool.inputSchema.properties)
+    const canonicalByNormalizedName = new Map(
+      canonicalNames.map((name) => [normalizeArgumentName(name), name] as const),
+    )
+    const normalizedArguments: Record<string, unknown> = {}
+
+    for (const [name, value] of Object.entries(argumentsValue)) {
+      const exactName = canonicalNames.includes(name) ? name : undefined
+      const canonicalName = exactName ?? canonicalByNormalizedName.get(normalizeArgumentName(name)) ?? name
+      if (!(canonicalName in normalizedArguments) || exactName) {
+        normalizedArguments[canonicalName] = value
+      }
+    }
+
+    return normalizedArguments
+  }
+
+  function validateToolArguments(tool: McpTool, argumentsValue: Record<string, unknown>) {
+    if (!isJsonObject(tool.inputSchema)) {
+      return
+    }
+
+    const schema = tool.inputSchema
+    const requiredNames = Array.isArray(schema.required)
+      ? schema.required.filter((item): item is string => typeof item === 'string')
+      : []
+    const missingNames = requiredNames.filter((name) => {
+      const value = argumentsValue[name] ?? argumentValueByCanonicalName(argumentsValue, name)
+      if (value !== undefined && value !== null && value !== '') {
+        argumentsValue[name] = value
+      }
+      return value === undefined || value === null || value === ''
+    })
+    if (missingNames.length > 0) {
+      throw new Error(`MCP 参数缺少必填字段：${missingNames.join(', ')}`)
+    }
+
+    if (schema.additionalProperties === false && isJsonObject(schema.properties)) {
+      const allowedNames = new Set(Object.keys(schema.properties))
+      const extraNames = Object.keys(argumentsValue).filter((name) => !allowedNames.has(name))
+      if (extraNames.length > 0) {
+        throw new Error(
+          `MCP 参数字段名不匹配：${extraNames.join(', ')}。可用字段：${[...allowedNames].join(', ') || '无'}`,
+        )
+      }
+    }
+  }
+
+  function argumentValueByCanonicalName(argumentsValue: Record<string, unknown>, canonicalName: string) {
+    const normalizedCanonicalName = normalizeArgumentName(canonicalName)
+    const matchedEntry = Object.entries(argumentsValue).find(
+      ([name]) => normalizeArgumentName(name) === normalizedCanonicalName,
+    )
+    return matchedEntry?.[1]
+  }
+
+  function formatToolArgumentsExample(tool: McpTool) {
+    return JSON.stringify(toolArgumentsExample(tool), null, 2)
+  }
+
+  function toolArgumentsExample(tool: McpTool): JsonObject {
+    const schemaExample = schemaValueExample('', tool.inputSchema)
+    if (isJsonObject(schemaExample)) {
+      return schemaExample
+    }
+    return fallbackToolArgumentsExample(tool)
+  }
+
+  function schemaValueExample(name: string, schema: unknown): unknown {
+    if (!isJsonObject(schema)) {
+      return undefined
+    }
+
+    if ('example' in schema) {
+      return schema.example
+    }
+    if (Array.isArray(schema.examples) && schema.examples.length > 0) {
+      return schema.examples[0]
+    }
+    if ('default' in schema) {
+      return schema.default
+    }
+    if ('const' in schema) {
+      return schema.const
+    }
+    if (Array.isArray(schema.enum) && schema.enum.length > 0) {
+      return schema.enum[0]
+    }
+
+    const objectExample = objectSchemaExample(schema)
+    if (objectExample) {
+      return objectExample
+    }
+
+    const variants = [schema.oneOf, schema.anyOf, schema.allOf]
+      .filter(Array.isArray)
+      .flat() as unknown[]
+    for (const variant of variants) {
+      const value = schemaValueExample(name, variant)
+      if (value !== undefined) {
+        return value
+      }
+    }
+
+    if (schema.type === 'array') {
+      const itemExample = schemaValueExample(name, schema.items)
+      return [itemExample ?? stringExampleForName(name)]
+    }
+    if (schema.type === 'integer') {
+      return numberExampleForName(name)
+    }
+    if (schema.type === 'number') {
+      return numberExampleForName(name)
+    }
+    if (schema.type === 'boolean') {
+      return true
+    }
+    if (schema.type === 'string') {
+      return stringExampleForName(name, schema.format)
+    }
+
+    return undefined
+  }
+
+  function objectSchemaExample(schema: JsonObject) {
+    if (!isJsonObject(schema.properties)) {
+      return undefined
+    }
+
+    const properties = schema.properties
+    const requiredNames = Array.isArray(schema.required)
+      ? schema.required.filter((item): item is string => typeof item === 'string')
+      : []
+    const propertyNames = Object.keys(properties)
+    if (propertyNames.length === 0) {
+      return undefined
+    }
+
+    const orderedNames = [
+      ...requiredNames.filter((name) => propertyNames.includes(name)),
+      ...propertyNames.filter((name) => !requiredNames.includes(name)),
+    ]
+
+    return Object.fromEntries(
+      orderedNames.map((propertyName) => [
+        propertyName,
+        schemaValueExample(propertyName, properties[propertyName]) ?? stringExampleForName(propertyName),
+      ]),
+    )
+  }
+
+  function fallbackToolArgumentsExample(tool: McpTool): JsonObject {
+    const descriptor = `${tool.name} ${tool.title ?? ''} ${tool.description ?? ''}`.toLowerCase()
+    if (descriptor.includes('annual') || descriptor.includes('leave') || descriptor.includes('年假')) {
+      return { userId: 'U1001' }
+    }
+    if (descriptor.includes('order') || descriptor.includes('订单')) {
+      return { orderNo: 'ORD-20260628-0001' }
+    }
+    if (descriptor.includes('knowledge') || descriptor.includes('search') || descriptor.includes('知识')) {
+      return { query: '退款流程是什么？', topK: 5 }
+    }
+    if (descriptor.includes('query') || descriptor.includes('question')) {
+      return { query: '订单状态' }
+    }
+    return {}
+  }
+
+  function stringExampleForName(name: string, format?: unknown) {
+    const normalizedName = name.toLowerCase()
+    if (format === 'date') {
+      return '2026-06-28'
+    }
+    if (format === 'date-time') {
+      return '2026-06-28T09:00:00+08:00'
+    }
+    if (format === 'email') {
+      return 'user@example.com'
+    }
+    if (normalizedName.includes('order') || normalizedName.includes('订单')) {
+      return 'ORD-20260628-0001'
+    }
+    if (normalizedName.includes('user') || normalizedName.includes('employee') || normalizedName.includes('用户')) {
+      return 'U1001'
+    }
+    if (normalizedName.includes('query') || normalizedName.includes('question') || normalizedName.includes('keyword')) {
+      return '退款流程是什么？'
+    }
+    return 'string'
+  }
+
+  function numberExampleForName(name: string) {
+    const normalizedName = name.toLowerCase()
+    if (normalizedName.includes('top') || normalizedName.includes('limit') || normalizedName.includes('size')) {
+      return 5
+    }
+    return 1
+  }
+
+  function normalizeArgumentName(name: string) {
+    return name.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+  }
+
+  function isJsonObject(value: unknown): value is JsonObject {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
   }
 
   function emptyMcpForm(): McpForm {
@@ -957,7 +1423,7 @@ function App() {
     setDraft(`/${command} ${nextQuery}`.trimEnd())
   }
 
-  function useSlashCommand(command: SlashCommandName) {
+  function applySlashCommand(command: SlashCommandName) {
     setSlashCommand(command)
   }
 
@@ -1000,7 +1466,13 @@ function App() {
         <nav className="sidebar-menu" aria-label="主导航">
           <button
             className={activeView === 'chat' ? 'active' : ''}
-            onClick={() => setActiveView('chat')}
+            onClick={() => {
+              if (activeView === 'chat') {
+                createConversation()
+              } else {
+                setActiveView('chat')
+              }
+            }}
             type="button"
           >
             <MessageSquarePlus size={18} />
@@ -1033,21 +1505,83 @@ function App() {
         </nav>
 
         <section className="recent-section">
+          <div className="conversation-sidebar-tools">
+            <label className="sidebar-search">
+              <Search size={15} />
+              <input
+                aria-label="搜索会话"
+                onChange={(event) => setConversationQuery(event.target.value)}
+                placeholder="搜索会话"
+                value={conversationQuery}
+              />
+            </label>
+            <select
+              aria-label="按知识库过滤会话"
+              onChange={(event) => setConversationKnowledgeFilter(event.target.value)}
+              value={conversationKnowledgeFilter}
+            >
+              <option value="">全部知识库</option>
+              {knowledgeBases.map((knowledgeBase) => (
+                <option key={knowledgeBase.id} value={knowledgeBase.id}>
+                  {knowledgeBase.name}
+                </option>
+              ))}
+            </select>
+            <button
+              className={showArchivedConversations ? 'archive-toggle active' : 'archive-toggle'}
+              onClick={() => setShowArchivedConversations((value) => !value)}
+              type="button"
+            >
+              <Archive size={14} />
+              {showArchivedConversations ? '查看活跃' : '查看归档'}
+            </button>
+          </div>
+          {conversationError && <p className="conversation-error">{conversationError}</p>}
           <h2>最新</h2>
           <nav className="recent-list" aria-label="最近对话">
-            {conversations.map((item) => (
-              <button
-                className={item.id === activeId ? 'recent-item active' : 'recent-item'}
-                key={item.id}
-                onClick={() => {
-                  setActiveId(item.id)
-                  setActiveView('chat')
-                }}
-                type="button"
-              >
-                <span>{item.title}</span>
-              </button>
+            {visibleConversations.map((item) => (
+              <div className={item.id === activeId ? 'recent-item active conversation-row' : 'recent-item conversation-row'} key={item.id}>
+                <button
+                  className="conversation-open-button"
+                  onClick={() => {
+                    setActiveId(item.id)
+                    setActiveView('chat')
+                  }}
+                  type="button"
+                >
+                  <span>{item.title}</span>
+                  <small>{item.summary || `${item.messageCount ?? 0} messages`}</small>
+                </button>
+                <div className="conversation-row-actions">
+                  <button
+                    aria-label={item.pinned ? '取消置顶' : '置顶'}
+                    onClick={() => updateConversation(item.id, { pinned: !item.pinned })}
+                    type="button"
+                  >
+                    <Pin size={13} />
+                  </button>
+                  <button
+                    aria-label={item.archived ? '取消归档' : '归档'}
+                    onClick={() => updateConversation(item.id, { archived: !item.archived })}
+                    type="button"
+                  >
+                    <Archive size={13} />
+                  </button>
+                  <button
+                    aria-label="删除"
+                    onClick={() => updateConversation(item.id, { deleted: true })}
+                    type="button"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              </div>
             ))}
+            {visibleConversations.length === 0 && (
+              <div className="conversation-empty">
+                {conversationLoading ? '加载会话中...' : '没有匹配的会话'}
+              </div>
+            )}
           </nav>
         </section>
       </aside>
@@ -1569,6 +2103,7 @@ function App() {
                   <div className="mcp-tool-list">
                     {activeMcpServer.tools.map((tool) => {
                       const key = `${activeMcpServer.id}.${tool.name}`
+                      const exampleArguments = formatToolArgumentsExample(tool)
                       return (
                         <article className="mcp-tool-card" key={tool.name}>
                           <div className="mcp-tool-title">
@@ -1580,17 +2115,31 @@ function App() {
                           </div>
                           <p>{tool.description || '该工具没有提供描述。'}</p>
                           <details>
-                            <summary>Input schema</summary>
+                            <summary>Input schema / 参数结构</summary>
                             <pre>{formatSchema(tool.inputSchema)}</pre>
                           </details>
+                          <div className="mcp-tool-example">
+                            <div className="mcp-example-heading">
+                              <span>示例参数</span>
+                              <button
+                                onClick={() =>
+                                  setMcpToolArguments((current) => ({ ...current, [key]: exampleArguments }))
+                                }
+                                type="button"
+                              >
+                                填入示例
+                              </button>
+                            </div>
+                            <pre>{exampleArguments}</pre>
+                          </div>
                           <textarea
                             aria-label={`${tool.name} arguments`}
                             onChange={(event) =>
                               setMcpToolArguments((current) => ({ ...current, [key]: event.target.value }))
                             }
-                            placeholder='{"query":"订单状态"}'
+                            placeholder={exampleArguments}
                             rows={3}
-                            value={mcpToolArguments[key] ?? '{}'}
+                            value={mcpToolArguments[key] ?? exampleArguments}
                           />
                           <button
                             className="mcp-call-button"
@@ -1771,28 +2320,28 @@ function App() {
         <div className="composer-zone">
           {showCommandMenu && (
             <div className="command-menu" role="listbox" aria-label="命令">
-              <button onClick={() => useSlashCommand('multi-agent')} type="button">
+              <button onClick={() => applySlashCommand('multi-agent')} type="button">
                 <span>
                   <Sparkles size={15} />
                   /multi-agent
                 </span>
                 <small>启用 Supervisor 和专家 Agent 编排</small>
               </button>
-              <button onClick={() => useSlashCommand('plan')} type="button">
+              <button onClick={() => applySlashCommand('plan')} type="button">
                 <span>
                   <Brain size={15} />
                   /plan
                 </span>
                 <small>先生成执行计划，不直接执行</small>
               </button>
-              <button onClick={() => useSlashCommand('status')} type="button">
+              <button onClick={() => applySlashCommand('status')} type="button">
                 <span>
                   <Activity size={15} />
                   /status
                 </span>
                 <small>查看知识库、向量和 MCP 状态</small>
               </button>
-              <button onClick={() => useSlashCommand('feedback')} type="button">
+              <button onClick={() => applySlashCommand('feedback')} type="button">
                 <span>
                   <MessageSquarePlus size={15} />
                   /feedback

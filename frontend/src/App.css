@@ -247,6 +247,43 @@ button {
   gap: 1px;
 }
 
+.conversation-sidebar-tools {
+  display: grid;
+  gap: 6px;
+}
+
+.conversation-sidebar-tools select,
+.archive-toggle {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--sidebar-text);
+  background: var(--panel-soft);
+}
+
+.archive-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.archive-toggle.active {
+  color: var(--text-strong);
+  border-color: var(--border-strong);
+  background: var(--sidebar-active);
+}
+
+.conversation-error,
+.conversation-empty {
+  margin: 0;
+  padding: 8px 6px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .recent-item {
   display: block;
   width: 100%;
@@ -259,11 +296,66 @@ button {
   font-size: 14px;
 }
 
+.conversation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 4px 4px 8px;
+}
+
+.conversation-open-button {
+  min-width: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
 .recent-item span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-item small {
+  display: block;
+  overflow: hidden;
+  max-width: 100%;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-row-actions {
+  display: inline-flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.conversation-row:hover .conversation-row-actions,
+.conversation-row:focus-within .conversation-row-actions {
+  opacity: 1;
+}
+
+.conversation-row-actions button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: transparent;
+}
+
+.conversation-row-actions button:hover {
+  color: var(--text-strong);
+  border-color: var(--border);
+  background: var(--hover);
 }
 
 .recent-item.active {
@@ -1441,6 +1533,39 @@ button {
   font-weight: 650;
 }
 
+.mcp-tool-example {
+  display: grid;
+  gap: 7px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.mcp-example-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mcp-example-heading span {
+  color: var(--text-strong);
+  font-weight: 650;
+}
+
+.mcp-example-heading button {
+  padding: 5px 9px;
+  border: 1px solid var(--library-border);
+  border-radius: 8px;
+  color: var(--text-strong);
+  background: #fff;
+  cursor: pointer;
+}
+
+.mcp-example-heading button:hover {
+  border-color: rgba(30, 95, 78, 0.3);
+  background: rgba(30, 95, 78, 0.06);
+}
+
 .mcp-tool-card pre,
 .mcp-result pre {
   overflow: auto;
@@ -1455,6 +1580,11 @@ button {
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.mcp-tool-example pre {
+  max-height: 170px;
+  margin: 0;
 }
 
 .mcp-tool-card textarea {

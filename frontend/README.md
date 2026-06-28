@@ -1,4 +1,4 @@
-# RAG Agent Frontend
+﻿# RAG Agent Frontend
 
 基于 React、TypeScript、Vite 的知识问答前端界面，当前实现了参考 ChatGPT / Kimi 风格的 RAG Agent 工作台。
 
@@ -53,4 +53,4 @@ GET /api/knowledge-bases
 GET /api/vector/status
 ```
 
-聊天请求已接入 `agent-service` 的 `POST /api/chat`，知识库管理请求继续接入 `storage-layer`。
+聊天请求已接入 `agent-service` 的 `POST /api/chat`，知识库管理请求继续接入 `knowledge-service`。
