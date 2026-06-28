@@ -11,12 +11,13 @@ import com.example.ragagent.dto.VectorSearchMatch;
 import com.example.ragagent.dto.VectorSearchRequest;
 import com.example.ragagent.dto.VectorSearchResponse;
 import com.example.ragagent.dto.WebSearchResult;
+import com.example.ragagent.memory.InMemoryConversationMemoryService;
 import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ChatOrchestratorTests {
-    private final RagProperties properties = new RagProperties(null, null, null, null, null, null, null);
+    private final RagProperties properties = new RagProperties(null, null, null, null, null, null, null, null, null);
 
     @Test
     void orchestratesKnowledgeQuestionWithRetrievalAndLlm() {
@@ -156,6 +157,64 @@ class ChatOrchestratorTests {
     }
 
     @Test
+    void usesBackendConversationMemoryForFollowUpTurnsAndPromptContext() {
+        RagProperties memoryProperties = new RagProperties(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new RagProperties.Memory("in-memory", true, 2, 4, 1200, 16, 86400L)
+        );
+        RecordingQueryAnalysisClient analysisClient = new RecordingQueryAnalysisClient();
+        CapturingLlmGateway llmGateway = new CapturingLlmGateway("Memory-aware answer. [1]");
+        ChatOrchestrator orchestrator = new ChatOrchestrator(
+                analysisClient,
+                planExecuteAgent(
+                        request -> new VectorSearchResponse(List.of(
+                                new VectorSearchMatch("kb-1", "doc-1", "chunk-1", 0, "refund.txt", "Refund requires order details.", 0.91)
+                        )),
+                        new AnswerGenerator(llmGateway, new PromptBuilder(memoryProperties), memoryProperties),
+                        query -> List.of()
+                ),
+                new InMemoryConversationMemoryService(memoryProperties)
+        );
+
+        orchestrator.answer(new ChatRequest(
+                "My order ABC123456 needs a refund.",
+                "kb-1",
+                "session-memory",
+                List.of(),
+                null
+        ));
+        orchestrator.answer(new ChatRequest(
+                "What documents are required?",
+                "kb-1",
+                "session-memory",
+                List.of(),
+                null
+        ));
+        orchestrator.answer(new ChatRequest(
+                "Can it be expedited?",
+                "kb-1",
+                "session-memory",
+                List.of(),
+                null
+        ));
+
+        assertThat(analysisClient.requests.get(1).normalizedHistory())
+                .extracting(message -> message.content())
+                .contains("My order ABC123456 needs a refund.", "Memory-aware answer. [1]");
+        assertThat(llmGateway.lastUserPrompt)
+                .contains("memory_summary")
+                .contains("memory_state")
+                .contains("orderId=ABC123456");
+    }
+
+    @Test
     void returnsControlledResponseWhenWebSearchFails() {
         ChatOrchestrator orchestrator = new ChatOrchestrator(
                 request -> knowledgeAnalysis(request.query()),
@@ -234,6 +293,30 @@ class ChatOrchestratorTests {
         );
     }
 
+    private static class RecordingQueryAnalysisClient implements QueryAnalysisClient {
+        private final List<ChatRequest> requests = new ArrayList<>();
+
+        @Override
+        public QueryAnalysisResponse analyze(ChatRequest request) {
+            requests.add(request);
+            return new QueryAnalysisResponse(
+                    request.conversationId(),
+                    request.knowledgeBaseId(),
+                    request.query(),
+                    request.query(),
+                    request.query(),
+                    "knowledge",
+                    0.80,
+                    "knowledge_retrieval",
+                    false,
+                    false,
+                    request.normalizedHistory().size(),
+                    List.of(request.query()),
+                    List.of("test")
+            );
+        }
+    }
+
     private static class RecordingStorageClient implements StorageRetrievalClient {
         private final List<VectorSearchMatch> matches;
         private final List<VectorSearchRequest> requests = new ArrayList<>();
@@ -265,6 +348,26 @@ class ChatOrchestratorTests {
         public String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
             assertThat(systemPrompt).contains("Agent");
             assertThat(userPrompt).isNotBlank();
+            return answer;
+        }
+    }
+
+    private static class CapturingLlmGateway implements LlmGateway {
+        private final String answer;
+        private String lastUserPrompt = "";
+
+        CapturingLlmGateway(String answer) {
+            this.answer = answer;
+        }
+
+        @Override
+        public boolean isConfigured() {
+            return true;
+        }
+
+        @Override
+        public String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+            this.lastUserPrompt = userPrompt;
             return answer;
         }
     }
