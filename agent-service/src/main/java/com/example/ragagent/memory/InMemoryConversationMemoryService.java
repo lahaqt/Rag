@@ -18,6 +18,39 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
         super(properties.memory());
     }
 
+    public InMemoryConversationMemoryService(
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor
+    ) {
+        this(
+                properties,
+                summarizer,
+                stateExtractor,
+                new InMemorySemanticMemoryStore(),
+                new InMemoryUserProfileStore(),
+                new BusinessLongTermMemoryExtractor()
+        );
+    }
+
+    public InMemoryConversationMemoryService(
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor
+    ) {
+        super(
+                properties.memory(),
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor
+        );
+    }
+
     public InMemoryConversationMemoryService(RagProperties.Memory memory) {
         super(memory);
     }

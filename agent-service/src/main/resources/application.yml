@@ -48,6 +48,9 @@ rag:
     recent-messages: 8
     summarize-after-messages: 12
     summary-max-characters: 1600
+    summary-mode: window
+    semantic-memory-max-items: 4
+    profile-enabled: true
     state-max-entries: 16
   llm:
     provider: volcengine-ark

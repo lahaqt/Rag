@@ -31,6 +31,27 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         this.objectMapper = new ObjectMapper();
     }
 
+    public RedisConversationMemoryService(
+            StringRedisTemplate redisTemplate,
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor
+    ) {
+        super(
+                properties.memory(),
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor
+        );
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = new ObjectMapper();
+    }
+
     @Override
     protected StoredMemory loadStored(String conversationId, ChatRequest request) {
         try {

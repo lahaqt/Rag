@@ -52,6 +52,15 @@ public class PromptBuilder {
     }
 
     public String userPrompt(ChatRequest request, QueryAnalysisResponse analysis, List<RetrievalHit> hits) {
+        return userPrompt(request, analysis, hits, "");
+    }
+
+    public String userPrompt(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            List<RetrievalHit> hits,
+            String reflectionHint
+    ) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("用户问题：").append(request.query()).append("\n");
         prompt.append("改写后问题：").append(nullToEmpty(analysis.rewrittenQuery())).append("\n");
@@ -65,6 +74,7 @@ public class PromptBuilder {
                 请基于上面的知识库片段回答用户问题。
                 如果答案依赖某个片段，请在对应句子后标注引用编号。
                 """);
+        appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();
     }
 
@@ -73,6 +83,16 @@ public class PromptBuilder {
             QueryAnalysisResponse analysis,
             ToolDecision toolDecision,
             List<WebSearchResult> results
+    ) {
+        return webSearchPrompt(request, analysis, toolDecision, results, "");
+    }
+
+    public String webSearchPrompt(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            ToolDecision toolDecision,
+            List<WebSearchResult> results,
+            String reflectionHint
     ) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("用户问题：").append(request.query()).append("\n");
@@ -88,10 +108,20 @@ public class PromptBuilder {
                 请基于上面的网页搜索结果回答用户问题。
                 如果答案依赖某个网页结果，请在对应句子后标注引用编号。
                 """);
+        appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();
     }
 
     public String mcpToolPrompt(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult) {
+        return mcpToolPrompt(request, analysis, toolResult, "");
+    }
+
+    public String mcpToolPrompt(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            AgentToolResult toolResult,
+            String reflectionHint
+    ) {
         StringBuilder prompt = new StringBuilder();
         prompt.append("用户问题：").append(request.query()).append("\n");
         prompt.append("改写后问题：").append(nullToEmpty(analysis.rewrittenQuery())).append("\n");
@@ -108,7 +138,15 @@ public class PromptBuilder {
                 请基于上面的 MCP 工具返回回答用户问题。
                 如果工具返回不足以回答，请直接说明还缺少什么。
                 """);
+        appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();
+    }
+
+    private void appendReflectionHint(StringBuilder prompt, String reflectionHint) {
+        if (reflectionHint == null || reflectionHint.isBlank()) {
+            return;
+        }
+        prompt.append("\n反思提示：").append(reflectionHint).append("\n");
     }
 
     private void appendHistory(StringBuilder prompt, List<ChatMessage> history) {
@@ -117,15 +155,28 @@ public class PromptBuilder {
         }
 
         prompt.append("最近会话：\n");
-        int start = Math.max(0, history.size() - MAX_HISTORY_MESSAGES);
-        for (ChatMessage message : history.subList(start, history.size())) {
-            prompt.append("- ")
-                    .append(message.role())
-                    .append(": ")
-                    .append(trim(message.content(), 500))
-                    .append("\n");
+        List<ChatMessage> memoryMessages = history.stream()
+                .filter(message -> message.role() != null && message.role().startsWith("memory_"))
+                .toList();
+        List<ChatMessage> chatMessages = history.stream()
+                .filter(message -> message.role() == null || !message.role().startsWith("memory_"))
+                .toList();
+        for (ChatMessage message : memoryMessages) {
+            appendHistoryMessage(prompt, message, 1200);
+        }
+        int start = Math.max(0, chatMessages.size() - MAX_HISTORY_MESSAGES);
+        for (ChatMessage message : chatMessages.subList(start, chatMessages.size())) {
+            appendHistoryMessage(prompt, message, 500);
         }
         prompt.append("\n");
+    }
+
+    private void appendHistoryMessage(StringBuilder prompt, ChatMessage message, int maxLength) {
+        prompt.append("- ")
+                .append(message.role())
+                .append(": ")
+                .append(trim(message.content(), maxLength))
+                .append("\n");
     }
 
     private void appendContext(StringBuilder prompt, List<RetrievalHit> hits) {

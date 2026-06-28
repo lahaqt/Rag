@@ -99,6 +99,28 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         initializeSchema();
     }
 
+    public PostgresConversationMemoryService(
+            JdbcTemplate jdbcTemplate,
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor
+    ) {
+        super(
+                properties.memory(),
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor
+        );
+        this.jdbcTemplate = jdbcTemplate;
+        this.objectMapper = new ObjectMapper();
+        initializeSchema();
+    }
+
     private void initializeSchema() {
         try {
             jdbcTemplate.execute(CREATE_MEMORY_TABLE_SQL);
