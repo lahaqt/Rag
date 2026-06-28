@@ -16,7 +16,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class ChatOrchestratorTests {
-    private final RagProperties properties = new RagProperties(null, null, null, null, null, null);
+    private final RagProperties properties = new RagProperties(null, null, null, null, null, null, null);
 
     @Test
     void orchestratesKnowledgeQuestionWithRetrievalAndLlm() {

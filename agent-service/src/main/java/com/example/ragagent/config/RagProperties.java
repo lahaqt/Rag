@@ -10,7 +10,8 @@ public record RagProperties(
         Retrieval retrieval,
         Prompt prompt,
         Llm llm,
-        Tools tools
+        Tools tools,
+        Mcp mcp
 ) {
     public RagProperties {
         if (cors == null) {
@@ -38,6 +39,9 @@ public record RagProperties(
         }
         if (tools == null) {
             tools = new Tools(new WebSearch("bing", "https://cn.bing.com", 5));
+        }
+        if (mcp == null) {
+            mcp = new Mcp(false, 8, List.of());
         }
     }
 
@@ -139,6 +143,54 @@ public record RagProperties(
                 baseUrl = "https://cn.bing.com";
             }
             maxResults = maxResults == null ? 5 : Math.max(1, Math.min(maxResults, 10));
+        }
+    }
+
+    public record Mcp(Boolean enabled, Integer timeoutSeconds, List<McpServer> servers) {
+        public Mcp {
+            enabled = enabled != null && enabled;
+            timeoutSeconds = timeoutSeconds == null ? 8 : Math.max(2, Math.min(timeoutSeconds, 60));
+            servers = servers == null ? List.of() : List.copyOf(servers);
+        }
+    }
+
+    public record McpServer(
+            String id,
+            String name,
+            String transport,
+            String endpoint,
+            String command,
+            List<String> args,
+            java.util.Map<String, String> environment,
+            String workingDirectory,
+            String bearerToken,
+            Boolean enabled
+    ) {
+        public McpServer {
+            if (id == null) {
+                id = "";
+            }
+            if (name == null || name.isBlank()) {
+                name = id;
+            }
+            if (transport == null || transport.isBlank()) {
+                transport = command != null && !command.isBlank() ? "stdio" : "streamable_http";
+            }
+            if (endpoint == null) {
+                endpoint = "";
+            }
+            if (command == null) {
+                command = "";
+            }
+            args = args == null ? List.of() : List.copyOf(args);
+            environment = environment == null ? java.util.Map.of() : java.util.Map.copyOf(environment);
+            if (workingDirectory == null) {
+                workingDirectory = "";
+            }
+            if (bearerToken == null) {
+                bearerToken = "";
+            }
+            enabled = enabled == null || enabled;
         }
     }
 }

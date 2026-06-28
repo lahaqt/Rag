@@ -1,4 +1,5 @@
 import {
+  Activity,
   ArrowDown,
   ArrowUp,
   BookOpen,
@@ -18,14 +19,18 @@ import {
   Paperclip,
   Plug,
   Plus,
+  RefreshCw,
   Search,
-  Settings2,
+  Server,
+  Settings,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
+  TerminalSquare,
   Trash2,
   Upload,
   UserRound,
+  Wrench,
   Zap,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -49,7 +54,7 @@ export type Conversation = {
   messages: Message[]
 }
 
-type ViewMode = 'chat' | 'search' | 'knowledge' | 'plugins'
+type ViewMode = 'chat' | 'search' | 'knowledge' | 'mcp'
 
 type KnowledgeBase = {
   id: string
@@ -111,6 +116,50 @@ type AgentChatResponse = {
     snippet: string
   }>
   finishReason: string
+}
+
+type McpTool = {
+  name: string
+  title?: string
+  description?: string
+  inputSchema?: unknown
+}
+
+type McpServer = {
+  id: string
+  name: string
+  transport: 'stdio' | 'streamable_http'
+  endpoint: string
+  command: string
+  args: string[]
+  environment: Record<string, string>
+  workingDirectory: string
+  enabled: boolean
+  status: string
+  lastError: string
+  updatedAt: string
+  tools: McpTool[]
+}
+
+type McpForm = {
+  id: string
+  name: string
+  transport: 'stdio' | 'streamable_http'
+  endpoint: string
+  command: string
+  args: string[]
+  envVars: Array<{ key: string; value: string }>
+  workingDirectory: string
+  bearerToken: string
+  enabled: boolean
+}
+
+type McpCallResult = {
+  serverId: string
+  toolName: string
+  success: boolean
+  content: string
+  rawResult: string
 }
 
 const conversations: Conversation[] = [
@@ -187,6 +236,26 @@ function App() {
   const [knowledgeError, setKnowledgeError] = useState('')
   const [knowledgeSearch, setKnowledgeSearch] = useState('')
   const [deletingDocumentId, setDeletingDocumentId] = useState('')
+  const [mcpServers, setMcpServers] = useState<McpServer[]>([])
+  const [mcpLoading, setMcpLoading] = useState(false)
+  const [mcpError, setMcpError] = useState('')
+  const [mcpForm, setMcpForm] = useState<McpForm>({
+    id: '',
+    name: '',
+    transport: 'streamable_http',
+    endpoint: '',
+    command: '',
+    args: [''],
+    envVars: [{ key: '', value: '' }],
+    workingDirectory: '',
+    bearerToken: '',
+    enabled: true,
+  })
+  const [selectedMcpServerId, setSelectedMcpServerId] = useState('')
+  const [refreshingMcpId, setRefreshingMcpId] = useState('')
+  const [callingMcpTool, setCallingMcpTool] = useState('')
+  const [mcpToolArguments, setMcpToolArguments] = useState<Record<string, string>>({})
+  const [mcpCallResult, setMcpCallResult] = useState<McpCallResult | null>(null)
   const [draft, setDraft] = useState('')
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -203,25 +272,30 @@ function App() {
     [activeId],
   )
 
-  const messages = messagesByConversation[activeId] ?? []
+  const messages = useMemo(
+    () => messagesByConversation[activeId] ?? [],
+    [activeId, messagesByConversation],
+  )
 
   useEffect(() => {
     if (!scrollToMessageId) {
       return
     }
 
-    const element = document.querySelector(`[data-message-id="${scrollToMessageId}"]`)
+    const element = document.querySelector<HTMLElement>(`[data-message-id="${scrollToMessageId}"]`)
     if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      const scrollContainer = element.closest<HTMLElement>('.chat-stage')
+      if (scrollContainer) {
+        const targetTop = element.offsetTop - scrollContainer.clientHeight / 3
+        scrollContainer.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' })
+      }
       element.classList.add('highlight-message')
       const timer = setTimeout(() => {
         element.classList.remove('highlight-message')
       }, 2000)
       return () => clearTimeout(timer)
     }
-
-    setScrollToMessageId(null)
-  }, [activeView, activeId, messages, scrollToMessageId])
+  }, [activeView, activeId, scrollToMessageId])
 
   const searchResults = useMemo<SearchResult[]>(
     () => searchConversations(searchQuery, conversations, messagesByConversation),
@@ -231,6 +305,9 @@ function App() {
   const uploadKnowledgeBaseId = activeKnowledgeBaseId || knowledgeBases[0]?.id || ''
   const totalDocumentCount = knowledgeBases.reduce((total, item) => total + item.documentCount, 0)
   const totalChunkCount = knowledgeBases.reduce((total, item) => total + item.chunkCount, 0)
+  const activeMcpServer = mcpServers.find((server) => server.id === selectedMcpServerId) ?? mcpServers[0]
+  const mcpToolCount = mcpServers.reduce((total, server) => total + server.tools.length, 0)
+  const onlineMcpCount = mcpServers.filter((server) => server.status === 'online').length
   const filteredKnowledgeDocuments = useMemo(() => {
     const keyword = knowledgeSearch.trim().toLowerCase()
     if (!keyword) {
@@ -297,6 +374,42 @@ function App() {
     }
 
     loadKnowledgeBases()
+
+    return () => {
+      ignore = true
+    }
+  }, [])
+
+  useEffect(() => {
+    let ignore = false
+
+    async function loadMcpServers() {
+      setMcpLoading(true)
+      setMcpError('')
+
+      try {
+        const response = await fetch('/api/mcp/servers')
+        if (!response.ok) {
+          throw new Error(`GET /api/mcp/servers ${response.status}`)
+        }
+        const nextServers = (await response.json()) as McpServer[]
+        if (ignore) {
+          return
+        }
+        setMcpServers(nextServers)
+        setSelectedMcpServerId((current) => current || nextServers[0]?.id || '')
+      } catch (error) {
+        if (!ignore) {
+          setMcpError(error instanceof Error ? error.message : 'MCP 服务列表加载失败')
+        }
+      } finally {
+        if (!ignore) {
+          setMcpLoading(false)
+        }
+      }
+    }
+
+    loadMcpServers()
 
     return () => {
       ignore = true
@@ -491,11 +604,238 @@ function App() {
 
   const appClassName = [
     'app-shell',
-    activeView === 'knowledge' || activeView === 'plugins' || activeView === 'search' ? 'library-mode' : '',
+    activeView === 'knowledge' || activeView === 'mcp' || activeView === 'search' ? 'library-mode' : '',
     inspectorOpen ? '' : 'inspector-collapsed',
   ]
     .filter(Boolean)
     .join(' ')
+
+  async function saveMcpServer(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setMcpLoading(true)
+    setMcpError('')
+
+    try {
+      const response = await fetch(mcpForm.id ? `/api/mcp/servers/${mcpForm.id}` : '/api/mcp/servers', {
+        method: mcpForm.id ? 'PUT' : 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          id: mcpForm.id || undefined,
+          name: mcpForm.name,
+          transport: mcpForm.transport,
+          endpoint: mcpForm.endpoint,
+          command: mcpForm.command,
+          args: cleanMcpArgs(mcpForm.args),
+          environment: mcpEnvironmentRecord(mcpForm.envVars),
+          workingDirectory: mcpForm.workingDirectory,
+          bearerToken: mcpForm.bearerToken || undefined,
+          enabled: mcpForm.enabled,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`${mcpForm.id ? 'PUT' : 'POST'} /api/mcp/servers ${response.status}`)
+      }
+
+      const savedServer = (await response.json()) as McpServer
+      setMcpServers((current) => {
+        const withoutSaved = current.filter((server) => server.id !== savedServer.id)
+        return [...withoutSaved, savedServer].sort((left, right) => left.name.localeCompare(right.name))
+      })
+      setSelectedMcpServerId(savedServer.id)
+      setMcpForm(emptyMcpForm())
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'MCP 服务保存失败')
+    } finally {
+      setMcpLoading(false)
+    }
+  }
+
+  async function deleteMcpServer(server: McpServer) {
+    const confirmed = window.confirm(`确定删除 MCP 服务「${server.name}」吗？`)
+    if (!confirmed) {
+      return
+    }
+    setMcpLoading(true)
+    setMcpError('')
+
+    try {
+      const response = await fetch(`/api/mcp/servers/${server.id}`, {
+        method: 'DELETE',
+      })
+      if (!response.ok) {
+        throw new Error(`DELETE /api/mcp/servers/${server.id} ${response.status}`)
+      }
+      setMcpServers((current) => current.filter((item) => item.id !== server.id))
+      setSelectedMcpServerId((current) => (current === server.id ? '' : current))
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'MCP 服务删除失败')
+    } finally {
+      setMcpLoading(false)
+    }
+  }
+
+  async function refreshMcpServer(server: McpServer) {
+    setRefreshingMcpId(server.id)
+    setMcpError('')
+
+    try {
+      const response = await fetch(`/api/mcp/servers/${server.id}/refresh`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        throw new Error(`POST /api/mcp/servers/${server.id}/refresh ${response.status}`)
+      }
+      const refreshedServer = (await response.json()) as McpServer
+      setMcpServers((current) => current.map((item) => (item.id === refreshedServer.id ? refreshedServer : item)))
+      setSelectedMcpServerId(refreshedServer.id)
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'MCP 工具刷新失败')
+    } finally {
+      setRefreshingMcpId('')
+    }
+  }
+
+  async function callMcpTool(server: McpServer, tool: McpTool) {
+    const key = `${server.id}.${tool.name}`
+    setCallingMcpTool(key)
+    setMcpError('')
+    setMcpCallResult(null)
+
+    try {
+      const rawArguments = mcpToolArguments[key]?.trim() || '{}'
+      const parsedArguments = JSON.parse(rawArguments) as Record<string, unknown>
+      const response = await fetch(`/api/mcp/servers/${server.id}/tools/${encodeURIComponent(tool.name)}/call`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ arguments: parsedArguments }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`POST /api/mcp/servers/${server.id}/tools/${tool.name}/call ${response.status}`)
+      }
+
+      setMcpCallResult((await response.json()) as McpCallResult)
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'MCP 工具调用失败')
+    } finally {
+      setCallingMcpTool('')
+    }
+  }
+
+  function editMcpServer(server: McpServer) {
+    setMcpForm({
+      id: server.id,
+      name: server.name,
+      transport: server.transport || 'streamable_http',
+      endpoint: server.endpoint,
+      command: server.command || '',
+      args: server.args && server.args.length > 0 ? server.args : [''],
+      envVars:
+        server.environment && Object.keys(server.environment).length > 0
+          ? Object.entries(server.environment).map(([key, value]) => ({ key, value }))
+          : [{ key: '', value: '' }],
+      workingDirectory: server.workingDirectory || '',
+      bearerToken: '',
+      enabled: server.enabled,
+    })
+    setSelectedMcpServerId(server.id)
+  }
+
+  async function toggleMcpServer(server: McpServer) {
+    setMcpError('')
+    try {
+      const response = await fetch(`/api/mcp/servers/${server.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          name: server.name,
+          transport: server.transport,
+          endpoint: server.endpoint,
+          command: server.command,
+          args: server.args,
+          environment: server.environment,
+          workingDirectory: server.workingDirectory,
+          enabled: !server.enabled,
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(`PUT /api/mcp/servers/${server.id} ${response.status}`)
+      }
+      const updatedServer = (await response.json()) as McpServer
+      setMcpServers((current) => current.map((item) => (item.id === updatedServer.id ? updatedServer : item)))
+    } catch (error) {
+      setMcpError(error instanceof Error ? error.message : 'MCP 服务状态更新失败')
+    }
+  }
+
+  function formatSchema(schema: unknown) {
+    if (!schema) {
+      return '{}'
+    }
+    return JSON.stringify(schema, null, 2)
+  }
+
+  function emptyMcpForm(): McpForm {
+    return {
+      id: '',
+      name: '',
+      transport: 'streamable_http',
+      endpoint: '',
+      command: '',
+      args: [''],
+      envVars: [{ key: '', value: '' }],
+      workingDirectory: '',
+      bearerToken: '',
+      enabled: true,
+    }
+  }
+
+  function cleanMcpArgs(args: string[]) {
+    return args.map((value) => value.trim()).filter(Boolean)
+  }
+
+  function mcpEnvironmentRecord(envVars: Array<{ key: string; value: string }>) {
+    return Object.fromEntries(
+      envVars
+        .map((item) => [item.key.trim(), item.value] as const)
+        .filter(([key]) => key.length > 0),
+    )
+  }
+
+  function updateMcpArg(index: number, value: string) {
+    setMcpForm((current) => ({
+      ...current,
+      args: current.args.map((item, itemIndex) => (itemIndex === index ? value : item)),
+    }))
+  }
+
+  function removeMcpArg(index: number) {
+    setMcpForm((current) => ({
+      ...current,
+      args: current.args.length > 1 ? current.args.filter((_, itemIndex) => itemIndex !== index) : [''],
+    }))
+  }
+
+  function updateMcpEnv(index: number, patch: Partial<{ key: string; value: string }>) {
+    setMcpForm((current) => ({
+      ...current,
+      envVars: current.envVars.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item)),
+    }))
+  }
+
+  function removeMcpEnv(index: number) {
+    setMcpForm((current) => ({
+      ...current,
+      envVars: current.envVars.length > 1 ? current.envVars.filter((_, itemIndex) => itemIndex !== index) : [{ key: '', value: '' }],
+    }))
+  }
 
   return (
     <main className={appClassName}>
@@ -535,12 +875,12 @@ function App() {
             知识库
           </button>
           <button
-            className={activeView === 'plugins' ? 'active' : ''}
-            onClick={() => setActiveView('plugins')}
+            className={activeView === 'mcp' ? 'active' : ''}
+            onClick={() => setActiveView('mcp')}
             type="button"
           >
             <Plug size={18} />
-            插件
+            MCP 管理
           </button>
         </nav>
 
@@ -787,12 +1127,357 @@ function App() {
         </section>
       )}
 
-      {activeView === 'plugins' && (
-        <section className="simple-page" aria-label="插件">
-          <div className="simple-panel">
-            <Plug size={24} />
-            <h1>插件</h1>
-            <p>后续可在这里管理模型工具、联网检索、文件解析和企业系统连接器。</p>
+      {activeView === 'mcp' && (
+        <section className="mcp-page" aria-label="MCP 管理">
+          <div className="mcp-container">
+            <header className="library-header">
+              <div>
+                <span className="eyebrow">Model Context Protocol</span>
+                <h1>MCP 管理</h1>
+                <p className="mcp-header-copy">连接外部工具和数据源，统一管理服务启用状态、工具发现和测试调用。</p>
+              </div>
+            </header>
+
+            <div className="library-summary mcp-summary" aria-label="MCP 总览">
+              <div>
+                <span>服务数量</span>
+                <strong>{mcpServers.length}</strong>
+              </div>
+              <div>
+                <span>在线服务</span>
+                <strong>{onlineMcpCount}</strong>
+              </div>
+              <div>
+                <span>可用工具</span>
+                <strong>{mcpToolCount}</strong>
+              </div>
+              <div>
+                <span>当前服务</span>
+                <strong>{activeMcpServer?.name ?? '-'}</strong>
+              </div>
+            </div>
+
+            {mcpError && <div className="library-error">{mcpError}</div>}
+
+            <div className="mcp-grid">
+              <section className="mcp-panel" aria-label="添加 MCP 服务">
+                <div className="mcp-panel-heading">
+                  <span>
+                    <Server size={17} />
+                    服务配置
+                  </span>
+                  {mcpForm.id && (
+                    <button
+                      className="mcp-link-button"
+                      onClick={() => setMcpForm(emptyMcpForm())}
+                      type="button"
+                    >
+                      新建
+                    </button>
+                  )}
+                </div>
+
+                <form className="mcp-form" id="mcp-server-form" onSubmit={saveMcpServer}>
+                  <label>
+                    <span>名称</span>
+                    <input
+                      onChange={(event) => setMcpForm((current) => ({ ...current, name: event.target.value }))}
+                      placeholder="enterprise-tools"
+                      required
+                      value={mcpForm.name}
+                    />
+                  </label>
+                  <label>
+                    <span>服务 ID</span>
+                    <input
+                      disabled={Boolean(mcpForm.id)}
+                      onChange={(event) => setMcpForm((current) => ({ ...current, id: event.target.value }))}
+                      placeholder="留空则按名称生成"
+                      value={mcpForm.id}
+                    />
+                  </label>
+                  <div className="mcp-transport-control" aria-label="MCP 连接方式">
+                    <button
+                      className={mcpForm.transport === 'stdio' ? 'active' : ''}
+                      onClick={() => setMcpForm((current) => ({ ...current, transport: 'stdio' }))}
+                      type="button"
+                    >
+                      STDIO
+                    </button>
+                    <button
+                      className={mcpForm.transport === 'streamable_http' ? 'active' : ''}
+                      onClick={() => setMcpForm((current) => ({ ...current, transport: 'streamable_http' }))}
+                      type="button"
+                    >
+                      流式 HTTP
+                    </button>
+                  </div>
+                  {mcpForm.transport === 'streamable_http' && (
+                    <>
+                      <label>
+                        <span>HTTP Endpoint</span>
+                        <input
+                          onChange={(event) => setMcpForm((current) => ({ ...current, endpoint: event.target.value }))}
+                          placeholder="http://127.0.0.1:8080/mcp"
+                          required
+                          type="url"
+                          value={mcpForm.endpoint}
+                        />
+                      </label>
+                      <label>
+                        <span>Bearer Token</span>
+                        <input
+                          onChange={(event) => setMcpForm((current) => ({ ...current, bearerToken: event.target.value }))}
+                          placeholder={mcpForm.id ? '留空则沿用已有配置' : '可选'}
+                          type="password"
+                          value={mcpForm.bearerToken}
+                        />
+                      </label>
+                    </>
+                  )}
+                  {mcpForm.transport === 'stdio' && (
+                    <>
+                      <label>
+                        <span>启动命令</span>
+                        <input
+                          onChange={(event) => setMcpForm((current) => ({ ...current, command: event.target.value }))}
+                          placeholder="node"
+                          required
+                          value={mcpForm.command}
+                        />
+                      </label>
+                      <div className="mcp-form-group">
+                        <span>参数</span>
+                        {mcpForm.args.map((arg, index) => (
+                          <div className="mcp-repeat-row" key={`arg-${index}`}>
+                            <input
+                              aria-label={`参数 ${index + 1}`}
+                              onChange={(event) => updateMcpArg(index, event.target.value)}
+                              placeholder={index === 0 ? 'server.js' : '--flag'}
+                              value={arg}
+                            />
+                            <button onClick={() => removeMcpArg(index)} title="删除参数" type="button">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          className="mcp-add-row-button"
+                          onClick={() => setMcpForm((current) => ({ ...current, args: [...current.args, ''] }))}
+                          type="button"
+                        >
+                          <Plus size={14} />
+                          添加参数
+                        </button>
+                      </div>
+                      <div className="mcp-form-group">
+                        <span>环境变量</span>
+                        {mcpForm.envVars.map((env, index) => (
+                          <div className="mcp-env-row" key={`env-${index}`}>
+                            <input
+                              aria-label={`环境变量键 ${index + 1}`}
+                              onChange={(event) => updateMcpEnv(index, { key: event.target.value })}
+                              placeholder="键"
+                              value={env.key}
+                            />
+                            <input
+                              aria-label={`环境变量值 ${index + 1}`}
+                              onChange={(event) => updateMcpEnv(index, { value: event.target.value })}
+                              placeholder="值"
+                              value={env.value}
+                            />
+                            <button onClick={() => removeMcpEnv(index)} title="删除环境变量" type="button">
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        ))}
+                        <button
+                          className="mcp-add-row-button"
+                          onClick={() => setMcpForm((current) => ({ ...current, envVars: [...current.envVars, { key: '', value: '' }] }))}
+                          type="button"
+                        >
+                          <Plus size={14} />
+                          添加环境变量
+                        </button>
+                      </div>
+                      <label>
+                        <span>工作目录</span>
+                        <input
+                          onChange={(event) => setMcpForm((current) => ({ ...current, workingDirectory: event.target.value }))}
+                          placeholder="C:\\Users\\ASUS\\Desktop\\Codex\\Rag"
+                          value={mcpForm.workingDirectory}
+                        />
+                      </label>
+                    </>
+                  )}
+                  <label className="mcp-switch">
+                    <input
+                      checked={mcpForm.enabled}
+                      onChange={(event) => setMcpForm((current) => ({ ...current, enabled: event.target.checked }))}
+                      type="checkbox"
+                    />
+                    <span>启用服务</span>
+                  </label>
+                  <button className="mcp-save-button" disabled={mcpLoading} type="submit">
+                    {mcpForm.id ? '保存配置' : '添加服务'}
+                  </button>
+                </form>
+              </section>
+
+              <section className="mcp-panel mcp-server-list" aria-label="MCP 服务列表">
+                <div className="mcp-panel-heading">
+                  <span>
+                    <Plug size={17} />
+                    MCP 服务器
+                  </span>
+                  <button
+                    className="mcp-add-server-button"
+                    onClick={() => {
+                      setMcpForm(emptyMcpForm())
+                      setSelectedMcpServerId('')
+                    }}
+                    type="button"
+                  >
+                    <Plus size={14} />
+                    添加服务器
+                  </button>
+                </div>
+
+                {mcpServers.length > 0 ? (
+                  <div className="mcp-servers">
+                    {mcpServers.map((server) => (
+                      <div
+                        className={server.id === activeMcpServer?.id ? 'mcp-server active' : 'mcp-server'}
+                        key={server.id}
+                      >
+                        <button className="mcp-server-main" onClick={() => setSelectedMcpServerId(server.id)} type="button">
+                          <span className={`mcp-status ${server.enabled ? server.status : 'disabled'}`} />
+                          <span>
+                            <strong>{server.name}</strong>
+                            <small>
+                              {server.transport === 'stdio'
+                                ? `STDIO · ${[server.command, ...(server.args ?? [])].filter(Boolean).join(' ')}`
+                                : `HTTP · ${server.endpoint}`}
+                            </small>
+                          </span>
+                          <em>{server.tools.length}</em>
+                        </button>
+                        <div className="mcp-server-actions">
+                          <button
+                            className="mcp-icon-action"
+                            onClick={() => editMcpServer(server)}
+                            title="配置服务"
+                            type="button"
+                          >
+                            <Settings size={15} />
+                          </button>
+                          <button
+                            aria-pressed={server.enabled}
+                            className={server.enabled ? 'mcp-toggle on' : 'mcp-toggle'}
+                            onClick={() => toggleMcpServer(server)}
+                            title={server.enabled ? '停用服务' : '启用服务'}
+                            type="button"
+                          >
+                            <span />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mcp-empty">
+                    <Plug size={24} />
+                    <p>还没有 MCP 服务。添加一个 Streamable HTTP endpoint 后刷新工具列表。</p>
+                  </div>
+                )}
+              </section>
+            </div>
+
+            {activeMcpServer && (
+              <section className="mcp-tools-panel" aria-label="MCP 工具">
+                <div className="mcp-tools-header">
+                  <div>
+                    <span className={`mcp-status ${activeMcpServer.status}`} />
+                    <strong>{activeMcpServer.name}</strong>
+                    <small>{activeMcpServer.status}{activeMcpServer.lastError ? ` · ${activeMcpServer.lastError}` : ''}</small>
+                  </div>
+                  <div className="mcp-tool-actions">
+                    <button onClick={() => editMcpServer(activeMcpServer)} type="button">
+                      <SlidersHorizontal size={15} />
+                      编辑
+                    </button>
+                    <button disabled={refreshingMcpId === activeMcpServer.id} onClick={() => refreshMcpServer(activeMcpServer)} type="button">
+                      <RefreshCw size={15} />
+                      {refreshingMcpId === activeMcpServer.id ? '刷新中' : '刷新工具'}
+                    </button>
+                    <button className="danger" onClick={() => deleteMcpServer(activeMcpServer)} type="button">
+                      <Trash2 size={15} />
+                      删除
+                    </button>
+                  </div>
+                </div>
+
+                {activeMcpServer.tools.length > 0 ? (
+                  <div className="mcp-tool-list">
+                    {activeMcpServer.tools.map((tool) => {
+                      const key = `${activeMcpServer.id}.${tool.name}`
+                      return (
+                        <article className="mcp-tool-card" key={tool.name}>
+                          <div className="mcp-tool-title">
+                            <Wrench size={17} />
+                            <div>
+                              <strong>{tool.title || tool.name}</strong>
+                              <small>{tool.name}</small>
+                            </div>
+                          </div>
+                          <p>{tool.description || '该工具没有提供描述。'}</p>
+                          <details>
+                            <summary>Input schema</summary>
+                            <pre>{formatSchema(tool.inputSchema)}</pre>
+                          </details>
+                          <textarea
+                            aria-label={`${tool.name} arguments`}
+                            onChange={(event) =>
+                              setMcpToolArguments((current) => ({ ...current, [key]: event.target.value }))
+                            }
+                            placeholder='{"query":"订单状态"}'
+                            rows={3}
+                            value={mcpToolArguments[key] ?? '{}'}
+                          />
+                          <button
+                            className="mcp-call-button"
+                            disabled={callingMcpTool === key}
+                            onClick={() => callMcpTool(activeMcpServer, tool)}
+                            type="button"
+                          >
+                            <TerminalSquare size={15} />
+                            {callingMcpTool === key ? '调用中' : '测试调用'}
+                          </button>
+                        </article>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="mcp-empty tools">
+                    <Activity size={24} />
+                    <p>当前服务尚未发现工具。点击“刷新工具”执行 initialize 和 tools/list。</p>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {mcpCallResult && (
+              <section className="mcp-result" aria-label="MCP 调用结果">
+                <div className="mcp-panel-heading">
+                  <span>
+                    <TerminalSquare size={17} />
+                    调用结果
+                  </span>
+                  <strong>{mcpCallResult.success ? 'success' : 'error'}</strong>
+                </div>
+                <pre>{mcpCallResult.content || mcpCallResult.rawResult}</pre>
+              </section>
+            )}
           </div>
         </section>
       )}
@@ -973,29 +1658,6 @@ function App() {
               <strong>0.78</strong>
             </div>
           </div>
-        </section>
-
-        <section className="inspector-card">
-          <div className="inspector-heading">
-            <span>模型与检索</span>
-            <Settings2 size={16} />
-          </div>
-          <label>
-            <span>Provider</span>
-            <select defaultValue="openai">
-              <option value="openai">OpenAI Compatible</option>
-              <option value="qwen">通义千问</option>
-              <option value="deepseek">DeepSeek</option>
-            </select>
-          </label>
-          <label>
-            <span>Top K</span>
-            <input defaultValue="6" max="20" min="1" type="number" />
-          </label>
-          <label>
-            <span>相似度阈值</span>
-            <input defaultValue="0.72" max="1" min="0" step="0.01" type="number" />
-          </label>
         </section>
 
         <section className="inspector-card">

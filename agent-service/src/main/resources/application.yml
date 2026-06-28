@@ -22,6 +22,10 @@ rag:
       provider: bing
       base-url: https://cn.bing.com
       max-results: 5
+  mcp:
+    enabled: true
+    timeout-seconds: 8
+    servers: []
   llm:
     provider: volcengine-ark
     model: ark-code-latest

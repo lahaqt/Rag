@@ -17,4 +17,8 @@ public record ToolDecision(
     public static ToolDecision ragRetrieval(String query, String reason) {
         return new ToolDecision(true, "rag_retrieval", query, reason);
     }
+
+    public static ToolDecision mcpTool(String query, String reason) {
+        return new ToolDecision(true, "mcp_tool", query, reason);
+    }
 }
