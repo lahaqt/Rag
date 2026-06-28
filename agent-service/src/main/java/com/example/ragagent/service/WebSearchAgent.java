@@ -1,5 +1,8 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.a2a.A2aAgentCard;
+import com.example.ragagent.a2a.A2aAgentSkill;
+import com.example.ragagent.a2a.A2aCards;
 import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
@@ -20,6 +23,24 @@ public class WebSearchAgent implements SpecialistAgent {
     }
 
     @Override
+    public A2aAgentCard agentCard() {
+        return A2aCards.specialist(
+                name(),
+                "Web Search Agent",
+                "Searches current external information for realtime questions.",
+                new A2aAgentSkill(
+                        "web_search",
+                        "Realtime web search",
+                        "Find current weather, news, prices, exchange rates, and other time-sensitive information.",
+                        List.of("web", "realtime", "search"),
+                        List.of("What is Beijing weather today?", "Search the latest logistics delay news."),
+                        List.of("text/plain"),
+                        List.of("text/plain", "application/json")
+                )
+        );
+    }
+
+    @Override
     public SpecialistAgentResult run(ChatRequest request, QueryAnalysisResponse analysis, int startStep) {
         ToolDecision decision = toolRegistry.decide(request, analysis);
         if (!decision.useTool() || !"web_search".equals(decision.toolName())) {
@@ -30,6 +51,7 @@ public class WebSearchAgent implements SpecialistAgent {
                 name(),
                 decision,
                 result,
+                null,
                 List.of(new AgentTraceStep(startStep, "agent", analysis.route(), result.toolName(), "agent_observation", result.observation()))
         );
     }

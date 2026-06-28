@@ -3,6 +3,8 @@ package com.example.ragagent.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import com.example.ragagent.a2a.A2aAgentRegistry;
+import com.example.ragagent.a2a.A2aRuntime;
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
@@ -47,7 +49,9 @@ class MultiAgentOrchestratorTests {
         assertThat(storageClient.requests.get(0).query()).isEqualTo("What does refund require?");
         assertThat(response.toolName()).isEqualTo("rag_retrieval");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::phase).toList())
-                .contains("supervisor", "handoff", "agent", "answer", "critic_review");
+                .contains("supervisor", "a2a_handoff", "a2a_message", "agent", "a2a_task", "answer", "critic_review");
+        assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
+                .anyMatch(observation -> observation.contains("taskId=task-knowledge"));
     }
 
     @Test
@@ -133,15 +137,18 @@ class MultiAgentOrchestratorTests {
                         new WebSearchAgentTool(webSearchTool)
                 )
         );
+        List<SpecialistAgent> agents = List.of(
+                new KnowledgeAgent(toolRegistry),
+                new WebSearchAgent(toolRegistry),
+                new McpToolAgent(toolRegistry),
+                new FollowUpAgent()
+        );
         return new MultiAgentOrchestrator(
                 analysisClient,
                 new SupervisorAgent(toolRegistry),
-                List.of(
-                        new KnowledgeAgent(toolRegistry),
-                        new WebSearchAgent(toolRegistry),
-                        new McpToolAgent(toolRegistry),
-                        new FollowUpAgent()
-                ),
+                new A2aAgentRegistry(agents),
+                new A2aRuntime(),
+                agents,
                 new AnswerGenerator(llmGateway, new PromptBuilder(properties), properties),
                 new AnswerCriticAgent(new ReflectionCritic())
         );
