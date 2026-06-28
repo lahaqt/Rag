@@ -48,7 +48,7 @@ public record RagProperties(
         if (agent == null) {
             agent = new Agent(4, 2, true);
         }
-if (memory == null) {
+        if (memory == null) {
             memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L);
         }
     }
@@ -164,7 +164,7 @@ if (memory == null) {
         }
     }
 
-public record Memory(
+    public record Memory(
             String provider,
             Boolean enabled,
             Integer recentMessages,
