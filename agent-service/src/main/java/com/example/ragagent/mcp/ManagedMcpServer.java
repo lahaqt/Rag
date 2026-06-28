@@ -64,6 +64,8 @@ public final class ManagedMcpServer {
         this.status = "error";
         this.lastError = error == null ? "unknown MCP error" : error;
         this.updatedAt = Instant.now();
+        this.tools = List.of();
+        this.sessionId = null;
     }
 
     public McpServerResponse toResponse() {
