@@ -20,7 +20,7 @@ import java.util.function.Function;
 import org.junit.jupiter.api.Test;
 
 class MultiAgentOrchestratorTests {
-    private final RagProperties properties = new RagProperties(null, null, null, null, null, null, null);
+    private final RagProperties properties = new RagProperties(null, null, null, null, null, null, null, null, null);
 
     @Test
     void stripsSlashCommandBeforeQueryAnalysisAndKnowledgeRetrieval() {

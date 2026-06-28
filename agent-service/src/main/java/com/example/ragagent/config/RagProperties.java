@@ -49,7 +49,7 @@ public record RagProperties(
             agent = new Agent(4, 2, true);
         }
         if (memory == null) {
-            memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L);
+            memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L, "window", 4, true);
         }
     }
 
@@ -171,8 +171,58 @@ public record RagProperties(
             Integer summarizeAfterMessages,
             Integer summaryMaxCharacters,
             Integer stateMaxEntries,
-            Long ttlSeconds
+            Long ttlSeconds,
+            String summaryMode,
+            Integer semanticMemoryMaxItems,
+            Boolean profileEnabled
     ) {
+        public Memory(
+                String provider,
+                Boolean enabled,
+                Integer recentMessages,
+                Integer summarizeAfterMessages,
+                Integer summaryMaxCharacters,
+                Integer stateMaxEntries,
+                Long ttlSeconds,
+                String summaryMode
+        ) {
+            this(
+                    provider,
+                    enabled,
+                    recentMessages,
+                    summarizeAfterMessages,
+                    summaryMaxCharacters,
+                    stateMaxEntries,
+                    ttlSeconds,
+                    summaryMode,
+                    4,
+                    true
+            );
+        }
+
+        public Memory(
+                String provider,
+                Boolean enabled,
+                Integer recentMessages,
+                Integer summarizeAfterMessages,
+                Integer summaryMaxCharacters,
+                Integer stateMaxEntries,
+                Long ttlSeconds
+        ) {
+            this(
+                    provider,
+                    enabled,
+                    recentMessages,
+                    summarizeAfterMessages,
+                    summaryMaxCharacters,
+                    stateMaxEntries,
+                    ttlSeconds,
+                    "window",
+                    4,
+                    true
+            );
+        }
+
         public Memory {
             provider = (provider == null || provider.isBlank()) ? "in-memory" : provider;
             enabled = enabled == null || enabled;
@@ -185,6 +235,11 @@ public record RagProperties(
                     : Math.max(300, Math.min(summaryMaxCharacters, 6000));
             stateMaxEntries = stateMaxEntries == null ? 16 : Math.max(4, Math.min(stateMaxEntries, 64));
             ttlSeconds = ttlSeconds == null ? 86400L : Math.max(60L, Math.min(ttlSeconds, 604800L));
+            summaryMode = (summaryMode == null || summaryMode.isBlank()) ? "window" : summaryMode;
+            semanticMemoryMaxItems = semanticMemoryMaxItems == null
+                    ? 4
+                    : Math.max(0, Math.min(semanticMemoryMaxItems, 12));
+            profileEnabled = profileEnabled == null || profileEnabled;
         }
     }
 

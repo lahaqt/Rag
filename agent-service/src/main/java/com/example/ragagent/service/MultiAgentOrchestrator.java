@@ -14,6 +14,10 @@ import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
+import com.example.ragagent.history.ConversationHistoryService;
+import com.example.ragagent.memory.ConversationMemoryService;
+import com.example.ragagent.memory.MemoryContext;
+import com.example.ragagent.memory.NoopConversationMemoryService;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -22,6 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -35,7 +40,31 @@ public class MultiAgentOrchestrator {
     private final A2aRuntime a2aRuntime;
     private final AnswerGenerator answerGenerator;
     private final AnswerCriticAgent answerCriticAgent;
+    private final ConversationMemoryService conversationMemoryService;
+    private final ConversationHistoryService conversationHistoryService;
     private final Map<String, SpecialistAgent> specialistAgents;
+
+    @Autowired
+    public MultiAgentOrchestrator(
+            QueryAnalysisClient queryAnalysisClient,
+            SupervisorAgent supervisorAgent,
+            A2aAgentRegistry agentRegistry,
+            A2aRuntime a2aRuntime,
+            List<SpecialistAgent> specialistAgents,
+            AnswerGenerator answerGenerator,
+            AnswerCriticAgent answerCriticAgent,
+            ConversationHistoryService conversationHistoryService
+    ) {
+        this(queryAnalysisClient,
+                supervisorAgent,
+                agentRegistry,
+                a2aRuntime,
+                specialistAgents,
+                answerGenerator,
+                answerCriticAgent,
+                new NoopConversationMemoryService(),
+                conversationHistoryService);
+    }
 
     public MultiAgentOrchestrator(
             QueryAnalysisClient queryAnalysisClient,
@@ -46,12 +75,59 @@ public class MultiAgentOrchestrator {
             AnswerGenerator answerGenerator,
             AnswerCriticAgent answerCriticAgent
     ) {
+        this(queryAnalysisClient,
+                supervisorAgent,
+                agentRegistry,
+                a2aRuntime,
+                specialistAgents,
+                answerGenerator,
+                answerCriticAgent,
+                new NoopConversationMemoryService(),
+                null);
+    }
+
+    public MultiAgentOrchestrator(
+            QueryAnalysisClient queryAnalysisClient,
+            SupervisorAgent supervisorAgent,
+            A2aAgentRegistry agentRegistry,
+            A2aRuntime a2aRuntime,
+            List<SpecialistAgent> specialistAgents,
+            AnswerGenerator answerGenerator,
+            AnswerCriticAgent answerCriticAgent,
+            ConversationMemoryService conversationMemoryService
+    ) {
+        this(queryAnalysisClient,
+                supervisorAgent,
+                agentRegistry,
+                a2aRuntime,
+                specialistAgents,
+                answerGenerator,
+                answerCriticAgent,
+                conversationMemoryService,
+                null);
+    }
+
+    public MultiAgentOrchestrator(
+            QueryAnalysisClient queryAnalysisClient,
+            SupervisorAgent supervisorAgent,
+            A2aAgentRegistry agentRegistry,
+            A2aRuntime a2aRuntime,
+            List<SpecialistAgent> specialistAgents,
+            AnswerGenerator answerGenerator,
+            AnswerCriticAgent answerCriticAgent,
+            ConversationMemoryService conversationMemoryService,
+            ConversationHistoryService conversationHistoryService
+    ) {
         this.queryAnalysisClient = queryAnalysisClient;
         this.supervisorAgent = supervisorAgent;
         this.agentRegistry = agentRegistry;
         this.a2aRuntime = a2aRuntime;
         this.answerGenerator = answerGenerator;
         this.answerCriticAgent = answerCriticAgent;
+        this.conversationMemoryService = conversationMemoryService == null
+                ? new NoopConversationMemoryService()
+                : conversationMemoryService;
+        this.conversationHistoryService = conversationHistoryService;
         this.specialistAgents = new LinkedHashMap<>();
         for (SpecialistAgent agent : specialistAgents) {
             this.specialistAgents.put(agent.name(), agent);
@@ -122,8 +198,11 @@ public class MultiAgentOrchestrator {
     }
 
     private MultiAgentRun run(ChatRequest rawRequest) {
-        ChatRequest request = normalize(rawRequest);
-        QueryAnalysisResponse analysis = analyze(request);
+        ChatRequest normalizedRequest = normalize(rawRequest);
+        MemoryContext memory = conversationMemoryService.load(normalizedRequest);
+        ChatRequest analysisRequest = withHistory(normalizedRequest, memory.conversationId(), memory.analysisMemory().messages());
+        QueryAnalysisResponse analysis = analyze(analysisRequest);
+        ChatRequest request = withHistory(normalizedRequest, memory.conversationId(), memory.promptMemory().messages());
         List<AgentTraceStep> trace = new ArrayList<>();
 
         SupervisorDecision supervisorDecision = supervisorAgent.decide(request, analysis);
@@ -169,7 +248,23 @@ public class MultiAgentOrchestrator {
         ));
         trace.add(answerCriticAgent.review(trace.size() + 1, request, analysis, agentResult, draft));
 
+        ChatResponse response = response(request, analysis, agentResult, draft, trace);
+        conversationMemoryService.recordTurn(analysisRequest, analysis, response);
+        if (conversationHistoryService != null) {
+            conversationHistoryService.recordTurn(analysisRequest, response);
+        }
+
         return new MultiAgentRun(request, analysis, agentResult, draft, trace);
+    }
+
+    private ChatRequest withHistory(ChatRequest request, String conversationId, List<com.example.ragagent.dto.ChatMessage> history) {
+        return new ChatRequest(
+                request.query(),
+                request.knowledgeBaseId(),
+                conversationId,
+                history,
+                request.options()
+        );
     }
 
     private ChatRequest normalize(ChatRequest request) {
