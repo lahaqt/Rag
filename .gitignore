@@ -40,3 +40,8 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+/docs
+/.playwright-mcp
+rag-home.png
+/.claude
+/%SystemDrive%
