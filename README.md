@@ -1,24 +1,24 @@
-# RAG Agent Workspace
+﻿# RAG Agent Workspace
 
 版本：`1.0.0`
 
-这是一个本地可运行的 RAG Agent 多模块工作区，覆盖知识库文档管理、查询改写、Agent 编排和前端交互。整体链路从前端问题输入开始，经由 Agent 服务完成意图分析、工具路由、知识库检索、Prompt 组装和答案生成。
+这是一个本地可运行的 RAG Agent 多模块工作区，覆盖知识库文档管理、查询分析与改写、Agent 编排和前端交互。整体链路从前端问题输入开始，经由 Agent 服务完成意图分析、工具路由、知识库检索、Prompt 组装和答案生成。
 
 ## 模块结构
 
 ```txt
 frontend
   -> agent-service
-      -> query-rewrite-service
-      -> storage-layer
+      -> query-analysis-service
+      -> knowledge-service
       -> web_search / tools
       -> LLM Provider
 ```
 
 - `frontend/`：React 19 + TypeScript + Vite 前端，提供聊天、知识库管理、文档上传、引用展示和检索参数控制。
 - `agent-service/`：RAG Agent 编排服务，负责 `/api/chat` 和 `/api/chat/stream`，串联查询分析、工具调用、检索、答案生成和引用返回。
-- `query-rewrite-service/`：查询分析与改写服务，负责意图分类、路由建议、query rewrite 和多查询生成。
-- `storage-layer/`：知识库 storage/retrieval 服务，负责文档解析、chunk、元数据存储、对象存储、向量索引、BM25/hybrid retrieval 和相关 API。
+- `query-analysis-service/`：查询分析与改写服务，负责意图分类、路由建议、query rewrite 和多查询生成。
+- `knowledge-service/`：知识库服务，负责文档解析、chunk、元数据存储、对象存储、向量索引、BM25/hybrid retrieval 和相关 API。
 - `documents/`：示例业务知识文档。
 - `knowledge-base/`：RAG 相关主题知识材料。
 
@@ -26,9 +26,9 @@ frontend
 
 ```txt
 frontend:              http://127.0.0.1:5173
-storage-layer:         http://127.0.0.1:28081
-query-rewrite-service: http://127.0.0.1:28082
-agent-service:         http://127.0.0.1:28083
+knowledge-service:      http://127.0.0.1:28081
+query-analysis-service: http://127.0.0.1:28082
+agent-service:          http://127.0.0.1:28083
 
 PostgreSQL + pgvector: localhost:25432
 Redis Stream:          localhost:26380
@@ -38,22 +38,22 @@ RustFS Console:        http://localhost:29101
 
 ## 本地启动
 
-先启动 `storage-layer` 依赖：
+先启动 `knowledge-service` 依赖：
 
 ```bash
-cd storage-layer
+cd knowledge-service
 docker compose up -d
 ```
 
 再分别启动后端服务：
 
 ```bash
-cd storage-layer
+cd knowledge-service
 mvn spring-boot:run
 ```
 
 ```bash
-cd query-rewrite-service
+cd query-analysis-service
 mvn spring-boot:run
 ```
 
@@ -79,12 +79,12 @@ http://127.0.0.1:5173
 ## 验证命令
 
 ```bash
-cd storage-layer
+cd knowledge-service
 mvn test
 ```
 
 ```bash
-cd query-rewrite-service
+cd query-analysis-service
 mvn test
 ```
 
@@ -104,13 +104,13 @@ npm run build
 各服务配置文件位于：
 
 ```txt
-storage-layer/src/main/resources/application.yml
-query-rewrite-service/src/main/resources/application.yml
+knowledge-service/src/main/resources/application.yml
+query-analysis-service/src/main/resources/application.yml
 agent-service/src/main/resources/application.yml
 frontend/vite.config.ts
 ```
 
-不要提交本地密钥、运行日志、构建产物、`node_modules/`、`target/`、`dist/`、`storage-layer/data/` 或 `storage-layer/tmp/`。
+不要提交本地密钥、运行日志、构建产物、`node_modules/`、`target/`、`dist/`、`knowledge-service/data/` 或 `knowledge-service/tmp/`。
 
 ## 版本 1.0.0 内容
 
