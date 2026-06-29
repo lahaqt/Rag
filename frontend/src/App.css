@@ -876,6 +876,140 @@ button {
   gap: 6px;
 }
 
+.document-row.selected,
+.document-row[aria-pressed='true'] {
+  border-color: var(--library-border);
+  background: var(--sidebar-hover);
+}
+
+.document-row[role='button'] {
+  cursor: pointer;
+}
+
+.document-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.document-card {
+  display: grid;
+  gap: 10px;
+  padding: 16px 14px;
+  border: 1px solid var(--library-border);
+  border-radius: 14px;
+  color: var(--text-strong);
+  background: var(--workspace);
+  text-align: left;
+  cursor: pointer;
+}
+
+.document-card:hover {
+  background: var(--sidebar-hover);
+}
+
+.document-card.selected {
+  border-color: var(--text-strong);
+  background: var(--sidebar-hover);
+}
+
+.document-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  font-size: 22px;
+}
+
+.document-card-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.document-card-meta strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.document-card-meta small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.document-preview {
+  margin: 0 10px 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--library-border);
+  border-radius: 14px;
+  background: var(--panel);
+}
+
+.document-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.document-preview-head button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--library-border);
+  border-radius: 999px;
+  color: var(--text);
+  background: transparent;
+  font-size: 12px;
+}
+
+.document-preview-empty,
+.document-preview-error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.document-preview-error {
+  color: #9c2f2f;
+}
+
+.document-preview-chunks {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.document-preview-chunks li {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--library-border);
+  border-radius: 10px;
+  background: var(--workspace);
+}
+
+.document-preview-chunks li span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.document-preview-chunks li p {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
 .inline-upload-button {
   display: inline-flex;
   align-items: center;
@@ -1849,7 +1983,56 @@ button {
   white-space: pre-wrap;
 }
 
+.answer-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.answer-body p {
+  margin: 0;
+  line-height: 1.75;
+  white-space: normal;
+  word-break: break-word;
+}
+
+.answer-table {
+  width: 100%;
+  margin: 6px 0;
+  border-collapse: collapse;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.answer-table th,
+.answer-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.answer-table th {
+  background: var(--sidebar-hover);
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.answer-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.answer-table td:empty::before {
+  content: '-';
+  color: var(--text-faint);
+}
+
 .message-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
@@ -1857,6 +2040,27 @@ button {
   min-height: 30px;
   padding: 0 9px;
   font-size: 12px;
+}
+
+.message-tools button.active {
+  color: #0f6b4f;
+  border-color: rgba(15, 107, 79, 0.36);
+  background: rgba(28, 125, 95, 0.12);
+}
+
+.message-tools button.danger.active {
+  color: #9f2f2f;
+  border-color: rgba(159, 47, 47, 0.34);
+  background: rgba(159, 47, 47, 0.1);
+}
+
+.message-tools > span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.message-tools .feedback-error {
+  color: #9f2f2f;
 }
 
 .sources {
