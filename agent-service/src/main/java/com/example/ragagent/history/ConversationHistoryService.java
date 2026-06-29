@@ -98,17 +98,19 @@ public class ConversationHistoryService {
             """;
 
     private final JdbcTemplate jdbcTemplate;
+    private final ConversationTitleGenerator titleGenerator;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public ConversationHistoryService(JdbcTemplate jdbcTemplate) {
+    public ConversationHistoryService(JdbcTemplate jdbcTemplate, ConversationTitleGenerator titleGenerator) {
         this.jdbcTemplate = jdbcTemplate;
+        this.titleGenerator = titleGenerator;
         initializeSchema();
     }
 
     public ConversationSummary create(CreateConversationRequest request) {
         String userId = normalizeUserId(request == null ? "" : request.userId());
         String id = "conversation-" + UUID.randomUUID();
-        String title = normalizeTitle(request == null ? "" : request.title());
+        String title = titleGenerator.generate(request == null ? "" : request.title());
         String knowledgeBaseId = request == null || request.knowledgeBaseId() == null ? "" : request.knowledgeBaseId();
         jdbcTemplate.update(INSERT_CONVERSATION_SQL, id, userId, title, knowledgeBaseId);
         return get(id, userId);
@@ -181,7 +183,7 @@ public class ConversationHistoryService {
     public ConversationSummary update(String id, UpdateConversationRequest request) {
         String userId = normalizeUserId(request == null ? "" : request.userId());
         ConversationSummary current = get(id, userId);
-        String title = request == null || request.title() == null ? current.title() : normalizeTitle(request.title());
+        String title = request == null || request.title() == null ? current.title() : titleGenerator.generate(request.title());
         String knowledgeBaseId = request == null || request.knowledgeBaseId() == null
                 ? current.knowledgeBaseId()
                 : request.knowledgeBaseId();
@@ -264,7 +266,7 @@ public class ConversationHistoryService {
     }
 
     private void ensureConversation(String id, String userId, ChatRequest request) {
-        String title = normalizeTitle(request.query());
+        String title = titleGenerator.generate(request.query());
         String knowledgeBaseId = request.knowledgeBaseId() == null ? "" : request.knowledgeBaseId();
         jdbcTemplate.update(INSERT_CONVERSATION_SQL, id, userId, title, knowledgeBaseId);
     }
@@ -276,26 +278,17 @@ public class ConversationHistoryService {
 
     private void autoTitle(String conversationId, String userId, String query) {
         ConversationSummary current = get(conversationId, userId);
-        if (current.title() != null && !current.title().isBlank() && !"New conversation".equals(current.title())) {
+        if (current.title() != null
+                && !current.title().isBlank()
+                && !ConversationTitleGenerator.DEFAULT_TITLE.equals(current.title())) {
             return;
         }
         jdbcTemplate.update(
                 "UPDATE chat_conversations SET title = ?, updated_at = now() WHERE id = ? AND user_id = ?",
-                normalizeTitle(query),
+                titleGenerator.generate(query),
                 conversationId,
                 userId
         );
-    }
-
-    private String normalizeTitle(String value) {
-        if (value == null || value.isBlank()) {
-            return "New conversation";
-        }
-        String normalized = value.replaceAll("\\s+", " ").trim();
-        if (normalized.length() <= 60) {
-            return normalized;
-        }
-        return normalized.substring(0, 57) + "...";
     }
 
     private String summary(String value) {
