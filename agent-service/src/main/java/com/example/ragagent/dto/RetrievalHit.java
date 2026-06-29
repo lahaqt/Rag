@@ -19,7 +19,8 @@ public record RetrievalHit(
                 chunkIndex,
                 documentName,
                 score,
-                excerpt(content, 220)
+                excerpt(content, 220),
+                content
         );
     }
 

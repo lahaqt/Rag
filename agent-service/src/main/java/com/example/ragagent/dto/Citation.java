@@ -8,6 +8,7 @@ public record Citation(
         int chunkIndex,
         String documentName,
         double score,
-        String excerpt
+        String excerpt,
+        String content
 ) {
 }
