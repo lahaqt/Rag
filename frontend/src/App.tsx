@@ -47,6 +47,7 @@ export type Message = {
   role: 'user' | 'assistant'
   content: string
   sources?: string[]
+  citations?: ChatCitation[]
   agentMode?: 'default' | 'multi-agent'
   command?: SlashCommandName
   agentTrace?: AgentTraceStep[]
@@ -142,10 +143,14 @@ type VectorStatus = {
 
 type ChatCitation = {
   index: number
+  knowledgeBaseId?: string
+  documentId?: string
+  chunkId?: string
   documentName: string
   chunkIndex: number
   score: number
   excerpt: string
+  content?: string
 }
 
 type AgentChatResponse = {
@@ -409,6 +414,22 @@ const sourcePreview = [
   { title: '入职流程.docx', meta: '制度章节 · 命中 0.73' },
 ]
 
+function citationTitle(citation: ChatCitation) {
+  return citation.documentName || `Chunk ${citation.chunkIndex}`
+}
+
+function citationMeta(citation: ChatCitation) {
+  return `chunk ${citation.chunkIndex} / ${citation.score.toFixed(3)}`
+}
+
+function citationText(citation: ChatCitation) {
+  return (citation.content || citation.excerpt || '').trim()
+}
+
+function citationKey(citation: ChatCitation) {
+  return citation.chunkId || `${citation.documentId || citation.documentName}-${citation.chunkIndex}-${citation.index}`
+}
+
 function formatDate(value?: string | null) {
   if (!value) {
     return '-'
@@ -524,11 +545,43 @@ function mapConversationRecord(record: ConversationRecord): Conversation {
 }
 
 function mapMessageRecord(record: ConversationMessageRecord): Message {
+  const parsedCitations = parseStoredCitations(record.citationsJson)
   return {
     id: Number(record.id),
     role: record.role,
     content: record.content,
+    citations: parsedCitations.citations,
+    sources: parsedCitations.sources,
   }
+}
+
+function parseStoredCitations(value?: string | null): { citations?: ChatCitation[]; sources?: string[] } {
+  if (!value) {
+    return {}
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown
+    if (!Array.isArray(parsed)) {
+      return {}
+    }
+    if (parsed.every((item) => typeof item === 'string')) {
+      return { sources: parsed as string[] }
+    }
+    const citations = parsed.filter(isChatCitation)
+    return citations.length > 0 ? { citations } : {}
+  } catch {
+    return {}
+  }
+}
+
+function isChatCitation(value: unknown): value is ChatCitation {
+  if (!value || typeof value !== 'object') {
+    return false
+  }
+  const citation = value as Partial<ChatCitation>
+  return typeof citation.index === 'number'
+    && typeof citation.chunkIndex === 'number'
+    && typeof citation.score === 'number'
 }
 
 function App() {
@@ -596,6 +649,11 @@ function App() {
   const messages = useMemo(
     () => messagesByConversation[activeId] ?? [],
     [activeId, messagesByConversation],
+  )
+
+  const activeCitations = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant' && message.citations?.length)?.citations ?? [],
+    [messages],
   )
 
   useEffect(() => {
@@ -949,7 +1007,7 @@ function App() {
           question: message.feedbackQuestion ?? '',
           answer: message.content,
           knowledgeBaseId: message.feedbackKnowledgeBaseId ?? activeKnowledgeBaseId,
-          sourcesJson: JSON.stringify(message.sources ?? []),
+          sourcesJson: JSON.stringify(message.citations?.length ? message.citations : message.sources ?? []),
         }),
       })
       if (!response.ok) {
@@ -1209,6 +1267,7 @@ function App() {
           spanId: chatResponse.spanId,
           feedbackQuestion: query,
           feedbackKnowledgeBaseId: activeKnowledgeBaseId,
+          citations: chatResponse.citations,
           sources:
             chatResponse.citations.length > 0
               ? chatResponse.citations.map(
@@ -2908,7 +2967,21 @@ function App() {
                       {message.feedbackStatus === 'error' && <span className="feedback-error">{message.feedbackError}</span>}
                     </div>
                   )}
-                  {message.sources && (
+                  {message.citations && message.citations.length > 0 && (
+                    <div className="sources citation-details-list">
+                      {message.citations.map((citation) => (
+                        <details key={citationKey(citation)}>
+                          <summary>
+                            <span>{citation.index}</span>
+                            <strong>{citationTitle(citation)}</strong>
+                            <small>{citationMeta(citation)}</small>
+                          </summary>
+                          <p>{citationText(citation)}</p>
+                        </details>
+                      ))}
+                    </div>
+                  )}
+                  {!message.citations?.length && message.sources && (
                     <div className="sources">
                       {message.sources.map((source, index) => (
                         <button key={source} type="button">
@@ -3046,15 +3119,28 @@ function App() {
             <BookOpen size={16} />
           </div>
           <div className="source-preview">
-            {sourcePreview.map((source, index) => (
-              <button key={source.title} type="button">
-                <span>{index + 1}</span>
-                <div>
-                  <strong>{source.title}</strong>
-                  <small>{source.meta}</small>
-                </div>
-              </button>
-            ))}
+            {activeCitations.length > 0
+              ? activeCitations.map((citation) => (
+                  <details key={citationKey(citation)} className="source-detail">
+                    <summary>
+                      <span>{citation.index}</span>
+                      <div>
+                        <strong>{citationTitle(citation)}</strong>
+                        <small>{citationMeta(citation)}</small>
+                      </div>
+                    </summary>
+                    <p>{citationText(citation)}</p>
+                  </details>
+                ))
+              : sourcePreview.map((source, index) => (
+                  <button key={source.title} type="button">
+                    <span>{index + 1}</span>
+                    <div>
+                      <strong>{source.title}</strong>
+                      <small>{source.meta}</small>
+                    </div>
+                  </button>
+                ))}
           </div>
         </section>
         </aside>
