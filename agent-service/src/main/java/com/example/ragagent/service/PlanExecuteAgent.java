@@ -72,8 +72,10 @@ public class PlanExecuteAgent {
     public ChatResponse answer(ChatRequest request, QueryAnalysisResponse analysis) {
         List<AgentTraceStep> trace = new ArrayList<>();
 
-        // Stage A — plan + iterative tool observation.
-        ReActLoopResult loopResult = reActLoop.run(request, analysis, 1);
+        // Stage A — direct answer or plan + iterative tool observation.
+        ReActLoopResult loopResult = shouldRunTools(analysis)
+                ? reActLoop.run(request, analysis, 1)
+                : directLoopResult(analysis);
         trace.addAll(loopResult.trace());
 
         // Stage B — generate + reflect with closed-loop retries.
@@ -209,6 +211,12 @@ public class PlanExecuteAgent {
                     draft.finishReason(),
                     decision.toolName(),
                     loopResult.webSearchResults(),
+                    analysis.requestType(),
+                    analysis.executionMode(),
+                    analysis.safeRequiredCapabilities(),
+                    analysis.clarificationQuestion(),
+                    "",
+                    "",
                     trace
             );
         }
@@ -228,7 +236,35 @@ public class PlanExecuteAgent {
                 draft.finishReason(),
                 decision.useTool() ? decision.toolName() : "",
                 List.of(),
+                analysis.requestType(),
+                analysis.executionMode(),
+                analysis.safeRequiredCapabilities(),
+                analysis.clarificationQuestion(),
+                "",
+                "",
                 trace
+        );
+    }
+
+    private boolean shouldRunTools(QueryAnalysisResponse analysis) {
+        return analysis != null && !analysis.isDirectExecution();
+    }
+
+    private ReActLoopResult directLoopResult(QueryAnalysisResponse analysis) {
+        return new ReActLoopResult(
+                ToolDecision.none(),
+                null,
+                List.of(new AgentTraceStep(
+                        1,
+                        "intent_tree",
+                        analysis.route(),
+                        "",
+                        "direct",
+                        "requestType=" + analysis.requestType()
+                                + "; executionMode=" + analysis.executionMode()
+                                + "; capabilities=" + analysis.safeRequiredCapabilities()
+                )),
+                ReActState.initial()
         );
     }
 

@@ -5,6 +5,14 @@ spring:
   application:
     name: rag-query-analysis-service
 
+management:
+  tracing:
+    sampling:
+      probability: ${OTEL_TRACES_SAMPLER_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+
 rag:
   llm:
     provider: volcengine-ark

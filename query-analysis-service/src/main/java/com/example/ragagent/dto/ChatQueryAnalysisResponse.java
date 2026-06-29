@@ -1,6 +1,7 @@
 package com.example.ragagent.dto;
 
 import java.util.List;
+import java.util.Map;
 
 public record ChatQueryAnalysisResponse(
         String sessionId,
@@ -15,6 +16,12 @@ public record ChatQueryAnalysisResponse(
         boolean rewritten,
         int historyLength,
         List<String> retrievalQueries,
+        String requestType,
+        String executionMode,
+        List<String> requiredCapabilities,
+        String clarificationQuestion,
+        Map<String, String> slots,
+        String systemCommand,
         List<String> reasons
 ) {
 }

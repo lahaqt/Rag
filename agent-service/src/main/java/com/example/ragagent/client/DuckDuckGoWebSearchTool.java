@@ -2,6 +2,7 @@ package com.example.ragagent.client;
 
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.WebSearchResult;
+import com.example.ragagent.observability.TracePropagationInterceptor;
 import com.example.ragagent.service.WebSearchTool;
 import java.net.URI;
 import java.net.URLEncoder;
@@ -59,12 +60,17 @@ public class DuckDuckGoWebSearchTool implements WebSearchTool {
     private final RestClient restClient;
     private final RagProperties.WebSearch properties;
 
-    public DuckDuckGoWebSearchTool(RagProperties properties) {
+    public DuckDuckGoWebSearchTool(
+            RagProperties properties,
+            RestClient.Builder restClientBuilder,
+            TracePropagationInterceptor tracePropagationInterceptor
+    ) {
         this.properties = properties.tools().webSearch();
-        this.restClient = RestClient.builder()
+        this.restClient = restClientBuilder.clone()
                 .baseUrl(this.properties.baseUrl())
                 .defaultHeader("User-Agent", "Mozilla/5.0 RAG-Agent/1.0")
                 .defaultHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
+                .requestInterceptor(tracePropagationInterceptor)
                 .build();
     }
 

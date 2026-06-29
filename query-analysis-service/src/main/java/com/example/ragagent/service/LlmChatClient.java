@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.observability.TracePropagationInterceptor;
 import java.util.List;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -13,13 +14,25 @@ public class LlmChatClient {
     private final RagProperties.Llm llm;
 
     public LlmChatClient(RagProperties properties) {
+        this(properties, RestClient.builder(), null);
+    }
+
+    public LlmChatClient(
+            RagProperties properties,
+            RestClient.Builder restClientBuilder,
+            TracePropagationInterceptor tracePropagationInterceptor
+    ) {
         this.llm = properties.llm();
-        this.openAiRestClient = RestClient.builder()
-                .baseUrl(llm.openaiCompatible().baseUrl())
-                .build();
-        this.anthropicRestClient = RestClient.builder()
-                .baseUrl(llm.anthropicCompatible().baseUrl())
-                .build();
+        RestClient.Builder openAiBuilder = restClientBuilder.clone()
+                .baseUrl(llm.openaiCompatible().baseUrl());
+        RestClient.Builder anthropicBuilder = restClientBuilder.clone()
+                .baseUrl(llm.anthropicCompatible().baseUrl());
+        if (tracePropagationInterceptor != null) {
+            openAiBuilder.requestInterceptor(tracePropagationInterceptor);
+            anthropicBuilder.requestInterceptor(tracePropagationInterceptor);
+        }
+        this.openAiRestClient = openAiBuilder.build();
+        this.anthropicRestClient = anthropicBuilder.build();
     }
 
     public boolean isConfigured() {

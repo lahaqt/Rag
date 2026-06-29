@@ -57,7 +57,7 @@ class MultiAgentOrchestratorTests {
     @Test
     void routesRealtimeQuestionToWebSearchSpecialist() {
         MultiAgentOrchestrator orchestrator = multiAgentOrchestrator(
-                new RecordingQueryAnalysisClient(this::knowledgeAnalysis),
+                new RecordingQueryAnalysisClient(this::webSearchAnalysis),
                 request -> new VectorSearchResponse(List.of()),
                 new StaticLlmGateway("Use the search result for today's weather. [1]"),
                 query -> List.of(new WebSearchResult(1, "Weather", "https://example.com/weather", "Forecast for today."))
@@ -187,6 +187,30 @@ class MultiAgentOrchestratorTests {
                 request.normalizedHistory().size(),
                 List.of(request.query()),
                 List.of("short_query_without_history")
+        );
+    }
+
+    private QueryAnalysisResponse webSearchAnalysis(ChatRequest request) {
+        return new QueryAnalysisResponse(
+                request.conversationId(),
+                request.knowledgeBaseId(),
+                request.query(),
+                request.query(),
+                request.query(),
+                "tool",
+                0.88,
+                "tool_invocation",
+                false,
+                false,
+                request.normalizedHistory().size(),
+                List.of(request.query()),
+                "TOOL_REQUEST",
+                "SINGLE_TOOL",
+                List.of("web_search"),
+                "",
+                java.util.Map.of(),
+                "",
+                List.of("contains_realtime_tool_keyword:today")
         );
     }
 

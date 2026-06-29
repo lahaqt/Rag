@@ -3,18 +3,7 @@ package com.example.ragagent.service;
 import java.util.List;
 import java.util.Map;
 
-public record ChatQueryAnalysis(
-        String sessionId,
-        String knowledgeBaseId,
-        String originalQuery,
-        String normalizedQuery,
-        String rewrittenQuery,
-        QueryIntent intent,
-        double confidence,
-        boolean needsRewrite,
-        boolean rewritten,
-        int historyLength,
-        List<String> retrievalQueries,
+public record IntentTreeDecision(
         String requestType,
         String executionMode,
         List<String> requiredCapabilities,
@@ -23,9 +12,9 @@ public record ChatQueryAnalysis(
         String systemCommand,
         List<String> reasons
 ) {
-    public ChatQueryAnalysis {
-        requestType = requestType == null || requestType.isBlank() ? "USER_QUESTION" : requestType;
-        executionMode = executionMode == null || executionMode.isBlank() ? "DIRECT" : executionMode;
+    public IntentTreeDecision {
+        requestType = blankToDefault(requestType, "USER_QUESTION");
+        executionMode = blankToDefault(executionMode, "DIRECT");
         requiredCapabilities = requiredCapabilities == null ? List.of() : List.copyOf(requiredCapabilities);
         clarificationQuestion = clarificationQuestion == null ? "" : clarificationQuestion;
         slots = slots == null ? Map.of() : Map.copyOf(slots);
@@ -33,7 +22,7 @@ public record ChatQueryAnalysis(
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    public String route() {
-        return intent.route();
+    private static String blankToDefault(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 }

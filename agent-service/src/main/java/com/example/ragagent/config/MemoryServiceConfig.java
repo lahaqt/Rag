@@ -6,11 +6,11 @@ import com.example.ragagent.memory.ConversationStateExtractor;
 import com.example.ragagent.memory.ConversationSummarizer;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.InMemoryConversationMemoryService;
-import com.example.ragagent.memory.InMemorySemanticMemoryStore;
-import com.example.ragagent.memory.InMemoryUserProfileStore;
 import com.example.ragagent.memory.LlmConversationSummarizer;
 import com.example.ragagent.memory.LongTermMemoryExtractor;
 import com.example.ragagent.memory.PostgresConversationMemoryService;
+import com.example.ragagent.memory.PostgresSemanticMemoryStore;
+import com.example.ragagent.memory.PostgresUserProfileStore;
 import com.example.ragagent.memory.RedisConversationMemoryService;
 import com.example.ragagent.memory.SemanticMemoryStore;
 import com.example.ragagent.memory.UserProfileStore;
@@ -40,13 +40,13 @@ public class MemoryServiceConfig {
     }
 
     @Bean
-    public SemanticMemoryStore semanticMemoryStore() {
-        return new InMemorySemanticMemoryStore();
+    public SemanticMemoryStore semanticMemoryStore(JdbcTemplate jdbcTemplate) {
+        return new PostgresSemanticMemoryStore(jdbcTemplate);
     }
 
     @Bean
-    public UserProfileStore userProfileStore() {
-        return new InMemoryUserProfileStore();
+    public UserProfileStore userProfileStore(JdbcTemplate jdbcTemplate) {
+        return new PostgresUserProfileStore(jdbcTemplate);
     }
 
     @Bean

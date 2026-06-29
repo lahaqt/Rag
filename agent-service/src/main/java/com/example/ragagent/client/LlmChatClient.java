@@ -1,6 +1,7 @@
 package com.example.ragagent.client;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.observability.TracePropagationInterceptor;
 import com.example.ragagent.service.LlmGateway;
 import java.util.List;
 import org.springframework.http.MediaType;
@@ -13,13 +14,19 @@ public class LlmChatClient implements LlmGateway {
     private final RestClient anthropicRestClient;
     private final RagProperties.Llm llm;
 
-    public LlmChatClient(RagProperties properties) {
+    public LlmChatClient(
+            RagProperties properties,
+            RestClient.Builder restClientBuilder,
+            TracePropagationInterceptor tracePropagationInterceptor
+    ) {
         this.llm = properties.llm();
-        this.openAiRestClient = RestClient.builder()
+        this.openAiRestClient = restClientBuilder.clone()
                 .baseUrl(llm.openaiCompatible().baseUrl())
+                .requestInterceptor(tracePropagationInterceptor)
                 .build();
-        this.anthropicRestClient = RestClient.builder()
+        this.anthropicRestClient = restClientBuilder.clone()
                 .baseUrl(llm.anthropicCompatible().baseUrl())
+                .requestInterceptor(tracePropagationInterceptor)
                 .build();
     }
 

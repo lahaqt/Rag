@@ -133,7 +133,7 @@ class ChatOrchestratorTests {
     void routesRealtimeQuestionToWebSearchTool() {
         RecordingStorageClient storageClient = new RecordingStorageClient(List.of());
         ChatOrchestrator orchestrator = new ChatOrchestrator(
-                request -> knowledgeAnalysis(request.query()),
+                request -> webSearchAnalysis(request.query()),
                 planExecuteAgent(
                         storageClient,
                         new AnswerGenerator(new StaticLlmGateway("Use the search result for today's weather. [1]"), new PromptBuilder(properties), properties),
@@ -217,7 +217,7 @@ class ChatOrchestratorTests {
     @Test
     void returnsControlledResponseWhenWebSearchFails() {
         ChatOrchestrator orchestrator = new ChatOrchestrator(
-                request -> knowledgeAnalysis(request.query()),
+                request -> webSearchAnalysis(request.query()),
                 planExecuteAgent(
                         request -> new VectorSearchResponse(List.of()),
                         new AnswerGenerator(new MissingLlmGateway(), new PromptBuilder(properties), properties),
@@ -290,6 +290,30 @@ class ChatOrchestratorTests {
                 0,
                 List.of(query),
                 List.of("short_query_without_history")
+        );
+    }
+
+    private QueryAnalysisResponse webSearchAnalysis(String query) {
+        return new QueryAnalysisResponse(
+                "session-1",
+                "enterprise-policy",
+                query,
+                query,
+                query,
+                "tool",
+                0.88,
+                "tool_invocation",
+                false,
+                false,
+                0,
+                List.of(query),
+                "TOOL_REQUEST",
+                "SINGLE_TOOL",
+                List.of("web_search"),
+                "",
+                java.util.Map.of(),
+                "",
+                List.of("contains_realtime_tool_keyword:today")
         );
     }
 

@@ -5,7 +5,11 @@ import com.example.ragagent.dto.ChatMessage;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.dto.QueryAnalysisResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -58,7 +62,8 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             return noOpContext(request);
         }
         String conversationId = normalizeConversationId(request);
-        StoredMemory stored = loadStored(conversationId, request);
+        String storageKey = memoryStorageKey(request, conversationId);
+        StoredMemory stored = loadStored(storageKey, request);
         return buildContext(conversationId, stored, request);
     }
 
@@ -68,9 +73,10 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             return;
         }
         String conversationId = normalizeConversationId(request);
-        StoredMemory current = loadStored(conversationId, request);
+        String storageKey = memoryStorageKey(request, conversationId);
+        StoredMemory current = loadStored(storageKey, request);
         StoredMemory updated = applyTurn(current, request, analysis, response);
-        persistStored(conversationId, updated);
+        persistStored(storageKey, updated);
         recordLongTermMemory(conversationId, request, analysis, response, updated.dialogState());
     }
 
@@ -207,6 +213,18 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             return request.options().userId().trim();
         }
         return "";
+    }
+
+    protected String memoryStorageKey(ChatRequest request, String conversationId) {
+        String userId = normalizeUserId(request);
+        String owner = userId.isBlank() ? "anonymous" : userId;
+        String raw = owner + "\u001f" + (conversationId == null ? "" : conversationId);
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+            return "mem-" + HexFormat.of().formatHex(digest);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 digest is not available.", exception);
+        }
     }
 
     protected String normalize(String value) {

@@ -20,20 +20,51 @@ public class IntentClassifier {
     private static final Set<String> AMBIGUOUS_SHORT_QUERIES = Set.of(
             "怎么办", "怎么弄", "帮我看看", "有什么推荐", "出问题了", "有吗", "还有吗"
     );
+    private static final List<String> REALTIME_TOOL_KEYWORDS = List.of(
+            "今天", "现在", "实时", "最新", "新闻", "天气", "气温", "预报",
+            "股价", "汇率", "today", "current", "latest", "news", "weather"
+    );
+    private static final List<String> MCP_TOOL_KEYWORDS = List.of(
+            "mcp", "MCP", "调用工具", "使用工具", "执行工具", "工具调用"
+    );
+    private static final List<String> SYSTEM_COMMAND_KEYWORDS = List.of(
+            "/clear-memory", "/switch-kb", "/set", "清空记忆", "切换知识库", "检索调试", "调试信息", "召回数量", "topK", "TopK", "topk"
+    );
 
     public IntentResult classify(List<ChatMessage> history, String normalizedQuery) {
         List<String> reasons = new ArrayList<>();
         boolean hasHistory = history != null && !history.isEmpty();
+
+        for (String keyword : SYSTEM_COMMAND_KEYWORDS) {
+            if (normalizedQuery.contains(keyword)) {
+                reasons.add("contains_system_command_keyword:" + keyword);
+                return new IntentResult(QueryIntent.SYSTEM_COMMAND, 0.92, reasons);
+            }
+        }
 
         if (normalizedQuery.length() <= 8 && CHITCHAT_EXACT.contains(normalizedQuery)) {
             reasons.add("short_message_matches_chitchat_rule");
             return new IntentResult(QueryIntent.CHITCHAT, 0.99, reasons);
         }
 
+        for (String keyword : MCP_TOOL_KEYWORDS) {
+            if (normalizedQuery.contains(keyword)) {
+                reasons.add("contains_mcp_tool_keyword:" + keyword);
+                return new IntentResult(QueryIntent.TOOL, 0.82, reasons);
+            }
+        }
+
         for (String keyword : BUSINESS_OPERATION_KEYWORDS) {
             if (normalizedQuery.contains(keyword)) {
                 reasons.add("contains_business_operation_keyword:" + keyword);
                 return new IntentResult(QueryIntent.KNOWLEDGE, 0.86, reasons);
+            }
+        }
+
+        for (String keyword : REALTIME_TOOL_KEYWORDS) {
+            if (normalizedQuery.toLowerCase().contains(keyword.toLowerCase())) {
+                reasons.add("contains_realtime_tool_keyword:" + keyword);
+                return new IntentResult(QueryIntent.TOOL, 0.88, reasons);
             }
         }
 

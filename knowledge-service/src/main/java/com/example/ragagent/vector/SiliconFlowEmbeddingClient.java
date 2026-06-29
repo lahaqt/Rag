@@ -1,6 +1,7 @@
 package com.example.ragagent.vector;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.observability.TracePropagationInterceptor;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
@@ -15,13 +16,20 @@ public class SiliconFlowEmbeddingClient implements EmbeddingClient {
     private final String model;
     private final int dimensions;
 
-    public SiliconFlowEmbeddingClient(RagProperties properties) {
+    public SiliconFlowEmbeddingClient(
+            RagProperties properties,
+            RestClient.Builder restClientBuilder,
+            TracePropagationInterceptor tracePropagationInterceptor
+    ) {
         RagProperties.Embedding embedding = properties.vector().embedding();
         if (embedding.apiKey().isBlank()) {
             throw new IllegalStateException("rag.vector.embedding.api-key is required when provider is siliconflow.");
         }
         String baseUrl = embedding.baseUrl().isBlank() ? "https://api.siliconflow.cn/v1" : embedding.baseUrl();
-        this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+        this.restClient = restClientBuilder.clone()
+                .baseUrl(baseUrl)
+                .requestInterceptor(tracePropagationInterceptor)
+                .build();
         this.apiKey = embedding.apiKey();
         this.model = embedding.model();
         this.dimensions = embedding.dimensions();

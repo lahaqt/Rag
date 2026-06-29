@@ -30,10 +30,20 @@ public class AnswerGenerator {
             List<RetrievalHit> hits,
             String reflectionHint
     ) {
+        if ("SYSTEM_COMMAND".equalsIgnoreCase(analysis.requestType()) || "system_command".equals(analysis.route())) {
+            String command = isBlank(analysis.systemCommand()) ? "SYSTEM_COMMAND" : analysis.systemCommand();
+            return new AnswerDraft("已识别系统指令：" + command + "。当前聊天主链路只负责识别和路由，实际状态变更需要由对应的系统指令处理器接入。", false, "system_command_recognized");
+        }
         if ("follow_up".equals(analysis.intent()) || "ask_follow_up".equals(analysis.route())) {
+            if (!isBlank(analysis.clarificationQuestion())) {
+                return new AnswerDraft(analysis.clarificationQuestion(), false, "follow_up_required");
+            }
             return new AnswerDraft("这个问题还需要补充信息。请说明你要处理的是订单、物流、余额、退货、提交、修改地址、取消订单还是售后维修中的哪一类，并补充必要的订单号、商品或操作场景。", false, "follow_up_required");
         }
         if ("clarification".equals(analysis.intent())) {
+            if (!isBlank(analysis.clarificationQuestion())) {
+                return new AnswerDraft(analysis.clarificationQuestion(), false, "clarification_required");
+            }
             return new AnswerDraft("这个问题还不够明确。请补充你要查询的产品、制度、文档或业务场景。", false, "clarification_required");
         }
         if ("tool".equals(analysis.intent())) {

@@ -47,6 +47,12 @@ export type Message = {
   agentMode?: 'default' | 'multi-agent'
   command?: SlashCommandName
   agentTrace?: AgentTraceStep[]
+  requestType?: string
+  executionMode?: string
+  requiredCapabilities?: string[]
+  clarificationQuestion?: string
+  traceId?: string
+  spanId?: string
 }
 
 export type Conversation = {
@@ -121,6 +127,12 @@ type ChatCitation = {
 type AgentChatResponse = {
   conversationId: string
   answer: string
+  requestType?: string
+  executionMode?: string
+  requiredCapabilities?: string[]
+  clarificationQuestion?: string
+  traceId?: string
+  spanId?: string
   rewrittenQuery: string
   citations: ChatCitation[]
   agentTrace?: AgentTraceStep[]
@@ -782,6 +794,12 @@ function App() {
           agentMode: isMultiAgent ? 'multi-agent' : 'default',
           command: commandName,
           agentTrace: chatResponse.agentTrace,
+          requestType: chatResponse.requestType,
+          executionMode: chatResponse.executionMode,
+          requiredCapabilities: chatResponse.requiredCapabilities,
+          clarificationQuestion: chatResponse.clarificationQuestion,
+          traceId: chatResponse.traceId,
+          spanId: chatResponse.spanId,
           sources:
             chatResponse.citations.length > 0
               ? chatResponse.citations.map(
