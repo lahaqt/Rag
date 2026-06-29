@@ -65,7 +65,7 @@ rag:
     model: ark-code-latest
     api-key: ${ARK_API_KEY:}
     temperature: 0.2
-    max-tokens: 1200
+    max-tokens: 2400
     openai-compatible:
       base-url: https://ark.cn-beijing.volces.com/api/coding/v3
     anthropic-compatible:

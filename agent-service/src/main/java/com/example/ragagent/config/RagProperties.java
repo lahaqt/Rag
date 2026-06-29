@@ -116,7 +116,7 @@ public record RagProperties(
                 apiKey = "";
             }
             temperature = temperature == null ? 0.2 : Math.max(0.0, Math.min(temperature, 1.5));
-            maxTokens = maxTokens == null ? 1200 : Math.max(128, maxTokens);
+            maxTokens = maxTokens == null ? 2400 : Math.max(128, maxTokens);
             if (openaiCompatible == null) {
                 openaiCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding/v3");
             }
