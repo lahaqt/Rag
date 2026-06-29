@@ -3,6 +3,7 @@ package com.example.ragagent.service;
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.observability.TracePropagationInterceptor;
 import java.util.List;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -17,6 +18,7 @@ public class LlmChatClient {
         this(properties, RestClient.builder(), null);
     }
 
+    @Autowired
     public LlmChatClient(
             RagProperties properties,
             RestClient.Builder restClientBuilder,
