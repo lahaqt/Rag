@@ -49,7 +49,7 @@ public record RagProperties(
             agent = new Agent(4, 2, true);
         }
         if (memory == null) {
-            memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L, "window", 4, true);
+            memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L, "window", 4, true, null);
         }
     }
 
@@ -174,8 +174,31 @@ public record RagProperties(
             Long ttlSeconds,
             String summaryMode,
             Integer semanticMemoryMaxItems,
-            Boolean profileEnabled
+            Boolean profileEnabled,
+            SemanticEmbedding semanticEmbedding
     ) {
+        public record SemanticEmbedding(
+                Boolean enabled,
+                String provider,
+                String baseUrl,
+                String apiKey,
+                String model,
+                Integer dimensions,
+                Double similarityThreshold
+        ) {
+            public SemanticEmbedding {
+                enabled = enabled == null || enabled;
+                provider = (provider == null || provider.isBlank()) ? "hash" : provider;
+                baseUrl = baseUrl == null ? "" : baseUrl;
+                apiKey = apiKey == null ? "" : apiKey;
+                model = (model == null || model.isBlank()) ? provider : model;
+                dimensions = dimensions == null ? 384 : Math.max(16, Math.min(dimensions, 4096));
+                similarityThreshold = similarityThreshold == null
+                        ? 0.20
+                        : Math.max(0.0, Math.min(similarityThreshold, 1.0));
+            }
+        }
+
         public Memory(
                 String provider,
                 Boolean enabled,
@@ -196,7 +219,8 @@ public record RagProperties(
                     ttlSeconds,
                     summaryMode,
                     4,
-                    true
+                    true,
+                    null
             );
         }
 
@@ -219,7 +243,35 @@ public record RagProperties(
                     ttlSeconds,
                     "window",
                     4,
-                    true
+                    true,
+                    null
+            );
+        }
+
+        public Memory(
+                String provider,
+                Boolean enabled,
+                Integer recentMessages,
+                Integer summarizeAfterMessages,
+                Integer summaryMaxCharacters,
+                Integer stateMaxEntries,
+                Long ttlSeconds,
+                String summaryMode,
+                Integer semanticMemoryMaxItems,
+                Boolean profileEnabled
+        ) {
+            this(
+                    provider,
+                    enabled,
+                    recentMessages,
+                    summarizeAfterMessages,
+                    summaryMaxCharacters,
+                    stateMaxEntries,
+                    ttlSeconds,
+                    summaryMode,
+                    semanticMemoryMaxItems,
+                    profileEnabled,
+                    null
             );
         }
 
@@ -240,6 +292,9 @@ public record RagProperties(
                     ? 4
                     : Math.max(0, Math.min(semanticMemoryMaxItems, 12));
             profileEnabled = profileEnabled == null || profileEnabled;
+            semanticEmbedding = semanticEmbedding == null
+                    ? new SemanticEmbedding(true, "hash", "", "", "hash", 384, 0.20)
+                    : semanticEmbedding;
         }
     }
 

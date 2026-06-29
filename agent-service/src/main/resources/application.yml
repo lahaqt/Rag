@@ -60,6 +60,14 @@ rag:
     semantic-memory-max-items: 4
     profile-enabled: true
     state-max-entries: 16
+    semantic-embedding:
+      enabled: true
+      provider: siliconflow
+      base-url: https://api.siliconflow.cn/v1
+      api-key: sk-jppgrqnxysqtgludkgmvbgrtdkneefylvddrvgpqychwubkq
+      model: Qwen/Qwen3-Embedding-8B
+      dimensions: 1024
+      similarity-threshold: 0.25
   llm:
     provider: volcengine-ark
     model: ark-code-latest

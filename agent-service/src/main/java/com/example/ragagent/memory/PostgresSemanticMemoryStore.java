@@ -1,5 +1,6 @@
 package com.example.ragagent.memory;
 
+import com.example.ragagent.config.RagProperties;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
@@ -45,7 +46,60 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                 ON semantic_memories(scope, owner_id, conversation_id, updated_at DESC)
             """;
 
+    private static final String ALTER_EMBEDDING_SQL = """
+            ALTER TABLE semantic_memories
+            ADD COLUMN IF NOT EXISTS embedding vector(%d)
+            """;
+
+    private static final String ALTER_EMBEDDING_PROVIDER_SQL = """
+            ALTER TABLE semantic_memories
+            ADD COLUMN IF NOT EXISTS embedding_provider VARCHAR(64) NOT NULL DEFAULT ''
+            """;
+
+    private static final String ALTER_EMBEDDING_MODEL_SQL = """
+            ALTER TABLE semantic_memories
+            ADD COLUMN IF NOT EXISTS embedding_model VARCHAR(128) NOT NULL DEFAULT ''
+            """;
+
+    private static final String ALTER_EMBEDDING_DIMENSIONS_SQL = """
+            ALTER TABLE semantic_memories
+            ADD COLUMN IF NOT EXISTS embedding_dimensions INT NOT NULL DEFAULT 0
+            """;
+
+    private static final String CREATE_EMBEDDING_INDEX_SQL = """
+            CREATE INDEX IF NOT EXISTS idx_semantic_memories_embedding_hnsw
+                ON semantic_memories USING hnsw (embedding vector_cosine_ops)
+            """;
+
     private static final String INSERT_SQL = """
+            INSERT INTO semantic_memories (
+                id, dedupe_key, scope, owner_id, conversation_id, type, content, metadata,
+                confidence, created_at, updated_at, embedding, embedding_provider, embedding_model, embedding_dimensions
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::vector, ?, ?, ?)
+            ON CONFLICT (dedupe_key) DO UPDATE SET
+                metadata = CASE
+                    WHEN EXCLUDED.confidence >= semantic_memories.confidence THEN EXCLUDED.metadata
+                    ELSE semantic_memories.metadata
+                END,
+                confidence = GREATEST(semantic_memories.confidence, EXCLUDED.confidence),
+                embedding = COALESCE(EXCLUDED.embedding, semantic_memories.embedding),
+                embedding_provider = CASE
+                    WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_provider
+                    ELSE semantic_memories.embedding_provider
+                END,
+                embedding_model = CASE
+                    WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_model
+                    ELSE semantic_memories.embedding_model
+                END,
+                embedding_dimensions = CASE
+                    WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_dimensions
+                    ELSE semantic_memories.embedding_dimensions
+                END,
+                updated_at = now()
+            """;
+
+    private static final String LEGACY_INSERT_SQL = """
             INSERT INTO semantic_memories (
                 id, dedupe_key, scope, owner_id, conversation_id, type, content, metadata,
                 confidence, created_at, updated_at
@@ -70,13 +124,45 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             LIMIT ?
             """;
 
+    private static final String SELECT_VECTOR_CANDIDATES_SQL = """
+            SELECT id, scope, owner_id, conversation_id, type, content, metadata,
+                   confidence, created_at, updated_at,
+                   1 - (embedding <=> ?::vector) AS vector_score
+            FROM semantic_memories
+            WHERE embedding IS NOT NULL
+              AND embedding_provider = ?
+              AND embedding_model = ?
+              AND embedding_dimensions = ?
+              AND ((scope = 'user' AND owner_id = ?)
+                   OR (scope = 'conversation' AND conversation_id = ?))
+              AND 1 - (embedding <=> ?::vector) >= ?
+            ORDER BY embedding <=> ?::vector
+            LIMIT ?
+            """;
+
     private final JdbcTemplate jdbcTemplate;
+    private final RagProperties.Memory.SemanticEmbedding embeddingConfig;
+    private final MemoryEmbeddingClient embeddingClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private volatile boolean schemaInitialized;
     private volatile Instant lastSchemaAttempt = Instant.EPOCH;
+    private volatile boolean vectorSchemaInitialized;
+    private volatile Instant lastVectorSchemaAttempt = Instant.EPOCH;
 
     public PostgresSemanticMemoryStore(JdbcTemplate jdbcTemplate) {
+        this(jdbcTemplate, null, null);
+    }
+
+    public PostgresSemanticMemoryStore(
+            JdbcTemplate jdbcTemplate,
+            RagProperties properties,
+            MemoryEmbeddingClient embeddingClient
+    ) {
         this.jdbcTemplate = jdbcTemplate;
+        this.embeddingConfig = properties == null
+                ? new RagProperties.Memory.SemanticEmbedding(false, "hash", "", "", "hash", 384, 0.20)
+                : properties.memory().semanticEmbedding();
+        this.embeddingClient = embeddingClient;
     }
 
     @Override
@@ -87,6 +173,50 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
         if (!ensureSchema()) {
             return List.of();
         }
+        List<MemoryItem> vectorMatches = recallByVector(userId, conversationId, query, maxItems);
+        if (!vectorMatches.isEmpty()) {
+            return vectorMatches;
+        }
+        return recallByTokens(userId, conversationId, query, maxItems);
+    }
+
+    private List<MemoryItem> recallByVector(String userId, String conversationId, String query, int maxItems) {
+        if (!embeddingConfig.enabled() || embeddingClient == null || query == null || query.isBlank()) {
+            return List.of();
+        }
+        if (!ensureVectorSchema()) {
+            return List.of();
+        }
+        try {
+            float[] queryEmbedding = embeddingClient.embedOne(query);
+            return jdbcTemplate.query(
+                            SELECT_VECTOR_CANDIDATES_SQL,
+                            (rs, rowNum) -> Map.entry(mapItem(rs, rowNum), rs.getDouble("vector_score")),
+                            toVectorLiteral(queryEmbedding),
+                            embeddingClient.providerName(),
+                            embeddingClient.modelName(),
+                            embeddingClient.dimensions(),
+                            safe(userId),
+                            safe(conversationId),
+                            toVectorLiteral(queryEmbedding),
+                            embeddingConfig.similarityThreshold(),
+                            toVectorLiteral(queryEmbedding),
+                            Math.max(maxItems * 4, maxItems)
+                    ).stream()
+                    .map(entry -> Map.entry(entry.getKey(), fusedScore(entry.getKey(), entry.getValue())))
+                    .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
+                            .thenComparing(entry -> entry.getKey().updatedAt(), Comparator.reverseOrder()))
+                    .limit(maxItems)
+                    .map(Map.Entry::getKey)
+                    .toList();
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory vector recall failed. user={} conversation={} error={}",
+                    userId, conversationId, exception.getMessage());
+            return List.of();
+        }
+    }
+
+    private List<MemoryItem> recallByTokens(String userId, String conversationId, String query, int maxItems) {
         try {
             Set<String> queryTokens = tokens(query);
             List<MemoryItem> candidates = jdbcTemplate.query(
@@ -120,27 +250,49 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             return;
         }
         try {
+            boolean vectorReady = embeddingConfig.enabled() && embeddingClient != null && ensureVectorSchema();
             List<Object[]> batch = new ArrayList<>();
             for (MemoryItem item : items) {
                 if (item == null || item.content().isBlank()) {
                     continue;
                 }
-                batch.add(new Object[] {
-                        item.id(),
-                        dedupeKey(item),
-                        item.scope(),
-                        item.ownerId(),
-                        item.conversationId(),
-                        item.type(),
-                        item.content(),
-                        serializeMetadata(item.metadata()),
-                        item.confidence(),
-                        item.createdAt(),
-                        item.updatedAt()
-                });
+                if (vectorReady) {
+                    float[] embedding = embeddingFor(item);
+                    batch.add(new Object[] {
+                            item.id(),
+                            dedupeKey(item),
+                            item.scope(),
+                            item.ownerId(),
+                            item.conversationId(),
+                            item.type(),
+                            item.content(),
+                            serializeMetadata(item.metadata()),
+                            item.confidence(),
+                            item.createdAt(),
+                            item.updatedAt(),
+                            toVectorLiteralOrNull(embedding),
+                            embedding == null ? "" : embeddingClient.providerName(),
+                            embedding == null ? "" : embeddingClient.modelName(),
+                            embedding == null ? 0 : embeddingClient.dimensions()
+                    });
+                } else {
+                    batch.add(new Object[] {
+                            item.id(),
+                            dedupeKey(item),
+                            item.scope(),
+                            item.ownerId(),
+                            item.conversationId(),
+                            item.type(),
+                            item.content(),
+                            serializeMetadata(item.metadata()),
+                            item.confidence(),
+                            item.createdAt(),
+                            item.updatedAt()
+                    });
+                }
             }
             if (!batch.isEmpty()) {
-                jdbcTemplate.batchUpdate(INSERT_SQL, batch);
+                jdbcTemplate.batchUpdate(vectorReady ? INSERT_SQL : LEGACY_INSERT_SQL, batch);
             }
         } catch (Exception exception) {
             log.warn("Postgres semantic memory persist failed. error={}", exception.getMessage());
@@ -160,9 +312,37 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             jdbcTemplate.execute(CREATE_TABLE_SQL);
             jdbcTemplate.execute(CREATE_SCOPE_INDEX_SQL);
             schemaInitialized = true;
+            ensureVectorSchema();
             return true;
         } catch (Exception exception) {
             log.warn("Postgres semantic memory schema initialization failed. error={}", exception.getMessage());
+            return false;
+        }
+    }
+
+    private boolean ensureVectorSchema() {
+        if (!embeddingConfig.enabled() || embeddingClient == null) {
+            return false;
+        }
+        if (vectorSchemaInitialized) {
+            return true;
+        }
+        Instant now = Instant.now();
+        if (Duration.between(lastVectorSchemaAttempt, now).toSeconds() < 60) {
+            return false;
+        }
+        lastVectorSchemaAttempt = now;
+        try {
+            jdbcTemplate.execute("CREATE EXTENSION IF NOT EXISTS vector");
+            jdbcTemplate.execute(ALTER_EMBEDDING_SQL.formatted(embeddingClient.dimensions()));
+            jdbcTemplate.execute(ALTER_EMBEDDING_PROVIDER_SQL);
+            jdbcTemplate.execute(ALTER_EMBEDDING_MODEL_SQL);
+            jdbcTemplate.execute(ALTER_EMBEDDING_DIMENSIONS_SQL);
+            jdbcTemplate.execute(CREATE_EMBEDDING_INDEX_SQL);
+            vectorSchemaInitialized = true;
+            return true;
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory vector schema initialization failed. error={}", exception.getMessage());
             return false;
         }
     }
@@ -218,6 +398,62 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             }
         }
         return ((double) overlap / Math.max(queryTokens.size(), contentTokens.size())) + item.confidence() * 0.1;
+    }
+
+    private double fusedScore(MemoryItem item, double vectorScore) {
+        return vectorScore * 0.75
+                + item.confidence() * 0.15
+                + recencyBoost(item.updatedAt()) * 0.05
+                + typeBoost(item.type()) * 0.05;
+    }
+
+    private double recencyBoost(Instant updatedAt) {
+        if (updatedAt == null) {
+            return 0.0;
+        }
+        long ageSeconds = Math.max(0, Duration.between(updatedAt, Instant.now()).toSeconds());
+        double ageDays = ageSeconds / 86400.0;
+        return Math.max(0.0, 1.0 - ageDays / 30.0);
+    }
+
+    private double typeBoost(String type) {
+        if ("preference".equals(type)) {
+            return 1.0;
+        }
+        if ("business_context".equals(type)) {
+            return 0.85;
+        }
+        if ("topic".equals(type)) {
+            return 0.65;
+        }
+        return 0.50;
+    }
+
+    private float[] embeddingFor(MemoryItem item) {
+        if (!embeddingConfig.enabled() || embeddingClient == null || item == null || item.content().isBlank()) {
+            return null;
+        }
+        try {
+            return embeddingClient.embedOne(item.content());
+        } catch (Exception exception) {
+            log.warn("Semantic memory embedding failed. type={} error={}", item.type(), exception.getMessage());
+            return null;
+        }
+    }
+
+    private String toVectorLiteralOrNull(float[] vector) {
+        return vector == null ? null : toVectorLiteral(vector);
+    }
+
+    private String toVectorLiteral(float[] vector) {
+        StringBuilder builder = new StringBuilder("[");
+        for (int index = 0; index < vector.length; index++) {
+            if (index > 0) {
+                builder.append(',');
+            }
+            builder.append(vector[index]);
+        }
+        return builder.append(']').toString();
     }
 
     private Set<String> tokens(String value) {
