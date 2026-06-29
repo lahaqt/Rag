@@ -8,6 +8,7 @@ import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.InMemoryConversationMemoryService;
 import com.example.ragagent.memory.LlmConversationSummarizer;
 import com.example.ragagent.memory.LongTermMemoryExtractor;
+import com.example.ragagent.memory.MemoryEmbeddingClient;
 import com.example.ragagent.memory.PostgresConversationMemoryService;
 import com.example.ragagent.memory.PostgresSemanticMemoryStore;
 import com.example.ragagent.memory.PostgresUserProfileStore;
@@ -17,6 +18,7 @@ import com.example.ragagent.memory.UserProfileStore;
 import com.example.ragagent.memory.WindowConversationSummarizer;
 import com.example.ragagent.service.LlmGateway;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -40,8 +42,12 @@ public class MemoryServiceConfig {
     }
 
     @Bean
-    public SemanticMemoryStore semanticMemoryStore(JdbcTemplate jdbcTemplate) {
-        return new PostgresSemanticMemoryStore(jdbcTemplate);
+    public SemanticMemoryStore semanticMemoryStore(
+            JdbcTemplate jdbcTemplate,
+            RagProperties properties,
+            ObjectProvider<MemoryEmbeddingClient> memoryEmbeddingClient
+    ) {
+        return new PostgresSemanticMemoryStore(jdbcTemplate, properties, memoryEmbeddingClient.getIfAvailable());
     }
 
     @Bean
