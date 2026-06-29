@@ -84,24 +84,30 @@ public class PlanExecuteAgent {
         trace.forEach(streamSink::trace);
 
         // Stage B — generate + reflect with closed-loop retries.
+        long generateStarted = System.nanoTime();
         AnswerDraft draft = generate(request, analysis, loopResult, "", streamSink);
-        addTrace(trace, streamSink, new AgentTraceStep(
+        addTrace(trace, streamSink, AgentTraceStep.timed(
                 trace.size() + 1,
                 "answer",
                 analysis.route(),
                 loopResult.decision().toolName(),
                 "generate",
-                draft.finishReason()
+                draft.finishReason(),
+                "ok",
+                durationMs(generateStarted)
         ));
 
+        long reflectionStarted = System.nanoTime();
         ReflectionResult reflection = reflectionCritic.review(request, analysis, loopResult, draft);
-        addTrace(trace, streamSink, new AgentTraceStep(
+        addTrace(trace, streamSink, AgentTraceStep.timed(
                 trace.size() + 1,
                 "reflection",
                 analysis.route(),
                 loopResult.decision().toolName(),
                 "critique",
-                reflection.observation()
+                reflection.observation(),
+                reflection.passed() ? "ok" : "warn",
+                durationMs(reflectionStarted)
         ));
 
         int attempts = 1;
@@ -111,24 +117,32 @@ public class PlanExecuteAgent {
                     + "; reflection_observation=" + lastObservation
                     + "; 请根据当前已经检索到的事实重新生成答案，避免编造或忽略证据。";
             streamSink.answerReset("reflection_retry_" + attempts);
+            long retryGenerateStarted = System.nanoTime();
             AnswerDraft retryDraft = generate(request, analysis, loopResult, reflectionHint, streamSink);
+            long retryGenerateDurationMs = durationMs(retryGenerateStarted);
+            long retryReviewStarted = System.nanoTime();
             ReflectionResult retryReview = reflectionCritic.review(request, analysis, loopResult, retryDraft);
+            long retryReviewDurationMs = durationMs(retryReviewStarted);
             attempts++;
-            addTrace(trace, streamSink, new AgentTraceStep(
+            addTrace(trace, streamSink, AgentTraceStep.timed(
                     trace.size() + 1,
                     "answer",
                     analysis.route(),
                     loopResult.decision().toolName(),
                     "regenerate",
-                    "attempt=" + attempts + "; draftFinishReason=" + retryDraft.finishReason()
+                    "attempt=" + attempts + "; draftFinishReason=" + retryDraft.finishReason(),
+                    "ok",
+                    retryGenerateDurationMs
             ));
-            addTrace(trace, streamSink, new AgentTraceStep(
+            addTrace(trace, streamSink, AgentTraceStep.timed(
                     trace.size() + 1,
                     "reflection",
                     analysis.route(),
                     loopResult.decision().toolName(),
                     "critique_retry_" + (attempts - 1),
-                    retryReview.observation()
+                    retryReview.observation(),
+                    retryReview.passed() ? "ok" : "warn",
+                    retryReviewDurationMs
             ));
             draft = retryDraft;
             reflection = retryReview;
@@ -145,7 +159,7 @@ public class PlanExecuteAgent {
             );
         }
 
-        addTrace(trace, streamSink, new AgentTraceStep(
+        addTrace(trace, streamSink, AgentTraceStep.timed(
                 trace.size() + 1,
                 "reflection",
                 analysis.route(),
@@ -153,7 +167,9 @@ public class PlanExecuteAgent {
                 "final",
                 "passed=" + reflection.passed()
                         + "; observation=" + reflection.observation()
-                        + "; attempts=" + attempts
+                        + "; attempts=" + attempts,
+                reflection.passed() ? "ok" : "warn",
+                0
         ));
 
         return response(request, analysis, loopResult, draft, trace);
@@ -275,7 +291,7 @@ public class PlanExecuteAgent {
         return new ReActLoopResult(
                 ToolDecision.none(),
                 null,
-                List.of(new AgentTraceStep(
+                List.of(AgentTraceStep.timed(
                         1,
                         "intent_tree",
                         analysis.route(),
@@ -283,7 +299,9 @@ public class PlanExecuteAgent {
                         "direct",
                         "requestType=" + analysis.requestType()
                                 + "; executionMode=" + analysis.executionMode()
-                                + "; capabilities=" + analysis.safeRequiredCapabilities()
+                                + "; capabilities=" + analysis.safeRequiredCapabilities(),
+                        "skipped",
+                        0
                 )),
                 ReActState.initial()
         );
@@ -291,5 +309,9 @@ public class PlanExecuteAgent {
 
     private String safeObservation(AgentToolResult result) {
         return result.observation() == null ? "unknown error" : result.observation();
+    }
+
+    private long durationMs(long startedNanos) {
+        return Math.max(0, (System.nanoTime() - startedNanos) / 1_000_000);
     }
 }

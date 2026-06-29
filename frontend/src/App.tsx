@@ -177,6 +177,12 @@ type AgentTraceStep = {
   toolName: string
   action: string
   observation: string
+  status?: string
+  durationMs?: number
+  error?: string
+  traceId?: string
+  spanId?: string
+  attributes?: Record<string, unknown>
 }
 
 type ChatStreamEvent = {
@@ -819,7 +825,17 @@ function App() {
     const merged = [...(current ?? [])]
     for (const step of incoming ?? []) {
       const key = `${step.step}:${step.phase}:${step.action}:${step.observation}`
-      if (!merged.some((item) => `${item.step}:${item.phase}:${item.action}:${item.observation}` === key)) {
+      const existingIndex = merged.findIndex((item) => `${item.step}:${item.phase}:${item.action}:${item.observation}` === key)
+      if (existingIndex >= 0) {
+        merged[existingIndex] = {
+          ...merged[existingIndex],
+          ...step,
+          attributes: {
+            ...(merged[existingIndex].attributes ?? {}),
+            ...(step.attributes ?? {}),
+          },
+        }
+      } else {
         merged.push(step)
       }
     }
@@ -1810,6 +1826,17 @@ function App() {
 
   function traceLabel(step: AgentTraceStep) {
     return [step.phase, step.action, step.toolName || step.route].filter(Boolean).join(' / ')
+  }
+
+  function traceMeta(step: AgentTraceStep) {
+    const items = []
+    if (step.status) {
+      items.push(step.status)
+    }
+    if (typeof step.durationMs === 'number' && step.durationMs >= 0) {
+      items.push(`${step.durationMs} ms`)
+    }
+    return items.join(' · ')
   }
 
   function commandLabel(command?: SlashCommandName) {
@@ -2823,7 +2850,9 @@ function App() {
                             <span>{step.step}</span>
                             <div>
                               <strong>{traceLabel(step)}</strong>
+                              {traceMeta(step) && <small>{traceMeta(step)}</small>}
                               <p>{step.observation}</p>
+                              {step.error && <p className="trace-error">{step.error}</p>}
                             </div>
                           </li>
                         ))}

@@ -11,6 +11,7 @@ import com.example.ragagent.memory.NoopConversationMemoryService;
 import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
+import java.util.ArrayList;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,10 +65,13 @@ public class ChatOrchestrator {
     }
 
     public ChatResponse answer(ChatRequest request, ChatStreamSink streamSink) {
+        long requestStarted = System.nanoTime();
         MemoryContext memory = conversationMemoryService.load(request);
         ChatRequest analysisRequest = withHistory(request, memory.conversationId(), memory.analysisMemory().messages());
-        QueryAnalysisResponse analysis = analyze(analysisRequest);
-        streamSink.trace(new AgentTraceStep(
+        long analysisStarted = System.nanoTime();
+        AnalysisRun analysisRun = analyze(analysisRequest);
+        QueryAnalysisResponse analysis = analysisRun.analysis();
+        AgentTraceStep analysisStep = new AgentTraceStep(
                 0,
                 "query_analysis",
                 analysis.route(),
@@ -75,10 +79,35 @@ public class ChatOrchestrator {
                 "analyze",
                 "intent=" + analysis.intent()
                         + "; requestType=" + analysis.requestType()
-                        + "; executionMode=" + analysis.executionMode()
-        ));
+                        + "; executionMode=" + analysis.executionMode(),
+                analysisRun.status(),
+                durationMs(analysisStarted),
+                analysisRun.error(),
+                "",
+                "",
+                java.util.Map.of()
+        );
+        streamSink.trace(analysisStep);
         ChatRequest executionRequest = withHistory(request, memory.conversationId(), memory.promptMemory().messages());
         ChatResponse response = planExecuteAgent.answer(executionRequest, analysis, streamSink);
+        List<AgentTraceStep> fullTrace = new ArrayList<>();
+        fullTrace.add(analysisStep);
+        fullTrace.addAll(response.agentTrace());
+        AgentTraceStep completeStep = AgentTraceStep.timed(
+                fullTrace.size(),
+                "request",
+                response.route(),
+                response.toolName(),
+                "complete",
+                "finishReason=" + response.finishReason()
+                        + "; llmUsed=" + response.llmUsed()
+                        + "; traceSteps=" + (fullTrace.size() + 1),
+                "ok",
+                durationMs(requestStarted)
+        );
+        fullTrace.add(completeStep);
+        streamSink.trace(completeStep);
+        response = response.withAgentTrace(fullTrace);
         response = withCurrentTrace(response);
         if (tracePersistenceService != null) {
             tracePersistenceService.record(executionRequest, response);
@@ -120,16 +149,21 @@ public class ChatOrchestrator {
         );
     }
 
-    private QueryAnalysisResponse analyze(ChatRequest request) {
+    private AnalysisRun analyze(ChatRequest request) {
         try {
             QueryAnalysisResponse analysis = queryAnalysisClient.analyze(request);
             if (analysis != null) {
-                return analysis;
+                return new AnalysisRun(analysis, "ok", "");
             }
         } catch (Exception exception) {
             log.warn("Query analysis failed, using fallback analysis. message={}", exception.getMessage());
+            return new AnalysisRun(fallbackAnalysis(request), "fallback", exception.getMessage());
         }
 
+        return new AnalysisRun(fallbackAnalysis(request), "fallback", "query analysis returned empty response");
+    }
+
+    private QueryAnalysisResponse fallbackAnalysis(ChatRequest request) {
         return new QueryAnalysisResponse(
                 request.conversationId(),
                 request.knowledgeBaseId(),
@@ -145,5 +179,16 @@ public class ChatOrchestrator {
                 List.of(request.query().trim()),
                 List.of("query_analysis_fallback")
         );
+    }
+
+    private long durationMs(long startedNanos) {
+        return Math.max(0, (System.nanoTime() - startedNanos) / 1_000_000);
+    }
+
+    private record AnalysisRun(QueryAnalysisResponse analysis, String status, String error) {
+        private AnalysisRun {
+            status = status == null || status.isBlank() ? "ok" : status;
+            error = error == null ? "" : error;
+        }
     }
 }

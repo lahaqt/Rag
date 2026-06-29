@@ -78,6 +78,35 @@ public record ChatResponse(
     }
 
     public ChatResponse withTrace(String traceId, String spanId) {
+        List<AgentTraceStep> tracedSteps = agentTrace.stream()
+                .map(step -> step.withTrace(traceId, spanId))
+                .toList();
+        return new ChatResponse(
+                conversationId,
+                answer,
+                intent,
+                confidence,
+                route,
+                originalQuery,
+                rewrittenQuery,
+                retrievalQueries,
+                citations,
+                retrievalHits,
+                llmUsed,
+                finishReason,
+                toolName,
+                webSearchResults,
+                requestType,
+                executionMode,
+                requiredCapabilities,
+                clarificationQuestion,
+                traceId,
+                spanId,
+                tracedSteps
+        );
+    }
+
+    public ChatResponse withAgentTrace(List<AgentTraceStep> agentTrace) {
         return new ChatResponse(
                 conversationId,
                 answer,
