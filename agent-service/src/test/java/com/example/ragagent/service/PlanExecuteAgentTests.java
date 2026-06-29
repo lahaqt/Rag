@@ -41,6 +41,17 @@ class PlanExecuteAgentTests {
         assertThat(response.agentTrace().get(response.agentTrace().size() - 1).observation())
                 .contains("passed=true")
                 .contains("attempts=2");
+        assertThat(response.agentTrace())
+                .anySatisfy(step -> {
+                    assertThat(step.action()).isEqualTo("critique");
+                    assertThat(step.status()).isEqualTo("warn");
+                    assertThat(step.durationMs()).isGreaterThanOrEqualTo(0);
+                })
+                .anySatisfy(step -> {
+                    assertThat(step.action()).isEqualTo("critique_retry_1");
+                    assertThat(step.status()).isEqualTo("ok");
+                    assertThat(step.durationMs()).isGreaterThanOrEqualTo(0);
+                });
     }
 
     private ChatRequest request() {

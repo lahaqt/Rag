@@ -49,7 +49,18 @@ class ChatOrchestratorTests {
         assertThat(storageClient.requests).hasSize(1);
         assertThat(storageClient.requests.get(0).retrievalMode()).isEqualTo("hybrid");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::phase).toList())
-                .contains("plan", "route", "tool", "answer", "reflection");
+                .contains("query_analysis", "plan", "route", "tool", "answer", "reflection", "request");
+        assertThat(response.agentTrace())
+                .anySatisfy(step -> {
+                    assertThat(step.phase()).isEqualTo("query_analysis");
+                    assertThat(step.durationMs()).isGreaterThanOrEqualTo(0);
+                    assertThat(step.status()).isEqualTo("ok");
+                })
+                .anySatisfy(step -> {
+                    assertThat(step.phase()).isEqualTo("request");
+                    assertThat(step.action()).isEqualTo("complete");
+                    assertThat(step.durationMs()).isGreaterThanOrEqualTo(0);
+                });
     }
 
     @Test
@@ -240,6 +251,13 @@ class ChatOrchestratorTests {
         assertThat(response.answer()).contains("Web search tool failed");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
                 .contains("search backend unavailable");
+        assertThat(response.agentTrace())
+                .anySatisfy(step -> {
+                    assertThat(step.toolName()).isEqualTo("web_search");
+                    assertThat(step.action()).isEqualTo("observe");
+                    assertThat(step.status()).isEqualTo("error");
+                    assertThat(step.durationMs()).isGreaterThanOrEqualTo(0);
+                });
     }
 
     private PlanExecuteAgent planExecuteAgent(

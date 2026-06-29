@@ -56,17 +56,20 @@ public class ReActLoop {
     }
 
     public ReActLoopResult run(ChatRequest request, QueryAnalysisResponse analysis, int startStep) {
+        long planStarted = System.nanoTime();
         AgentPlan plan = planner.createInitialPlan(request, analysis);
         List<AgentTraceStep> trace = new ArrayList<>();
         int stepIdx = Math.max(1, startStep);
 
-        trace.add(new AgentTraceStep(
+        trace.add(AgentTraceStep.timed(
                 stepIdx++,
                 "plan",
                 analysis.route(),
                 "",
                 "create_plan",
-                String.join(" -> ", plan.stepLabels())
+                String.join(" -> ", plan.stepLabels()),
+                "ok",
+                durationMs(planStarted)
         ));
 
         ReActState state = ReActState.initial();
@@ -77,104 +80,126 @@ public class ReActLoop {
             // Single-pass rule behaviour — preserve the existing trace shape on
             // the no-LLM path so tests and downstream consumers still see:
             //   route/analyze → route/select_tool → tool/observe
-            trace.add(new AgentTraceStep(
+            trace.add(AgentTraceStep.timed(
                     stepIdx++,
                     "route",
                     analysis.route(),
                     "",
                     "analyze",
-                    "intent=" + analysis.intent() + ", confidence=" + analysis.confidence()
+                    "intent=" + analysis.intent() + ", confidence=" + analysis.confidence(),
+                    "ok",
+                    0
             ));
 
+            long actionStarted = System.nanoTime();
             PlannerAction action = planner.nextAction(request, analysis, plan, state);
+            long actionDurationMs = durationMs(actionStarted);
             if (action instanceof PlannerAction.Continue continueAction) {
                 ToolDecision decision = continueAction.decision();
                 lastDecision = decision;
-                trace.add(new AgentTraceStep(
+                trace.add(AgentTraceStep.timed(
                         stepIdx++,
                         "route",
                         analysis.route(),
                         decision.toolName(),
                         "select_tool",
-                        decision.reason()
+                        decision.reason(),
+                        "ok",
+                        actionDurationMs
                 ));
                 if (decision.useTool()) {
                     AgentTool tool = toolRegistry.resolve(decision);
+                    long toolStarted = System.nanoTime();
                     lastResult = tool.execute(new AgentToolRequest(request, analysis, decision));
                     state = state.withObservation(lastResult);
-                    trace.add(new AgentTraceStep(
+                    trace.add(AgentTraceStep.timed(
                             stepIdx++,
                             "tool",
                             analysis.route(),
                             lastResult.toolName(),
                             "observe",
-                            lastResult.observation()
+                            lastResult.observation(),
+                            lastResult.success() ? "ok" : "error",
+                            durationMs(toolStarted)
                     ));
                 }
             }
         } else {
             List<ToolDecision> history = new ArrayList<>();
             while (shouldContinue(state)) {
+                long actionStarted = System.nanoTime();
                 PlannerAction action = planner.nextAction(request, analysis, plan, state);
+                long actionDurationMs = durationMs(actionStarted);
                 if (action instanceof PlannerAction.End end) {
-                    trace.add(new AgentTraceStep(
+                    trace.add(AgentTraceStep.timed(
                             stepIdx++,
                             "plan",
                             analysis.route(),
                             "",
                             "replan_end",
-                            "end: " + end.reason()
+                            "end: " + end.reason(),
+                            "ok",
+                            actionDurationMs
                     ));
                     break;
                 }
                 if (action instanceof PlannerAction.Replan replan) {
                     plan = replan.newPlan();
-                    trace.add(new AgentTraceStep(
+                    trace.add(AgentTraceStep.timed(
                             stepIdx++,
                             "plan",
                             analysis.route(),
                             "",
                             "replan",
                             "reason=" + replan.reason()
-                                    + "; steps=" + String.join(" -> ", plan.stepLabels())
+                                    + "; steps=" + String.join(" -> ", plan.stepLabels()),
+                            "ok",
+                            actionDurationMs
                     ));
                     continue;
                 }
                 PlannerAction.Continue continueAction = (PlannerAction.Continue) action;
                 ToolDecision decision = continueAction.decision();
                 if (!decision.useTool()) {
-                    trace.add(new AgentTraceStep(
+                    trace.add(AgentTraceStep.timed(
                             stepIdx++,
                             "plan",
                             analysis.route(),
                             "",
                             "replan_end",
-                            "end: planner returned empty tool decision"
+                            "end: planner returned empty tool decision",
+                            "ok",
+                            actionDurationMs
                     ));
                     break;
                 }
                 lastDecision = decision;
                 history.add(decision);
-                trace.add(new AgentTraceStep(
+                trace.add(AgentTraceStep.timed(
                         stepIdx++,
                         "route",
                         analysis.route(),
                         decision.toolName(),
                         "select_tool",
-                        decision.reason()
+                        decision.reason(),
+                        "ok",
+                        actionDurationMs
                 ));
+                long toolStarted = System.nanoTime();
                 try {
                     AgentTool tool = toolRegistry.resolve(decision);
                     lastResult = tool.execute(new AgentToolRequest(request, analysis, decision));
                     state = state.withObservation(lastResult);
                     plan = plan.markFirstPendingDoneForTool(decision.toolName());
-                    trace.add(new AgentTraceStep(
+                    trace.add(AgentTraceStep.timed(
                             stepIdx++,
                             "tool",
                             analysis.route(),
                             lastResult.toolName(),
                             "observe",
-                            lastResult.observation()
+                            lastResult.observation(),
+                            lastResult.success() ? "ok" : "error",
+                            durationMs(toolStarted)
                     ));
                 } catch (Exception exception) {
                     AgentToolResult failure = AgentToolResult.failure(
@@ -186,13 +211,15 @@ public class ReActLoop {
                     state = state.withObservation(failure);
                     lastResult = failure;
                     plan = plan.markFirstPendingDoneForTool(decision.toolName());
-                    trace.add(new AgentTraceStep(
+                    trace.add(AgentTraceStep.failed(
                             stepIdx++,
                             "tool",
                             analysis.route(),
                             decision.toolName(),
                             "observe",
-                            "tool_failed: " + exception.getMessage()
+                            "tool_failed: " + exception.getMessage(),
+                            durationMs(toolStarted),
+                            exception
                     ));
                     // Propagate knowledge-service / retrieval exceptions exactly as the
                     // legacy single-pass loop did so the controller's 502 mapping
@@ -205,13 +232,15 @@ public class ReActLoop {
             if (state.iteration() >= maxIterations) {
                 log.warn("ReActLoop reached maxIterations={} for query='{}'; proceeding with current observations",
                         maxIterations, request.query());
-                trace.add(new AgentTraceStep(
+                trace.add(AgentTraceStep.timed(
                         stepIdx++,
                         "plan",
                         analysis.route(),
                         "",
                         "max_iterations_reached",
-                        "iterations=" + state.iteration()
+                        "iterations=" + state.iteration(),
+                        "warn",
+                        0
                 ));
             }
             if (!history.isEmpty() && !lastDecision.useTool()) {
@@ -231,5 +260,9 @@ public class ReActLoop {
 
     private boolean shouldContinue(ReActState state) {
         return state.iteration() < maxIterations;
+    }
+
+    private long durationMs(long startedNanos) {
+        return Math.max(0, (System.nanoTime() - startedNanos) / 1_000_000);
     }
 }
