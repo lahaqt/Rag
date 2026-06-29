@@ -1,5 +1,6 @@
 package com.example.ragagent.service;
 
+import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.dto.QueryAnalysisResponse;
@@ -59,11 +60,25 @@ public class ChatOrchestrator {
     }
 
     public ChatResponse answer(ChatRequest request) {
+        return answer(request, ChatStreamSink.noop());
+    }
+
+    public ChatResponse answer(ChatRequest request, ChatStreamSink streamSink) {
         MemoryContext memory = conversationMemoryService.load(request);
         ChatRequest analysisRequest = withHistory(request, memory.conversationId(), memory.analysisMemory().messages());
         QueryAnalysisResponse analysis = analyze(analysisRequest);
+        streamSink.trace(new AgentTraceStep(
+                0,
+                "query_analysis",
+                analysis.route(),
+                "",
+                "analyze",
+                "intent=" + analysis.intent()
+                        + "; requestType=" + analysis.requestType()
+                        + "; executionMode=" + analysis.executionMode()
+        ));
         ChatRequest executionRequest = withHistory(request, memory.conversationId(), memory.promptMemory().messages());
-        ChatResponse response = planExecuteAgent.answer(executionRequest, analysis);
+        ChatResponse response = planExecuteAgent.answer(executionRequest, analysis, streamSink);
         response = withCurrentTrace(response);
         if (tracePersistenceService != null) {
             tracePersistenceService.record(executionRequest, response);

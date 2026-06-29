@@ -6,6 +6,7 @@ import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
 import com.example.ragagent.dto.WebSearchResult;
 import java.util.List;
+import java.util.function.Supplier;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -13,6 +14,8 @@ public class AnswerGenerator {
     private final LlmGateway llmGateway;
     private final PromptBuilder promptBuilder;
     private final RagProperties properties;
+    private final ThreadLocal<ChatStreamSink> streamSink = new ThreadLocal<>();
+    private final ThreadLocal<Boolean> streamEmitted = ThreadLocal.withInitial(() -> false);
 
     public AnswerGenerator(LlmGateway llmGateway, PromptBuilder promptBuilder, RagProperties properties) {
         this.llmGateway = llmGateway;
@@ -61,7 +64,7 @@ public class AnswerGenerator {
 
         if (llmGateway.isConfigured()) {
             try {
-                String answer = llmGateway.complete(
+                String answer = complete(
                         promptBuilder.systemPrompt(),
                         promptBuilder.userPrompt(request, analysis, hits, reflectionHint),
                         properties.llm().temperature(),
@@ -80,6 +83,16 @@ public class AnswerGenerator {
         String finishReason = reflectionHint == null || reflectionHint.isBlank()
                 ? "llm_not_configured_retrieval_fallback" : "llm_not_configured_retrieval_fallback_retry";
         return new AnswerDraft(fallbackAnswer(hits, "当前未配置可用的大模型 API Key。"), false, finishReason);
+    }
+
+    public AnswerDraft generate(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            List<RetrievalHit> hits,
+            String reflectionHint,
+            ChatStreamSink streamSink
+    ) {
+        return withStreamSink(streamSink, () -> generate(request, analysis, hits, reflectionHint));
     }
 
     public AnswerDraft generateFromWebSearch(
@@ -104,7 +117,7 @@ public class AnswerGenerator {
 
         if (llmGateway.isConfigured()) {
             try {
-                String answer = llmGateway.complete(
+                String answer = complete(
                         promptBuilder.webSearchSystemPrompt(),
                         promptBuilder.webSearchPrompt(request, analysis, toolDecision, results, reflectionHint),
                         properties.llm().temperature(),
@@ -129,6 +142,17 @@ public class AnswerGenerator {
                         : "web_search_llm_not_configured_fallback_retry");
     }
 
+    public AnswerDraft generateFromWebSearch(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            ToolDecision toolDecision,
+            List<WebSearchResult> results,
+            String reflectionHint,
+            ChatStreamSink streamSink
+    ) {
+        return withStreamSink(streamSink, () -> generateFromWebSearch(request, analysis, toolDecision, results, reflectionHint));
+    }
+
     public AnswerDraft generateFromMcpTool(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult) {
         return generateFromMcpTool(request, analysis, toolResult, "");
     }
@@ -136,7 +160,7 @@ public class AnswerGenerator {
     public AnswerDraft generateFromMcpTool(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult, String reflectionHint) {
         if (llmGateway.isConfigured()) {
             try {
-                String answer = llmGateway.complete(
+                String answer = complete(
                         promptBuilder.toolSystemPrompt(),
                         promptBuilder.mcpToolPrompt(request, analysis, toolResult, reflectionHint),
                         properties.llm().temperature(),
@@ -159,6 +183,49 @@ public class AnswerGenerator {
                 reflectionHint == null || reflectionHint.isBlank()
                         ? "mcp_tool_llm_not_configured_fallback"
                         : "mcp_tool_llm_not_configured_fallback_retry");
+    }
+
+    public AnswerDraft generateFromMcpTool(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            AgentToolResult toolResult,
+            String reflectionHint,
+            ChatStreamSink streamSink
+    ) {
+        return withStreamSink(streamSink, () -> generateFromMcpTool(request, analysis, toolResult, reflectionHint));
+    }
+
+    private String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+        ChatStreamSink sink = streamSink.get();
+        if (sink == null || sink == ChatStreamSink.noop()) {
+            return llmGateway.complete(systemPrompt, userPrompt, temperature, maxTokens);
+        }
+        return llmGateway.stream(systemPrompt, userPrompt, temperature, maxTokens, delta -> {
+            if (delta != null && !delta.isEmpty()) {
+                streamEmitted.set(true);
+                sink.answerDelta(delta);
+            }
+        });
+    }
+
+    private AnswerDraft withStreamSink(ChatStreamSink sink, Supplier<AnswerDraft> supplier) {
+        if (sink == null || sink == ChatStreamSink.noop()) {
+            return supplier.get();
+        }
+        streamSink.set(sink);
+        streamEmitted.set(false);
+        try {
+            AnswerDraft draft = supplier.get();
+            if (!Boolean.TRUE.equals(streamEmitted.get())
+                    && draft.answer() != null
+                    && !draft.answer().isBlank()) {
+                sink.answerDelta(draft.answer());
+            }
+            return draft;
+        } finally {
+            streamSink.remove();
+            streamEmitted.remove();
+        }
     }
 
     private String fallbackAnswer(List<RetrievalHit> hits, String reason) {
