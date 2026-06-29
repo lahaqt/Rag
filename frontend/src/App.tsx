@@ -28,15 +28,18 @@ import {
   SlidersHorizontal,
   Sparkles,
   TerminalSquare,
+  ThumbsDown,
+  ThumbsUp,
   Trash2,
   Upload,
   UserRound,
   Wrench,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FormEvent } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, FormEvent } from 'react'
 import { searchConversations } from './search'
 import type { SearchResult } from './search'
+import { shouldSkipFeedback } from './feedback'
 import './App.css'
 
 export type Message = {
@@ -53,6 +56,11 @@ export type Message = {
   clarificationQuestion?: string
   traceId?: string
   spanId?: string
+  feedbackRating?: FeedbackRating
+  feedbackStatus?: 'submitting' | 'submitted' | 'error'
+  feedbackError?: string
+  feedbackQuestion?: string
+  feedbackKnowledgeBaseId?: string
 }
 
 export type Conversation = {
@@ -72,6 +80,8 @@ type ViewMode = 'chat' | 'search' | 'knowledge' | 'mcp'
 
 type SlashCommandName = 'multi-agent' | 'plan' | 'status' | 'feedback'
 
+type FeedbackRating = 'up' | 'down'
+
 type ParsedSlashCommand = {
   name?: SlashCommandName
   query: string
@@ -81,6 +91,20 @@ type FeedbackEntry = {
   id: number
   conversationId: string
   content: string
+  createdAt: string
+}
+
+type FeedbackRecord = {
+  id: number
+  conversationId: string
+  messageId: number
+  traceId: string
+  rating: FeedbackRating
+  comment: string
+  question: string
+  answer: string
+  knowledgeBaseId: string
+  sourcesJson: string
   createdAt: string
 }
 
@@ -153,6 +177,11 @@ type AgentTraceStep = {
   toolName: string
   action: string
   observation: string
+}
+
+type ChatStreamEvent = {
+  event: string
+  data: unknown
 }
 
 type McpTool = {
@@ -307,6 +336,92 @@ function formatDate(value?: string | null) {
   }).format(new Date(value))
 }
 
+type AnswerBlock =
+  | { kind: 'paragraph'; text: string }
+  | { kind: 'table'; rows: string[][]; aligns: ('left' | 'center' | 'right')[] }
+
+function splitAnswerBlocks(text: string): string[] {
+  return text
+    .split(/\r?\n{1,}/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+}
+
+function cleanAnswerLine(line: string): string {
+  let result = line
+  result = result.replace(/^#{1,6}\s*/, '')
+  result = result.replace(/^\s*[-*+]\s+/, '')
+  result = result.replace(/^\s*(?:\d+)[.、)]\s*/, '')
+  result = result.replace(/\*\*(.+?)\*\*/g, '$1')
+  result = result.replace(/__(.+?)__/g, '$1')
+  result = result.replace(/\*(.+?)\*/g, '$1')
+  result = result.replace(/_(.+?)_/g, '$1')
+  result = result.replace(/`([^`]+)`/g, '$1')
+  result = result.replace(/\s*\[\d+(?:[,，\s\d]+)?\]\s*/g, ' ')
+  result = result.replace(/\s{2,}/g, ' ').trim()
+  return result
+}
+
+function isTableRow(line: string) {
+  return line.startsWith('|') && line.endsWith('|') && line.includes('|', 1)
+}
+
+function isTableSeparator(line: string) {
+  if (!isTableRow(line)) return false
+  const inner = line.slice(1, -1)
+  return inner.split('|').every((cell) => /^:?\s*-{2,}\s*:?$/.test(cell.trim()))
+}
+
+function parseCells(row: string) {
+  return row
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => cleanAnswerLine(cell.trim()))
+}
+
+function parseAligns(separator: string): ('left' | 'center' | 'right')[] {
+  return separator
+    .slice(1, -1)
+    .split('|')
+    .map((cell) => {
+      const trimmed = cell.trim()
+      const left = trimmed.startsWith(':')
+      const right = trimmed.endsWith(':')
+      if (left && right) return 'center' as const
+      if (right) return 'right' as const
+      if (left) return 'left' as const
+      return 'left' as const
+    })
+}
+
+function parseAnswerBlocks(text: string): AnswerBlock[] {
+  const lines = splitAnswerBlocks(text)
+  const blocks: AnswerBlock[] = []
+  let i = 0
+  while (i < lines.length) {
+    if (
+      i + 1 < lines.length
+      && isTableRow(lines[i])
+      && isTableSeparator(lines[i + 1])
+    ) {
+      const header = parseCells(lines[i])
+      const aligns = parseAligns(lines[i + 1])
+      const rows: string[][] = [header]
+      let j = i + 2
+      while (j < lines.length && isTableRow(lines[j])) {
+        rows.push(parseCells(lines[j]))
+        j += 1
+      }
+      blocks.push({ kind: 'table', rows, aligns })
+      i = j
+    } else {
+      blocks.push({ kind: 'paragraph', text: cleanAnswerLine(lines[i]) })
+      i += 1
+    }
+  }
+  return blocks
+}
+
 function mapConversationRecord(record: ConversationRecord): Conversation {
   return {
     id: record.id,
@@ -378,6 +493,14 @@ function App() {
   const [isStreaming, setIsStreaming] = useState(false)
   const nextMessageId = useRef(100)
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
+  const composerUploadInputRef = useRef<HTMLInputElement | null>(null)
+  const [libraryTypeFilter, setLibraryTypeFilter] = useState<'all' | 'image' | 'file'>('all')
+  const [libraryViewMode, setLibraryViewMode] = useState<'list' | 'grid'>('list')
+  const [libraryFilterOpen, setLibraryFilterOpen] = useState(false)
+  const [previewDocument, setPreviewDocument] = useState<KnowledgeDocument | null>(null)
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [previewChunks, setPreviewChunks] = useState<{ id: string; content: string }[]>([])
+  const [previewError, setPreviewError] = useState('')
 
   const activeConversation = useMemo(
     () => conversationList.find((item) => item.id === activeId) ?? conversationList[0] ?? initialConversations[0],
@@ -575,17 +698,19 @@ function App() {
   const onlineMcpCount = mcpServers.filter((server) => server.status === 'online').length
   const filteredKnowledgeDocuments = useMemo(() => {
     const keyword = knowledgeSearch.trim().toLowerCase()
-    if (!keyword) {
-      return knowledgeDocuments
-    }
-
-    return knowledgeDocuments.filter((document) =>
-      [document.fileName, document.contentType, document.status, document.knowledgeBaseId]
+    return knowledgeDocuments.filter((document) => {
+      if (libraryTypeFilter !== 'all') {
+        const isImage = document.contentType.toLowerCase().startsWith('image/')
+        if (libraryTypeFilter === 'image' && !isImage) return false
+        if (libraryTypeFilter === 'file' && isImage) return false
+      }
+      if (!keyword) return true
+      return [document.fileName, document.contentType, document.status, document.knowledgeBaseId]
         .join(' ')
         .toLowerCase()
-        .includes(keyword),
-    )
-  }, [knowledgeDocuments, knowledgeSearch])
+        .includes(keyword)
+    })
+  }, [knowledgeDocuments, knowledgeSearch, libraryTypeFilter])
 
   useEffect(() => {
     let ignore = false
@@ -681,6 +806,186 @@ function App() {
     }
   }, [])
 
+  function updateMessage(conversationId: string, messageId: number, updater: (message: Message) => Message) {
+    setMessagesByConversation((current) => ({
+      ...current,
+      [conversationId]: (current[conversationId] ?? []).map((message) =>
+        message.id === messageId ? updater(message) : message,
+      ),
+    }))
+  }
+
+  function mergeTrace(current: AgentTraceStep[] | undefined, incoming: AgentTraceStep[] | undefined) {
+    const merged = [...(current ?? [])]
+    for (const step of incoming ?? []) {
+      const key = `${step.step}:${step.phase}:${step.action}:${step.observation}`
+      if (!merged.some((item) => `${item.step}:${item.phase}:${item.action}:${item.observation}` === key)) {
+        merged.push(step)
+      }
+    }
+    return merged
+  }
+
+  async function submitMessageFeedback(message: Message, rating: FeedbackRating) {
+    if (shouldSkipFeedback(message, rating)) {
+      return
+    }
+
+    updateMessage(activeId, message.id, (current) => ({
+      ...current,
+      feedbackRating: rating,
+      feedbackStatus: 'submitting',
+      feedbackError: '',
+    }))
+
+    try {
+      const response = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          conversationId: activeId,
+          messageId: message.id,
+          traceId: message.traceId ?? '',
+          rating,
+          comment: '',
+          question: message.feedbackQuestion ?? '',
+          answer: message.content,
+          knowledgeBaseId: message.feedbackKnowledgeBaseId ?? activeKnowledgeBaseId,
+          sourcesJson: JSON.stringify(message.sources ?? []),
+        }),
+      })
+      if (!response.ok) {
+        throw new Error(await apiErrorMessage(response, `POST /api/feedback ${response.status}`))
+      }
+      const record = (await response.json()) as FeedbackRecord
+      updateMessage(activeId, message.id, (current) => ({
+        ...current,
+        feedbackRating: record.rating,
+        feedbackStatus: 'submitted',
+        feedbackError: '',
+      }))
+    } catch (error) {
+      updateMessage(activeId, message.id, (current) => ({
+        ...current,
+        feedbackRating: rating,
+        feedbackStatus: 'error',
+        feedbackError: error instanceof Error ? error.message : '反馈提交失败',
+      }))
+    }
+  }
+
+  async function streamChat(
+    endpoint: string,
+    body: unknown,
+    conversationId: string,
+    assistantMessageId: number,
+  ) {
+    const completedResponses: AgentChatResponse[] = []
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    })
+    if (!response.ok) {
+      throw new Error(`POST ${endpoint} ${response.status}`)
+    }
+
+    await readChatStream(response, ({ event, data }) => {
+      if (event === 'answer_delta' && typeof data === 'object' && data && 'content' in data) {
+        const content = String((data as { content?: unknown }).content ?? '')
+        updateMessage(conversationId, assistantMessageId, (message) => ({
+          ...message,
+          content: message.content + content,
+        }))
+      } else if (event === 'answer_reset') {
+        updateMessage(conversationId, assistantMessageId, (message) => ({
+          ...message,
+          content: '',
+        }))
+      } else if (event === 'trace_delta') {
+        const step = data as AgentTraceStep
+        updateMessage(conversationId, assistantMessageId, (message) => ({
+          ...message,
+          agentTrace: mergeTrace(message.agentTrace, [step]),
+        }))
+      } else if (event === 'metadata' && typeof data === 'object' && data) {
+        const metadata = data as Partial<AgentChatResponse>
+        updateMessage(conversationId, assistantMessageId, (message) => ({
+          ...message,
+          traceId: metadata.traceId,
+          spanId: metadata.spanId,
+          agentTrace: mergeTrace(message.agentTrace, metadata.agentTrace),
+        }))
+      } else if (event === 'done') {
+        completedResponses.push(data as AgentChatResponse)
+      } else if (event === 'error') {
+        const message =
+          typeof data === 'object' && data && 'message' in data
+            ? String((data as { message?: unknown }).message)
+            : 'stream failed'
+        throw new Error(message)
+      }
+    })
+
+    const finalResponse = completedResponses[completedResponses.length - 1]
+    if (!finalResponse) {
+      throw new Error('Chat stream ended without a final response')
+    }
+    return finalResponse
+  }
+
+  async function readChatStream(response: Response, onEvent: (event: ChatStreamEvent) => void) {
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('Streaming response body is empty')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) {
+        break
+      }
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary >= 0) {
+        const rawEvent = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        const parsed = parseSseEvent(rawEvent)
+        if (parsed) {
+          onEvent(parsed)
+        }
+        boundary = buffer.indexOf('\n\n')
+      }
+    }
+  }
+
+  function parseSseEvent(rawEvent: string): ChatStreamEvent | null {
+    let event = 'message'
+    const dataLines: string[] = []
+    for (const line of rawEvent.split('\n')) {
+      if (line.startsWith('event:')) {
+        event = line.slice('event:'.length).trim()
+      } else if (line.startsWith('data:')) {
+        dataLines.push(line.slice('data:'.length).trimStart())
+      }
+    }
+    if (dataLines.length === 0) {
+      return null
+    }
+    const dataText = dataLines.join('\n')
+    try {
+      return { event, data: JSON.parse(dataText) }
+    } catch {
+      return { event, data: dataText }
+    }
+  }
+
   function sendMessage(event?: FormEvent<HTMLFormElement>, preset?: string) {
     event?.preventDefault()
 
@@ -756,13 +1061,23 @@ function App() {
       return
     }
 
+    const streamingAssistantMessage: Message = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      agentMode: isMultiAgent ? 'multi-agent' : 'default',
+      command: commandName,
+      agentTrace: [],
+    }
+    setMessagesByConversation((current) => ({
+      ...current,
+      [activeId]: [...(current[activeId] ?? []), streamingAssistantMessage],
+    }))
+
     setIsStreaming(true)
-    fetch(isMultiAgent ? '/api/chat/multi-agent' : '/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
+    streamChat(
+      isMultiAgent ? '/api/chat/multi-agent/stream' : '/api/chat/stream',
+      {
         query: isPlan ? planQuery(query) : query,
         knowledgeBaseId: activeKnowledgeBaseId || undefined,
         conversationId: String(activeId),
@@ -777,17 +1092,13 @@ function App() {
           queryExpansionCount: 4,
           userId: USER_ID,
         },
-      }),
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          throw new Error(`POST /api/chat ${response.status}`)
-        }
-        return (await response.json()) as AgentChatResponse
-      })
+      },
+      activeId,
+      assistantMessageId,
+    )
       .then((chatResponse) => {
         const serverConversationId = chatResponse.conversationId || activeId
-        nextAssistantMessage = {
+        const finalAssistantMessage: Message = {
           id: assistantMessageId,
           role: 'assistant',
           content: chatResponse.answer,
@@ -800,6 +1111,8 @@ function App() {
           clarificationQuestion: chatResponse.clarificationQuestion,
           traceId: chatResponse.traceId,
           spanId: chatResponse.spanId,
+          feedbackQuestion: query,
+          feedbackKnowledgeBaseId: activeKnowledgeBaseId,
           sources:
             chatResponse.citations.length > 0
               ? chatResponse.citations.map(
@@ -808,6 +1121,7 @@ function App() {
                 )
               : chatResponse.webSearchResults?.map((result) => `${result.title} / ${result.url}`),
         }
+        updateMessage(activeId, assistantMessageId, () => finalAssistantMessage)
         setConversationList((current) =>
           current.map((item) =>
             item.id === activeId || item.id === serverConversationId
@@ -825,19 +1139,16 @@ function App() {
         )
       })
       .catch((error) => {
-        nextAssistantMessage = {
+        const errorAssistantMessage: Message = {
           id: assistantMessageId,
           role: 'assistant',
           content: error instanceof Error ? `Agent 问答失败：${error.message}` : 'Agent 问答失败',
           agentMode: isMultiAgent ? 'multi-agent' : 'default',
           command: commandName,
         }
+        updateMessage(activeId, assistantMessageId, () => errorAssistantMessage)
       })
       .finally(() => {
-        setMessagesByConversation((current) => ({
-          ...current,
-          [activeId]: [...(current[activeId] ?? []), nextAssistantMessage],
-        }))
         setIsStreaming(false)
       })
   }
@@ -928,6 +1239,58 @@ function App() {
     }
 
     return `${(size / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  function isImageDocument(document: KnowledgeDocument) {
+    return document.contentType.toLowerCase().startsWith('image/')
+  }
+
+  async function openDocumentPreview(document: KnowledgeDocument) {
+    if (previewDocument?.id === document.id) {
+      closeDocumentPreview()
+      return
+    }
+    setPreviewDocument(document)
+    setPreviewChunks([])
+    setPreviewError('')
+    setPreviewLoading(true)
+    try {
+      const response = await fetch(
+        `/api/knowledge-bases/${document.knowledgeBaseId}/documents/${document.id}/chunks`,
+      )
+      if (!response.ok) {
+        throw new Error(`GET /chunks ${response.status}`)
+      }
+      const chunks = (await response.json()) as { id: string; content: string }[]
+      setPreviewChunks(chunks)
+    } catch (error) {
+      setPreviewError(error instanceof Error ? error.message : '加载分块失败')
+    } finally {
+      setPreviewLoading(false)
+    }
+  }
+
+  function closeDocumentPreview() {
+    setPreviewDocument(null)
+    setPreviewChunks([])
+    setPreviewError('')
+    setPreviewLoading(false)
+  }
+
+  function handleComposerUploadChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0]
+    if (event.target) {
+      event.target.value = ''
+    }
+    if (!file) return
+    if (file.type.startsWith('image/')) {
+      window.alert(
+        `无法读取图片「${file.name}」：当前模型不支持图片输入。请改用文本或 PDF / Word 等可解析的文档类型。`,
+      )
+      return
+    }
+    setKnowledgeError('')
+    uploadDocument(file)
   }
 
   async function apiErrorMessage(response: Response, fallback: string) {
@@ -1652,21 +2015,52 @@ function App() {
 
             <div className="library-toolbar">
               <div className="library-tabs" aria-label="资料类型">
-                <button className="active" type="button">
+                <button
+                  className={libraryTypeFilter === 'all' ? 'active' : ''}
+                  onClick={() => setLibraryTypeFilter('all')}
+                  type="button"
+                >
                   全部
                 </button>
-                <button type="button">图片</button>
-                <button type="button">文件</button>
+                <button
+                  className={libraryTypeFilter === 'image' ? 'active' : ''}
+                  onClick={() => setLibraryTypeFilter('image')}
+                  type="button"
+                >
+                  图片
+                </button>
+                <button
+                  className={libraryTypeFilter === 'file' ? 'active' : ''}
+                  onClick={() => setLibraryTypeFilter('file')}
+                  type="button"
+                >
+                  文件
+                </button>
               </div>
               <div className="library-view-tools" aria-label="视图设置">
-                <button type="button" title="筛选">
+                <button
+                  className={libraryFilterOpen ? 'active' : ''}
+                  onClick={() => setLibraryFilterOpen((open) => !open)}
+                  title="筛选"
+                  type="button"
+                >
                   <SlidersHorizontal size={17} />
                 </button>
                 <span />
-                <button type="button" title="网格视图">
+                <button
+                  className={libraryViewMode === 'grid' ? 'active' : ''}
+                  onClick={() => setLibraryViewMode('grid')}
+                  title="网格视图"
+                  type="button"
+                >
                   <Grid2X2 size={17} />
                 </button>
-                <button className="active" type="button" title="列表视图">
+                <button
+                  className={libraryViewMode === 'list' ? 'active' : ''}
+                  onClick={() => setLibraryViewMode('list')}
+                  title="列表视图"
+                  type="button"
+                >
                   <List size={18} />
                 </button>
               </div>
@@ -1693,33 +2087,91 @@ function App() {
 
             {filteredKnowledgeDocuments.length > 0 ? (
               <>
-                <div className="document-list">
-                  {filteredKnowledgeDocuments.map((document) => (
-                    <div className="document-row" key={document.id}>
-                      <span className="document-name">
-                        <FileText size={17} />
-                        <span>
-                          <strong>{document.fileName}</strong>
-                          <small>
-                            {document.knowledgeBaseId} · {document.chunkCount} 分块
-                          </small>
-                        </span>
-                      </span>
-                      <span>{formatDate(document.parsedAt || document.uploadedAt)}</span>
-                      <span>{formatSize(document.size)}</span>
-                      <em>{document.status}</em>
+                {libraryViewMode === 'grid' ? (
+                  <div className="document-grid">
+                    {filteredKnowledgeDocuments.map((document) => (
                       <button
-                        className="document-delete-button"
-                        disabled={deletingDocumentId === document.id}
-                        onClick={() => deleteDocument(document)}
+                        className={`document-card${previewDocument?.id === document.id ? ' selected' : ''}`}
+                        key={document.id}
+                        onClick={() => openDocumentPreview(document)}
                         type="button"
                       >
-                        <Trash2 size={15} />
-                        {deletingDocumentId === document.id ? '删除中' : '删除'}
+                        <span className="document-card-icon">
+                          {isImageDocument(document) ? '🖼️' : <FileText size={22} />}
+                        </span>
+                        <span className="document-card-meta">
+                          <strong>{document.fileName}</strong>
+                          <small>
+                            {formatSize(document.size)} · {document.chunkCount} 分块 · {document.status}
+                          </small>
+                        </span>
                       </button>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="document-list">
+                    {filteredKnowledgeDocuments.map((document) => (
+                      <Fragment key={document.id}>
+                        <div
+                          className={`document-row${previewDocument?.id === document.id ? ' selected' : ''}`}
+                          onClick={() => openDocumentPreview(document)}
+                          role="button"
+                          tabIndex={0}
+                        >
+                          <span className="document-name">
+                            {isImageDocument(document) ? '🖼️' : <FileText size={17} />}
+                            <span>
+                              <strong>{document.fileName}</strong>
+                              <small>
+                                {document.knowledgeBaseId} · {document.chunkCount} 分块
+                              </small>
+                            </span>
+                          </span>
+                          <span>{formatDate(document.parsedAt || document.uploadedAt)}</span>
+                          <span>{formatSize(document.size)}</span>
+                          <em>{document.status}</em>
+                          <button
+                            className="document-delete-button"
+                            disabled={deletingDocumentId === document.id}
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              deleteDocument(document)
+                            }}
+                            type="button"
+                          >
+                            <Trash2 size={15} />
+                            {deletingDocumentId === document.id ? '删除中' : '删除'}
+                          </button>
+                        </div>
+                        {previewDocument?.id === document.id && (
+                          <div className="document-preview">
+                            <div className="document-preview-head">
+                              <strong>{previewDocument.fileName} · 分块预览</strong>
+                              <button onClick={closeDocumentPreview} type="button">
+                                收起
+                              </button>
+                            </div>
+                            {previewLoading && <p className="document-preview-empty">加载中…</p>}
+                            {previewError && <p className="document-preview-error">{previewError}</p>}
+                            {!previewLoading && !previewError && previewChunks.length === 0 && (
+                              <p className="document-preview-empty">该文档暂无可预览的分块。</p>
+                            )}
+                            {previewChunks.length > 0 && (
+                              <ol className="document-preview-chunks">
+                                {previewChunks.map((chunk, index) => (
+                                  <li key={chunk.id}>
+                                    <span>#{index + 1}</span>
+                                    <p>{chunk.content}</p>
+                                  </li>
+                                ))}
+                              </ol>
+                            )}
+                          </div>
+                        )}
+                      </Fragment>
+                    ))}
+                  </div>
+                )}
                 <button
                   className="inline-upload-button"
                   disabled={knowledgeLoading || !uploadKnowledgeBaseId}
@@ -2268,8 +2720,49 @@ function App() {
                       {commandLabel(message.command)}
                     </div>
                   )}
-                  <div className="bubble">
-                    <p>{message.content}</p>
+                  <div className={`bubble ${message.role === 'assistant' && !message.content ? 'typing' : ''}`}>
+                    {message.role === 'assistant' && !message.content ? (
+                      <>
+                        <span />
+                        <span />
+                        <span />
+                      </>
+) : message.role === 'assistant' ? (
+                      <div className="answer-body">
+                        {parseAnswerBlocks(message.content).map((block, index) => {
+                          if (block.kind === 'table') {
+                            const [header, ...body] = block.rows
+                            return (
+                              <table className="answer-table" key={index}>
+                                <thead>
+                                  <tr>
+                                    {header.map((cell, c) => (
+                                      <th key={c} style={{ textAlign: block.aligns[c] ?? 'left' }}>
+                                        {cell}
+                                      </th>
+                                    ))}
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {body.map((row, r) => (
+                                    <tr key={r}>
+                                      {row.map((cell, c) => (
+                                        <td key={c} style={{ textAlign: block.aligns[c] ?? 'left' }}>
+                                          {cell}
+                                        </td>
+                                      ))}
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )
+                          }
+                          return <p key={index}>{block.text}</p>
+                        })}
+                      </div>
+                    ) : (
+                      <p>{message.content}</p>
+                    )}
                   </div>
                   {message.role === 'assistant' && (
                     <div className="message-tools">
@@ -2281,6 +2774,28 @@ function App() {
                         <BookOpen size={14} />
                         展开引用
                       </button>
+                      <button
+                        className={message.feedbackRating === 'up' ? 'active' : ''}
+                        disabled={message.feedbackStatus === 'submitting' || !message.content}
+                        onClick={() => submitMessageFeedback(message, 'up')}
+                        title="回答有帮助"
+                        type="button"
+                      >
+                        <ThumbsUp size={14} />
+                        好
+                      </button>
+                      <button
+                        className={message.feedbackRating === 'down' ? 'active danger' : ''}
+                        disabled={message.feedbackStatus === 'submitting' || !message.content}
+                        onClick={() => submitMessageFeedback(message, 'down')}
+                        title="回答没有帮助"
+                        type="button"
+                      >
+                        <ThumbsDown size={14} />
+                        坏
+                      </button>
+                      {message.feedbackStatus === 'submitted' && <span>已记录</span>}
+                      {message.feedbackStatus === 'error' && <span className="feedback-error">{message.feedbackError}</span>}
                     </div>
                   )}
                   {message.sources && (
@@ -2293,7 +2808,7 @@ function App() {
                       ))}
                     </div>
                   )}
-                  {message.role === 'assistant' && message.agentMode === 'multi-agent' && message.agentTrace && (
+                  {message.role === 'assistant' && message.agentTrace && message.agentTrace.length > 0 && (
                     <details className="agent-trace-panel">
                       <summary>
                         <span>
@@ -2318,20 +2833,6 @@ function App() {
                 </div>
               </article>
             ))}
-            {isStreaming && (
-              <article className="message assistant">
-                <div className="avatar">
-                  <Sparkles size={17} />
-                </div>
-                <div className="message-body">
-                  <div className="bubble typing">
-                    <span />
-                    <span />
-                    <span />
-                  </div>
-                </div>
-              </article>
-            )}
           </div>
         </div>
 
@@ -2378,9 +2879,21 @@ function App() {
             />
             <div className="composer-toolbar">
               <div className="composer-tools">
-                <button className="icon-button" title="上传文件" type="button">
+                <button
+                  className="icon-button"
+                  onClick={() => composerUploadInputRef.current?.click()}
+                  title="上传文件"
+                  type="button"
+                >
                   <Paperclip size={17} />
                 </button>
+                <input
+                  accept="*"
+                  hidden
+                  onChange={handleComposerUploadChange}
+                  ref={composerUploadInputRef}
+                  type="file"
+                />
               </div>
               <button className="send-button" disabled={!draft.trim() || isStreaming} type="submit" title="发送">
                 <ArrowUp size={18} />
