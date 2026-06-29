@@ -1,6 +1,7 @@
 package com.example.ragagent.vector;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.observability.TracePropagationInterceptor;
 import java.util.List;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
@@ -14,13 +15,20 @@ public class OpenAiEmbeddingClient implements EmbeddingClient {
     private final String apiKey;
     private final String model;
 
-    public OpenAiEmbeddingClient(RagProperties properties) {
+    public OpenAiEmbeddingClient(
+            RagProperties properties,
+            RestClient.Builder restClientBuilder,
+            TracePropagationInterceptor tracePropagationInterceptor
+    ) {
         RagProperties.Embedding embedding = properties.vector().embedding();
         if (embedding.apiKey().isBlank()) {
             throw new IllegalStateException("rag.vector.embedding.api-key is required when provider is openai.");
         }
         String baseUrl = embedding.baseUrl().isBlank() ? "https://api.openai.com/v1" : embedding.baseUrl();
-        this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+        this.restClient = restClientBuilder.clone()
+                .baseUrl(baseUrl)
+                .requestInterceptor(tracePropagationInterceptor)
+                .build();
         this.apiKey = embedding.apiKey();
         this.model = embedding.model();
     }

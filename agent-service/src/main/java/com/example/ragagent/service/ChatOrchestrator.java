@@ -7,6 +7,9 @@ import com.example.ragagent.history.ConversationHistoryService;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.MemoryContext;
 import com.example.ragagent.memory.NoopConversationMemoryService;
+import com.example.ragagent.observability.AgentTracePersistenceService;
+import com.example.ragagent.observability.TraceContextProvider;
+import com.example.ragagent.observability.TraceContextSnapshot;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,9 +24,11 @@ public class ChatOrchestrator {
     private final PlanExecuteAgent planExecuteAgent;
     private final ConversationMemoryService conversationMemoryService;
     private final ConversationHistoryService conversationHistoryService;
+    private final TraceContextProvider traceContextProvider;
+    private final AgentTracePersistenceService tracePersistenceService;
 
     public ChatOrchestrator(QueryAnalysisClient queryAnalysisClient, PlanExecuteAgent planExecuteAgent) {
-        this(queryAnalysisClient, planExecuteAgent, new NoopConversationMemoryService(), null);
+        this(queryAnalysisClient, planExecuteAgent, new NoopConversationMemoryService(), null, null, null);
     }
 
     public ChatOrchestrator(
@@ -31,7 +36,7 @@ public class ChatOrchestrator {
             PlanExecuteAgent planExecuteAgent,
             ConversationMemoryService conversationMemoryService
     ) {
-        this(queryAnalysisClient, planExecuteAgent, conversationMemoryService, null);
+        this(queryAnalysisClient, planExecuteAgent, conversationMemoryService, null, null, null);
     }
 
     @Autowired
@@ -39,7 +44,9 @@ public class ChatOrchestrator {
             QueryAnalysisClient queryAnalysisClient,
             PlanExecuteAgent planExecuteAgent,
             ConversationMemoryService conversationMemoryService,
-            ConversationHistoryService conversationHistoryService
+            ConversationHistoryService conversationHistoryService,
+            TraceContextProvider traceContextProvider,
+            AgentTracePersistenceService tracePersistenceService
     ) {
         this.queryAnalysisClient = queryAnalysisClient;
         this.planExecuteAgent = planExecuteAgent;
@@ -47,6 +54,8 @@ public class ChatOrchestrator {
                 ? new NoopConversationMemoryService()
                 : conversationMemoryService;
         this.conversationHistoryService = conversationHistoryService;
+        this.traceContextProvider = traceContextProvider;
+        this.tracePersistenceService = tracePersistenceService;
     }
 
     public ChatResponse answer(ChatRequest request) {
@@ -55,6 +64,10 @@ public class ChatOrchestrator {
         QueryAnalysisResponse analysis = analyze(analysisRequest);
         ChatRequest executionRequest = withHistory(request, memory.conversationId(), memory.promptMemory().messages());
         ChatResponse response = planExecuteAgent.answer(executionRequest, analysis);
+        response = withCurrentTrace(response);
+        if (tracePersistenceService != null) {
+            tracePersistenceService.record(executionRequest, response);
+        }
         conversationMemoryService.recordTurn(analysisRequest, analysis, response);
         if (conversationHistoryService != null) {
             conversationHistoryService.recordTurn(analysisRequest, response);
@@ -72,6 +85,14 @@ public class ChatOrchestrator {
                 memory.summaryVersion()
         );
         return response;
+    }
+
+    private ChatResponse withCurrentTrace(ChatResponse response) {
+        if (traceContextProvider == null) {
+            return response;
+        }
+        TraceContextSnapshot context = traceContextProvider.current();
+        return context.available() ? response.withTrace(context.traceId(), context.spanId()) : response;
     }
 
     private ChatRequest withHistory(ChatRequest request, String conversationId, List<com.example.ragagent.dto.ChatMessage> history) {

@@ -27,6 +27,11 @@ public class ToolRegistry {
     }
 
     public ToolDecision decide(ChatRequest request, QueryAnalysisResponse analysis) {
+        ToolDecision capabilityDecision = decideByCapabilities(request, analysis);
+        if (capabilityDecision.useTool()) {
+            return capabilityDecision;
+        }
+
         ToolDecision routedDecision = toolRouter.decide(request, analysis);
         if (isToolRoute(analysis)) {
             ToolDecision mcpDecision = decideMcp(request);
@@ -56,6 +61,24 @@ public class ToolRegistry {
             return false;
         }
         return "knowledge".equals(analysis.intent()) || "knowledge_retrieval".equals(analysis.route());
+    }
+
+    private ToolDecision decideByCapabilities(ChatRequest request, QueryAnalysisResponse analysis) {
+        if (analysis.requiresCapability("mcp_tool")) {
+            ToolDecision mcpDecision = decideMcp(request);
+            if (mcpDecision.useTool()) {
+                return mcpDecision;
+            }
+        }
+        if (analysis.requiresCapability("web_search") && tools.containsKey("web_search")) {
+            return ToolDecision.webSearch(primaryQuery(request, analysis), "intent_tree_requires_web_search");
+        }
+        if (analysis.requiresCapability("rag_retrieval")
+                && shouldRetrieve(request, analysis)
+                && tools.containsKey("rag_retrieval")) {
+            return ToolDecision.ragRetrieval(primaryQuery(request, analysis), "intent_tree_requires_rag_retrieval");
+        }
+        return ToolDecision.none();
     }
 
     private boolean isToolRoute(QueryAnalysisResponse analysis) {

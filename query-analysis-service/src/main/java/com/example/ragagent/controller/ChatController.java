@@ -54,6 +54,12 @@ public class ChatController {
                 analysis.rewritten(),
                 analysis.historyLength(),
                 analysis.retrievalQueries(),
+                analysis.requestType(),
+                analysis.executionMode(),
+                analysis.requiredCapabilities(),
+                analysis.clarificationQuestion(),
+                analysis.slots(),
+                analysis.systemCommand(),
                 analysis.reasons()
         );
     }

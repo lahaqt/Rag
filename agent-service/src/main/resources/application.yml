@@ -16,6 +16,14 @@ spring:
       host: localhost
       port: 26380
 
+management:
+  tracing:
+    sampling:
+      probability: ${OTEL_TRACES_SAMPLER_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+
 rag:
   downstream:
     query-rewrite-base-url: http://127.0.0.1:28082

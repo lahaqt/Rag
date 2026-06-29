@@ -116,6 +116,35 @@ class ConversationMemoryServiceTests {
                 .contains("preference");
     }
 
+    @Test
+    void isolatesShortTermMemoryByUserAndConversationId() {
+        RagProperties properties = new RagProperties(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new RagProperties.Memory("in-memory", true, 4, 12, 1200, 16, 86400L, "window", 4, true)
+        );
+        InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(properties);
+
+        ChatRequest userOneRequest = userRequest("question from user one", "user-1");
+        memoryService.recordTurn(userOneRequest, analysis(userOneRequest), response("answer for user one"));
+
+        MemoryContext userOneContext = memoryService.load(userRequest("follow up", "user-1"));
+        MemoryContext userTwoContext = memoryService.load(userRequest("follow up", "user-2"));
+
+        assertThat(userOneContext.conversationId()).isEqualTo("session-1");
+        assertThat(userOneContext.recentMessages())
+                .extracting(ChatMessage::content)
+                .contains("question from user one", "answer for user one");
+        assertThat(userTwoContext.conversationId()).isEqualTo("session-1");
+        assertThat(userTwoContext.recentMessages()).isEmpty();
+    }
+
     private ChatRequest request(String query) {
         return new ChatRequest(query, "kb-1", "session-1", List.of(), null);
     }

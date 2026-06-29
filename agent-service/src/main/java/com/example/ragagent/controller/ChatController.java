@@ -77,6 +77,8 @@ public class ChatController {
                         "rewrittenQuery", response.rewrittenQuery(),
                         "toolName", response.toolName(),
                         "finishReason", response.finishReason(),
+                        "traceId", response.traceId(),
+                        "spanId", response.spanId(),
                         "agentTrace", response.agentTrace()
                 )));
         for (String chunk : chunks(response.answer(), 64)) {

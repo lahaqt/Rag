@@ -18,6 +18,9 @@ import com.example.ragagent.history.ConversationHistoryService;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.MemoryContext;
 import com.example.ragagent.memory.NoopConversationMemoryService;
+import com.example.ragagent.observability.AgentTracePersistenceService;
+import com.example.ragagent.observability.TraceContextProvider;
+import com.example.ragagent.observability.TraceContextSnapshot;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -42,6 +45,8 @@ public class MultiAgentOrchestrator {
     private final AnswerCriticAgent answerCriticAgent;
     private final ConversationMemoryService conversationMemoryService;
     private final ConversationHistoryService conversationHistoryService;
+    private final TraceContextProvider traceContextProvider;
+    private final AgentTracePersistenceService tracePersistenceService;
     private final Map<String, SpecialistAgent> specialistAgents;
 
     @Autowired
@@ -53,7 +58,9 @@ public class MultiAgentOrchestrator {
             List<SpecialistAgent> specialistAgents,
             AnswerGenerator answerGenerator,
             AnswerCriticAgent answerCriticAgent,
-            ConversationHistoryService conversationHistoryService
+            ConversationHistoryService conversationHistoryService,
+            TraceContextProvider traceContextProvider,
+            AgentTracePersistenceService tracePersistenceService
     ) {
         this(queryAnalysisClient,
                 supervisorAgent,
@@ -63,7 +70,9 @@ public class MultiAgentOrchestrator {
                 answerGenerator,
                 answerCriticAgent,
                 new NoopConversationMemoryService(),
-                conversationHistoryService);
+                conversationHistoryService,
+                traceContextProvider,
+                tracePersistenceService);
     }
 
     public MultiAgentOrchestrator(
@@ -83,6 +92,8 @@ public class MultiAgentOrchestrator {
                 answerGenerator,
                 answerCriticAgent,
                 new NoopConversationMemoryService(),
+                null,
+                null,
                 null);
     }
 
@@ -104,6 +115,8 @@ public class MultiAgentOrchestrator {
                 answerGenerator,
                 answerCriticAgent,
                 conversationMemoryService,
+                null,
+                null,
                 null);
     }
 
@@ -116,7 +129,9 @@ public class MultiAgentOrchestrator {
             AnswerGenerator answerGenerator,
             AnswerCriticAgent answerCriticAgent,
             ConversationMemoryService conversationMemoryService,
-            ConversationHistoryService conversationHistoryService
+            ConversationHistoryService conversationHistoryService,
+            TraceContextProvider traceContextProvider,
+            AgentTracePersistenceService tracePersistenceService
     ) {
         this.queryAnalysisClient = queryAnalysisClient;
         this.supervisorAgent = supervisorAgent;
@@ -128,6 +143,8 @@ public class MultiAgentOrchestrator {
                 ? new NoopConversationMemoryService()
                 : conversationMemoryService;
         this.conversationHistoryService = conversationHistoryService;
+        this.traceContextProvider = traceContextProvider;
+        this.tracePersistenceService = tracePersistenceService;
         this.specialistAgents = new LinkedHashMap<>();
         for (SpecialistAgent agent : specialistAgents) {
             this.specialistAgents.put(agent.name(), agent);
@@ -136,7 +153,7 @@ public class MultiAgentOrchestrator {
 
     public ChatResponse answer(ChatRequest rawRequest) {
         MultiAgentRun run = run(rawRequest);
-        ChatResponse response = response(run.request(), run.analysis(), run.agentResult(), run.draft(), run.trace());
+        ChatResponse response = run.response();
         log.info(
                 "Multi-agent answer conversation={} intent={} route={} specialist={} tool={} llmUsed={} finishReason={} traceSteps={}",
                 run.request().conversationId(),
@@ -153,7 +170,7 @@ public class MultiAgentOrchestrator {
 
     public A2aTask answerTask(ChatRequest rawRequest) {
         MultiAgentRun run = run(rawRequest);
-        ChatResponse response = response(run.request(), run.analysis(), run.agentResult(), run.draft(), run.trace());
+        ChatResponse response = run.response();
         A2aTask specialistTask = run.agentResult().a2aTask();
         String taskId = specialistTask == null || isBlank(specialistTask.id())
                 ? "task-rag_multi_agent-" + UUID.randomUUID()
@@ -248,13 +265,24 @@ public class MultiAgentOrchestrator {
         ));
         trace.add(answerCriticAgent.review(trace.size() + 1, request, analysis, agentResult, draft));
 
-        ChatResponse response = response(request, analysis, agentResult, draft, trace);
+        ChatResponse response = withCurrentTrace(response(request, analysis, agentResult, draft, trace));
+        if (tracePersistenceService != null) {
+            tracePersistenceService.record(request, response);
+        }
         conversationMemoryService.recordTurn(analysisRequest, analysis, response);
         if (conversationHistoryService != null) {
             conversationHistoryService.recordTurn(analysisRequest, response);
         }
 
-        return new MultiAgentRun(request, analysis, agentResult, draft, trace);
+        return new MultiAgentRun(request, analysis, agentResult, draft, trace, response);
+    }
+
+    private ChatResponse withCurrentTrace(ChatResponse response) {
+        if (traceContextProvider == null) {
+            return response;
+        }
+        TraceContextSnapshot context = traceContextProvider.current();
+        return context.available() ? response.withTrace(context.traceId(), context.spanId()) : response;
     }
 
     private ChatRequest withHistory(ChatRequest request, String conversationId, List<com.example.ragagent.dto.ChatMessage> history) {
@@ -323,6 +351,9 @@ public class MultiAgentOrchestrator {
                         A2aPart.data(Map.of(
                                 "intent", safe(analysis.intent()),
                                 "route", safe(analysis.route()),
+                                "requestType", safe(analysis.requestType()),
+                                "executionMode", safe(analysis.executionMode()),
+                                "requiredCapabilities", analysis.safeRequiredCapabilities(),
                                 "rewrittenQuery", analysis.rewrittenQuery() == null ? "" : analysis.rewrittenQuery(),
                                 "retrievalQueries", analysis.safeRetrievalQueries()
                         ))
@@ -386,6 +417,12 @@ public class MultiAgentOrchestrator {
                 draft.finishReason(),
                 toolName,
                 agentResult.webSearchResults(),
+                analysis.requestType(),
+                analysis.executionMode(),
+                analysis.safeRequiredCapabilities(),
+                analysis.clarificationQuestion(),
+                "",
+                "",
                 trace
         );
     }
@@ -414,7 +451,8 @@ public class MultiAgentOrchestrator {
             QueryAnalysisResponse analysis,
             SpecialistAgentResult agentResult,
             AnswerDraft draft,
-            List<AgentTraceStep> trace
+            List<AgentTraceStep> trace,
+            ChatResponse response
     ) {
     }
 }
