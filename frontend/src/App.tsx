@@ -265,6 +265,86 @@ type ConversationMessageRecord = {
 }
 
 const USER_ID = 'local-user'
+const DEFAULT_CONVERSATION_TITLE = 'New conversation'
+const MAX_CONVERSATION_TITLE_LENGTH = 44
+const TITLE_LEADING_FILLERS = [
+  '\u8bf7\u5e2e\u6211',
+  '\u8bf7\u4f60\u5e2e\u6211',
+  '\u5e2e\u6211',
+  '\u5e2e\u5fd9',
+  '\u8bf7\u95ee',
+  '\u8bf7',
+  '\u80fd\u4e0d\u80fd',
+  '\u53ef\u4ee5\u5e2e\u6211',
+  '\u53ef\u4ee5',
+  '\u5982\u4f55',
+  '\u600e\u4e48',
+  '\u600e\u6837',
+  'please help me',
+  'help me',
+  'please',
+  'can you',
+  'could you',
+  'how to',
+  'how do i',
+]
+
+function stripTitleTrailingPunctuation(value: string) {
+  return value.trim().replace(/[\s\uFF0C\u3002\uFF01\uFF1F\u3001\uFF1B\uFF1A,.!?;:]+$/g, '')
+}
+
+function conversationTitleFromQuery(value: string) {
+  let title = value
+    .trim()
+    .replace(/^\/(multi-agent|plan|feedback)\s+/i, '')
+    .replace(/[`*_#>\[\]{}]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+  if (!title) {
+    return DEFAULT_CONVERSATION_TITLE
+  }
+
+  const lowerTitle = title.toLowerCase()
+  const filler = TITLE_LEADING_FILLERS.find((item) => lowerTitle.startsWith(item))
+  if (filler) {
+    title = title.slice(filler.length).trim()
+  }
+
+  title = stripTitleTrailingPunctuation(title)
+  const firstSegment = stripTitleTrailingPunctuation(title.split(/[\u3002\uFF01\uFF1F!?;\uFF1B\n]|[\uFF0C,\u3001\uFF1A:]/)[0]?.trim() ?? '')
+  if (firstSegment.length >= 8 || title.length > MAX_CONVERSATION_TITLE_LENGTH) {
+    title = firstSegment
+  }
+
+  title = stripTitleTrailingPunctuation(title)
+  if (!title) {
+    return DEFAULT_CONVERSATION_TITLE
+  }
+  if (title.length <= MAX_CONVERSATION_TITLE_LENGTH) {
+    return title
+  }
+  let prefix = title.slice(0, MAX_CONVERSATION_TITLE_LENGTH - 3)
+  if (endsInsideAsciiToken(title, MAX_CONVERSATION_TITLE_LENGTH - 3)) {
+    const boundary = Math.max(prefix.lastIndexOf(' '), prefix.lastIndexOf('/'), prefix.lastIndexOf(':'))
+    if (boundary >= 8) {
+      prefix = prefix.slice(0, boundary)
+    }
+  }
+  return `${stripTitleTrailingPunctuation(prefix)}...`
+}
+
+function endsInsideAsciiToken(value: string, endExclusive: number) {
+  if (endExclusive <= 0 || endExclusive >= value.length) {
+    return false
+  }
+  return isAsciiTokenChar(value[endExclusive - 1]) && isAsciiTokenChar(value[endExclusive])
+}
+
+function isAsciiTokenChar(value: string) {
+  return /^[A-Za-z0-9_.-]$/.test(value)
+}
+
 
 const initialConversations: Conversation[] = [
   {
@@ -431,7 +511,7 @@ function parseAnswerBlocks(text: string): AnswerBlock[] {
 function mapConversationRecord(record: ConversationRecord): Conversation {
   return {
     id: record.id,
-    title: record.title || 'New conversation',
+    title: record.title || DEFAULT_CONVERSATION_TITLE,
     summary: record.summary || `${record.messageCount} messages`,
     time: formatDate(record.lastMessageAt || record.updatedAt),
     messages: [],
@@ -629,7 +709,7 @@ function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           userId: USER_ID,
-          title: 'New conversation',
+          title: DEFAULT_CONVERSATION_TITLE,
           knowledgeBaseId: activeKnowledgeBaseId,
         }),
       })
@@ -1144,7 +1224,10 @@ function App() {
               ? {
                   ...item,
                   id: serverConversationId,
-                  title: item.title === 'New conversation' ? query.slice(0, 60) : item.title,
+                  title:
+                    item.title === DEFAULT_CONVERSATION_TITLE
+                      ? conversationTitleFromQuery(query)
+                      : item.title,
                   summary: chatResponse.answer.slice(0, 140),
                   time: '刚刚',
                   knowledgeBaseId: activeKnowledgeBaseId || item.knowledgeBaseId,
