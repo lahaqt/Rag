@@ -2,10 +2,12 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
+import com.example.ragagent.service.ChatStreamSink;
 import com.example.ragagent.service.ChatOrchestrator;
 import com.example.ragagent.service.MultiAgentOrchestrator;
 import jakarta.validation.Valid;
 import java.io.IOException;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import org.springframework.http.MediaType;
@@ -47,7 +49,9 @@ public class ChatController {
         SseEmitter emitter = new SseEmitter(0L);
         chatExecutor.execute(() -> {
             try {
-                sendResponse(emitter, chatOrchestrator.answer(request));
+                SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
+                ChatResponse response = chatOrchestrator.answer(request, streamSink);
+                sendResponse(emitter, response, streamSink);
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
             }
@@ -60,7 +64,9 @@ public class ChatController {
         SseEmitter emitter = new SseEmitter(0L);
         chatExecutor.execute(() -> {
             try {
-                sendResponse(emitter, multiAgentOrchestrator.answer(request));
+                SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
+                ChatResponse response = multiAgentOrchestrator.answer(request, streamSink);
+                sendResponse(emitter, response, streamSink);
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
             }
@@ -68,21 +74,14 @@ public class ChatController {
         return emitter;
     }
 
-    private void sendResponse(SseEmitter emitter, ChatResponse response) throws IOException {
+    private void sendResponse(SseEmitter emitter, ChatResponse response, SseChatStreamSink streamSink) throws IOException {
         emitter.send(SseEmitter.event()
                 .name("metadata")
-                .data(Map.of(
-                        "intent", response.intent(),
-                        "route", response.route(),
-                        "rewrittenQuery", response.rewrittenQuery(),
-                        "toolName", response.toolName(),
-                        "finishReason", response.finishReason(),
-                        "traceId", response.traceId(),
-                        "spanId", response.spanId(),
-                        "agentTrace", response.agentTrace()
-                )));
-        for (String chunk : chunks(response.answer(), 64)) {
-            emitter.send(SseEmitter.event().name("delta").data(Map.of("content", chunk)));
+                .data(metadata(response)));
+        if (!streamSink.answerEmitted()) {
+            for (String chunk : chunks(response.answer(), 64)) {
+                emitter.send(SseEmitter.event().name("answer_delta").data(Map.of("content", chunk)));
+            }
         }
         emitter.send(SseEmitter.event().name("citations").data(response.citations()));
         emitter.send(SseEmitter.event().name("done").data(response));
@@ -93,7 +92,7 @@ public class ChatController {
         try {
             emitter.send(SseEmitter.event()
                     .name("error")
-                    .data(Map.of("message", exception.getMessage())));
+                    .data(Map.of("message", exception.getMessage() == null ? "stream failed" : exception.getMessage())));
         } catch (IOException ignored) {
             // The client may already have disconnected.
         }
@@ -117,5 +116,64 @@ public class ChatController {
                 return chunk;
             }
         };
+    }
+
+    private Map<String, Object> metadata(ChatResponse response) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("conversationId", response.conversationId());
+        data.put("intent", response.intent());
+        data.put("route", response.route());
+        data.put("rewrittenQuery", response.rewrittenQuery());
+        data.put("toolName", response.toolName());
+        data.put("finishReason", response.finishReason());
+        data.put("traceId", response.traceId());
+        data.put("spanId", response.spanId());
+        data.put("agentTrace", response.agentTrace());
+        return data;
+    }
+
+    private static class SseChatStreamSink implements ChatStreamSink {
+        private final SseEmitter emitter;
+        private boolean answerEmitted;
+
+        private SseChatStreamSink(SseEmitter emitter) {
+            this.emitter = emitter;
+        }
+
+        @Override
+        public synchronized void trace(com.example.ragagent.dto.AgentTraceStep step) {
+            try {
+                emitter.send(SseEmitter.event().name("trace_delta").data(step));
+            } catch (IOException exception) {
+                throw new IllegalStateException("Failed to send trace stream event.", exception);
+            }
+        }
+
+        @Override
+        public synchronized void answerDelta(String content) {
+            if (content == null || content.isEmpty()) {
+                return;
+            }
+            answerEmitted = true;
+            try {
+                emitter.send(SseEmitter.event().name("answer_delta").data(Map.of("content", content)));
+            } catch (IOException exception) {
+                throw new IllegalStateException("Failed to send answer stream event.", exception);
+            }
+        }
+
+        @Override
+        public synchronized void answerReset(String reason) {
+            answerEmitted = false;
+            try {
+                emitter.send(SseEmitter.event().name("answer_reset").data(Map.of("reason", reason)));
+            } catch (IOException exception) {
+                throw new IllegalStateException("Failed to send answer reset stream event.", exception);
+            }
+        }
+
+        private boolean answerEmitted() {
+            return answerEmitted;
+        }
     }
 }

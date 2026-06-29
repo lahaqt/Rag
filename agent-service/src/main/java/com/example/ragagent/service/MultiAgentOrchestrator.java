@@ -152,7 +152,11 @@ public class MultiAgentOrchestrator {
     }
 
     public ChatResponse answer(ChatRequest rawRequest) {
-        MultiAgentRun run = run(rawRequest);
+        return answer(rawRequest, ChatStreamSink.noop());
+    }
+
+    public ChatResponse answer(ChatRequest rawRequest, ChatStreamSink streamSink) {
+        MultiAgentRun run = run(rawRequest, streamSink);
         ChatResponse response = run.response();
         log.info(
                 "Multi-agent answer conversation={} intent={} route={} specialist={} tool={} llmUsed={} finishReason={} traceSteps={}",
@@ -215,15 +219,29 @@ public class MultiAgentOrchestrator {
     }
 
     private MultiAgentRun run(ChatRequest rawRequest) {
+        return run(rawRequest, ChatStreamSink.noop());
+    }
+
+    private MultiAgentRun run(ChatRequest rawRequest, ChatStreamSink streamSink) {
         ChatRequest normalizedRequest = normalize(rawRequest);
         MemoryContext memory = conversationMemoryService.load(normalizedRequest);
         ChatRequest analysisRequest = withHistory(normalizedRequest, memory.conversationId(), memory.analysisMemory().messages());
         QueryAnalysisResponse analysis = analyze(analysisRequest);
+        streamSink.trace(new AgentTraceStep(
+                0,
+                "query_analysis",
+                analysis.route(),
+                "",
+                "analyze",
+                "intent=" + analysis.intent()
+                        + "; requestType=" + analysis.requestType()
+                        + "; executionMode=" + analysis.executionMode()
+        ));
         ChatRequest request = withHistory(normalizedRequest, memory.conversationId(), memory.promptMemory().messages());
         List<AgentTraceStep> trace = new ArrayList<>();
 
         SupervisorDecision supervisorDecision = supervisorAgent.decide(request, analysis);
-        trace.add(new AgentTraceStep(
+        addTrace(trace, streamSink, new AgentTraceStep(
                 1,
                 "supervisor",
                 supervisorDecision.route(),
@@ -231,7 +249,7 @@ public class MultiAgentOrchestrator {
                 "supervisor_decision",
                 "agent=" + supervisorDecision.agentName() + ", reason=" + supervisorDecision.reason()
         ));
-        trace.add(new AgentTraceStep(
+        addTrace(trace, streamSink, new AgentTraceStep(
                 2,
                 "a2a_handoff",
                 supervisorDecision.route(),
@@ -253,9 +271,10 @@ public class MultiAgentOrchestrator {
         );
         SpecialistAgentResult agentResult = taskExecution.agentResult();
         trace.addAll(taskExecution.trace());
+        taskExecution.trace().forEach(streamSink::trace);
 
-        AnswerDraft draft = generate(request, analysis, agentResult);
-        trace.add(new AgentTraceStep(
+        AnswerDraft draft = generate(request, analysis, agentResult, streamSink);
+        addTrace(trace, streamSink, new AgentTraceStep(
                 trace.size() + 1,
                 "answer",
                 analysis.route(),
@@ -263,7 +282,7 @@ public class MultiAgentOrchestrator {
                 "generate",
                 draft.finishReason()
         ));
-        trace.add(answerCriticAgent.review(trace.size() + 1, request, analysis, agentResult, draft));
+        addTrace(trace, streamSink, answerCriticAgent.review(trace.size() + 1, request, analysis, agentResult, draft));
 
         ChatResponse response = withCurrentTrace(response(request, analysis, agentResult, draft, trace));
         if (tracePersistenceService != null) {
@@ -366,6 +385,15 @@ public class MultiAgentOrchestrator {
     }
 
     private AnswerDraft generate(ChatRequest request, QueryAnalysisResponse analysis, SpecialistAgentResult agentResult) {
+        return generate(request, analysis, agentResult, ChatStreamSink.noop());
+    }
+
+    private AnswerDraft generate(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            SpecialistAgentResult agentResult,
+            ChatStreamSink streamSink
+    ) {
         AgentToolResult toolResult = agentResult.toolResult();
         String toolName = effectiveToolName(agentResult);
         if ("web_search".equals(toolName)) {
@@ -376,7 +404,7 @@ public class MultiAgentOrchestrator {
                         toolResult.finishReason()
                 );
             }
-            return answerGenerator.generateFromWebSearch(request, analysis, agentResult.decision(), agentResult.webSearchResults());
+            return answerGenerator.generateFromWebSearch(request, analysis, agentResult.decision(), agentResult.webSearchResults(), "", streamSink);
         }
         if ("mcp_tool".equals(toolName)) {
             if (toolResult == null) {
@@ -385,9 +413,14 @@ public class MultiAgentOrchestrator {
             if (!toolResult.success()) {
                 return new AnswerDraft("MCP tool failed: " + safeObservation(toolResult), false, toolResult.finishReason());
             }
-            return answerGenerator.generateFromMcpTool(request, analysis, toolResult);
+            return answerGenerator.generateFromMcpTool(request, analysis, toolResult, "", streamSink);
         }
-        return answerGenerator.generate(request, analysis, agentResult.retrievalHits());
+        return answerGenerator.generate(request, analysis, agentResult.retrievalHits(), "", streamSink);
+    }
+
+    private void addTrace(List<AgentTraceStep> trace, ChatStreamSink streamSink, AgentTraceStep step) {
+        trace.add(step);
+        streamSink.trace(step);
     }
 
     private ChatResponse response(

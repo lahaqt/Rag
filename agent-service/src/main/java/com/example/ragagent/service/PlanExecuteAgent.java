@@ -70,6 +70,10 @@ public class PlanExecuteAgent {
     }
 
     public ChatResponse answer(ChatRequest request, QueryAnalysisResponse analysis) {
+        return answer(request, analysis, ChatStreamSink.noop());
+    }
+
+    public ChatResponse answer(ChatRequest request, QueryAnalysisResponse analysis, ChatStreamSink streamSink) {
         List<AgentTraceStep> trace = new ArrayList<>();
 
         // Stage A — direct answer or plan + iterative tool observation.
@@ -77,10 +81,11 @@ public class PlanExecuteAgent {
                 ? reActLoop.run(request, analysis, 1)
                 : directLoopResult(analysis);
         trace.addAll(loopResult.trace());
+        trace.forEach(streamSink::trace);
 
         // Stage B — generate + reflect with closed-loop retries.
-        AnswerDraft draft = generate(request, analysis, loopResult, "");
-        trace.add(new AgentTraceStep(
+        AnswerDraft draft = generate(request, analysis, loopResult, "", streamSink);
+        addTrace(trace, streamSink, new AgentTraceStep(
                 trace.size() + 1,
                 "answer",
                 analysis.route(),
@@ -90,7 +95,7 @@ public class PlanExecuteAgent {
         ));
 
         ReflectionResult reflection = reflectionCritic.review(request, analysis, loopResult, draft);
-        trace.add(new AgentTraceStep(
+        addTrace(trace, streamSink, new AgentTraceStep(
                 trace.size() + 1,
                 "reflection",
                 analysis.route(),
@@ -105,10 +110,11 @@ public class PlanExecuteAgent {
             String reflectionHint = "previous_attempt=" + attempts
                     + "; reflection_observation=" + lastObservation
                     + "; 请根据当前已经检索到的事实重新生成答案，避免编造或忽略证据。";
-            AnswerDraft retryDraft = generate(request, analysis, loopResult, reflectionHint);
+            streamSink.answerReset("reflection_retry_" + attempts);
+            AnswerDraft retryDraft = generate(request, analysis, loopResult, reflectionHint, streamSink);
             ReflectionResult retryReview = reflectionCritic.review(request, analysis, loopResult, retryDraft);
             attempts++;
-            trace.add(new AgentTraceStep(
+            addTrace(trace, streamSink, new AgentTraceStep(
                     trace.size() + 1,
                     "answer",
                     analysis.route(),
@@ -116,7 +122,7 @@ public class PlanExecuteAgent {
                     "regenerate",
                     "attempt=" + attempts + "; draftFinishReason=" + retryDraft.finishReason()
             ));
-            trace.add(new AgentTraceStep(
+            addTrace(trace, streamSink, new AgentTraceStep(
                     trace.size() + 1,
                     "reflection",
                     analysis.route(),
@@ -139,7 +145,7 @@ public class PlanExecuteAgent {
             );
         }
 
-        trace.add(new AgentTraceStep(
+        addTrace(trace, streamSink, new AgentTraceStep(
                 trace.size() + 1,
                 "reflection",
                 analysis.route(),
@@ -159,6 +165,16 @@ public class PlanExecuteAgent {
             ReActLoopResult loopResult,
             String reflectionHint
     ) {
+        return generate(request, analysis, loopResult, reflectionHint, ChatStreamSink.noop());
+    }
+
+    private AnswerDraft generate(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            ReActLoopResult loopResult,
+            String reflectionHint,
+            ChatStreamSink streamSink
+    ) {
         ToolDecision decision = loopResult.decision();
         AgentToolResult toolResult = loopResult.toolResult();
         if ("web_search".equals(decision.toolName())) {
@@ -169,7 +185,7 @@ public class PlanExecuteAgent {
                         toolResult.finishReason()
                 );
             }
-            return answerGenerator.generateFromWebSearch(request, analysis, decision, loopResult.webSearchResults(), reflectionHint);
+            return answerGenerator.generateFromWebSearch(request, analysis, decision, loopResult.webSearchResults(), reflectionHint, streamSink);
         }
         if ("mcp_tool".equals(decision.toolName())) {
             if (toolResult == null) {
@@ -178,9 +194,14 @@ public class PlanExecuteAgent {
             if (!toolResult.success()) {
                 return new AnswerDraft("MCP tool failed: " + safeObservation(toolResult), false, toolResult.finishReason());
             }
-            return answerGenerator.generateFromMcpTool(request, analysis, toolResult, reflectionHint);
+            return answerGenerator.generateFromMcpTool(request, analysis, toolResult, reflectionHint, streamSink);
         }
-        return answerGenerator.generate(request, analysis, loopResult.retrievalHits(), reflectionHint);
+        return answerGenerator.generate(request, analysis, loopResult.retrievalHits(), reflectionHint, streamSink);
+    }
+
+    private void addTrace(List<AgentTraceStep> trace, ChatStreamSink streamSink, AgentTraceStep step) {
+        trace.add(step);
+        streamSink.trace(step);
     }
 
     private ChatResponse response(
