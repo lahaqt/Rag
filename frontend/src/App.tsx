@@ -12,6 +12,7 @@ import {
   FileText,
   FolderKanban,
   Grid2X2,
+  Image as ImageIcon,
   List,
   MessageSquarePlus,
   MoreHorizontal,
@@ -302,7 +303,7 @@ function conversationTitleFromQuery(value: string) {
   let title = value
     .trim()
     .replace(/^\/(multi-agent|plan|feedback)\s+/i, '')
-    .replace(/[`*_#>\[\]{}]+/g, '')
+    .replace(/[`*_#>[\]{}]+/g, '')
     .replace(/\s+/g, ' ')
     .trim()
 
@@ -367,7 +368,7 @@ const initialConversations: Conversation[] = [
         id: 2,
         role: 'assistant',
         content:
-          '建议把体验收束在一条主路径：选择知识库、提出问题、查看答案、核对引用、继续追问。主界面保持 ChatGPT 式的低干扰聊天体验，知识库和文件上下文放在左侧，检索参数放到可收起的右侧面板。',
+          '建议把体验收束在一条主路径：选择知识库、提出问题、查看答案、核对引用、继续追问。主界面保持低干扰的问答体验，知识库和文件上下文放在左侧，检索参数放到可收起的右侧面板。',
         sources: ['产品需求文档.pdf', 'RAG 服务接口草案.md', '企业制度库 / 入职流程'],
       },
     ],
@@ -2008,6 +2009,10 @@ function App() {
           <div className="brand-mark">
             <Sparkles size={18} />
           </div>
+          <div>
+            <strong>RAG Agent</strong>
+            <span>Knowledge Workspace</span>
+          </div>
           <button className="icon-button quiet" type="button" title="折叠侧栏">
             <PanelRight size={17} />
           </button>
@@ -2266,7 +2271,7 @@ function App() {
                         type="button"
                       >
                         <span className="document-card-icon">
-                          {isImageDocument(document) ? '🖼️' : <FileText size={22} />}
+                          {isImageDocument(document) ? <ImageIcon size={22} /> : <FileText size={22} />}
                         </span>
                         <span className="document-card-meta">
                           <strong>{document.fileName}</strong>
@@ -2288,7 +2293,7 @@ function App() {
                           tabIndex={0}
                         >
                           <span className="document-name">
-                            {isImageDocument(document) ? '🖼️' : <FileText size={17} />}
+                            {isImageDocument(document) ? <ImageIcon size={17} /> : <FileText size={17} />}
                             <span>
                               <strong>{document.fileName}</strong>
                               <small>
@@ -2845,18 +2850,19 @@ function App() {
           <div className="context-strip">
             <span>
               <CheckCircle2 size={14} />
-              企业制度库已同步
+              {activeKnowledgeBase?.name ?? '知识库就绪'}
             </span>
-            <span>18 个文档</span>
+            <span>{activeKnowledgeBase?.documentCount ?? totalDocumentCount} 个文档</span>
             <span>引用优先</span>
+            <span>{vectorStatus ? `${vectorStatus.vectorCount} vectors` : '向量状态同步中'}</span>
           </div>
 
           <div className="conversation-title">
             <div>
-              <span className="eyebrow">ChatGPT 极简聊天体验 · Kimi 式知识库上下文</span>
+              <span className="eyebrow">企业知识问答 · 引用溯源 · 工具编排</span>
               <h1>{activeConversation.title}</h1>
             </div>
-            <button className="ghost-button" type="button">
+            <button className="ghost-button" onClick={() => setActiveView('knowledge')} type="button">
               <FolderKanban size={16} />
               切换知识库
             </button>
