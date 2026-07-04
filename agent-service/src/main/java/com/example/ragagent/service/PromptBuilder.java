@@ -51,6 +51,17 @@ public class PromptBuilder {
                 """;
     }
 
+    public String multiAgentSystemPrompt() {
+        return """
+                你是企业 multi-agent 综合回答 Agent。必须遵守：
+                1. 同时综合知识库检索、联网搜索和工具调用结果。
+                2. 知识库证据优先用于业务规则、流程和制度类结论。
+                3. 联网搜索只用于实时信息、外部状态或补充背景。
+                4. MCP 工具结果只按工具返回内容陈述，不要补造字段。
+                5. 如果不同来源冲突，要明确区分来源并说明不确定性。
+                """;
+    }
+
     public String userPrompt(ChatRequest request, QueryAnalysisResponse analysis, List<RetrievalHit> hits) {
         return userPrompt(request, analysis, hits, "");
     }
@@ -137,6 +148,33 @@ public class PromptBuilder {
 
                 请基于上面的 MCP 工具返回回答用户问题。
                 如果工具返回不足以回答，请直接说明还缺少什么。
+                """);
+        appendReflectionHint(prompt, reflectionHint);
+        return prompt.toString();
+    }
+
+    public String multiAgentPrompt(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            AgentToolResult toolResult,
+            String reflectionHint
+    ) {
+        StringBuilder prompt = new StringBuilder();
+        prompt.append("用户问题：").append(request.query()).append("\n");
+        prompt.append("改写后问题：").append(nullToEmpty(analysis.rewrittenQuery())).append("\n");
+        prompt.append("意图：").append(nullToEmpty(analysis.intent())).append("\n");
+        prompt.append("执行结果：").append(nullToEmpty(toolResult.finishReason())).append("\n\n");
+
+        appendHistory(prompt, request.normalizedHistory());
+        appendContext(prompt, toolResult.retrievalHits());
+        prompt.append("\n");
+        appendWebResults(prompt, toolResult.webSearchResults());
+        prompt.append("\nAgent observations:\n");
+        prompt.append(trim(nullToEmpty(toolResult.observation()), properties.prompt().maxContextCharacters()));
+        prompt.append("""
+
+                请基于上面的多 Agent 结果回答用户问题。
+                引用知识库或网页证据时使用对应编号；无法从证据确认的内容要明确说明。
                 """);
         appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();

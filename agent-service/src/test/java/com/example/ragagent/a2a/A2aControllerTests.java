@@ -27,13 +27,15 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 class A2aControllerTests {
     private MockMvc mockMvc;
     private MultiAgentOrchestrator multiAgentOrchestrator;
+    private A2aTaskStore taskStore;
 
     @BeforeEach
     void setUp() {
         A2aAgentRegistry registry = new A2aAgentRegistry(List.of(new TestSpecialistAgent()));
         multiAgentOrchestrator = mock(MultiAgentOrchestrator.class);
+        taskStore = new InMemoryA2aTaskStore();
         mockMvc = MockMvcBuilders
-                .standaloneSetup(new A2aController(registry, multiAgentOrchestrator, new ObjectMapper()))
+                .standaloneSetup(new A2aController(registry, multiAgentOrchestrator, taskStore, new ObjectMapper()))
                 .build();
     }
 
@@ -92,6 +94,44 @@ class A2aControllerTests {
                 .andExpect(jsonPath("$.id").value("rpc-1"))
                 .andExpect(jsonPath("$.result.id").value("task-1"))
                 .andExpect(jsonPath("$.error").value(Matchers.nullValue()));
+    }
+
+    @Test
+    void exposesTaskLifecycleGetAndCancel() throws Exception {
+        taskStore.save(new A2aTask(
+                "task-2",
+                "conversation-1",
+                new A2aTaskStatus(
+                        A2aTaskState.WORKING,
+                        new A2aMessage("agent", "msg-2", "conversation-1", "task-2", List.of(), List.of(A2aPart.text("working"))),
+                        Instant.now()
+                ),
+                List.of(),
+                List.of()
+        ));
+
+        mockMvc.perform(get("/api/chat/multi-agent/tasks/task-2"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("task-2"))
+                .andExpect(jsonPath("$.status.state").value("WORKING"));
+
+        mockMvc.perform(post("/api/chat/multi-agent/tasks/task-2/cancel"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("task-2"))
+                .andExpect(jsonPath("$.status.state").value("CANCELED"));
+
+        mockMvc.perform(post("/api/chat/multi-agent/a2a")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "jsonrpc": "2.0",
+                                  "id": "rpc-get",
+                                  "method": "tasks/get",
+                                  "params": {"id": "task-2"}
+                                }
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status.state").value("CANCELED"));
     }
 
     private static class TestSpecialistAgent implements SpecialistAgent {

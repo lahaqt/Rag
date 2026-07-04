@@ -2,6 +2,7 @@ package com.example.ragagent.config;
 
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 
 @ConfigurationProperties(prefix = "rag")
 public record RagProperties(
@@ -13,8 +14,10 @@ public record RagProperties(
         Tools tools,
         Mcp mcp,
         Agent agent,
+        MultiAgent multiAgent,
         Memory memory
 ) {
+    @ConstructorBinding
     public RagProperties {
         if (cors == null) {
             cors = new Cors(List.of("http://127.0.0.1:5173", "http://localhost:5173"));
@@ -48,9 +51,26 @@ public record RagProperties(
         if (agent == null) {
             agent = new Agent(4, 2, true);
         }
+        if (multiAgent == null) {
+            multiAgent = new MultiAgent("spring-ai-alibaba", 4, 12, true, List.of());
+        }
         if (memory == null) {
             memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L, "window", 4, true, null);
         }
+    }
+
+    public RagProperties(
+            Cors cors,
+            Downstream downstream,
+            Retrieval retrieval,
+            Prompt prompt,
+            Llm llm,
+            Tools tools,
+            Mcp mcp,
+            Agent agent,
+            Memory memory
+    ) {
+        this(cors, downstream, retrieval, prompt, llm, tools, mcp, agent, null, memory);
     }
 
     public record Cors(List<String> allowedOrigins) {
@@ -161,6 +181,38 @@ public record RagProperties(
                     ? 2
                     : Math.max(0, Math.min(maxReflectionRetries, 4));
             plannerEnabled = plannerEnabled == null || plannerEnabled;
+        }
+    }
+
+    public record MultiAgent(
+            String runtime,
+            Integer maxConcurrency,
+            Integer timeoutSeconds,
+            Boolean failureIsolationEnabled,
+            List<RemoteAgent> remoteAgents
+    ) {
+        public MultiAgent {
+            runtime = (runtime == null || runtime.isBlank()) ? "spring-ai-alibaba" : runtime;
+            maxConcurrency = maxConcurrency == null ? 4 : Math.max(1, Math.min(maxConcurrency, 16));
+            timeoutSeconds = timeoutSeconds == null ? 12 : Math.max(2, Math.min(timeoutSeconds, 120));
+            failureIsolationEnabled = failureIsolationEnabled == null || failureIsolationEnabled;
+            remoteAgents = remoteAgents == null ? List.of() : List.copyOf(remoteAgents);
+        }
+    }
+
+    public record RemoteAgent(
+            String id,
+            String endpoint,
+            String bearerToken,
+            Boolean enabled,
+            Integer timeoutSeconds
+    ) {
+        public RemoteAgent {
+            id = id == null ? "" : id.trim();
+            endpoint = endpoint == null ? "" : endpoint.trim();
+            bearerToken = bearerToken == null ? "" : bearerToken.trim();
+            enabled = enabled == null || enabled;
+            timeoutSeconds = timeoutSeconds == null ? null : Math.max(2, Math.min(timeoutSeconds, 120));
         }
     }
 

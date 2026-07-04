@@ -40,7 +40,7 @@ public class MultiAgentOrchestrator {
     private final QueryAnalysisClient queryAnalysisClient;
     private final SupervisorAgent supervisorAgent;
     private final A2aAgentRegistry agentRegistry;
-    private final A2aRuntime a2aRuntime;
+    private final MultiAgentRuntime multiAgentRuntime;
     private final AnswerGenerator answerGenerator;
     private final AnswerCriticAgent answerCriticAgent;
     private final ConversationMemoryService conversationMemoryService;
@@ -54,7 +54,7 @@ public class MultiAgentOrchestrator {
             QueryAnalysisClient queryAnalysisClient,
             SupervisorAgent supervisorAgent,
             A2aAgentRegistry agentRegistry,
-            A2aRuntime a2aRuntime,
+            MultiAgentRuntime multiAgentRuntime,
             List<SpecialistAgent> specialistAgents,
             AnswerGenerator answerGenerator,
             AnswerCriticAgent answerCriticAgent,
@@ -65,7 +65,7 @@ public class MultiAgentOrchestrator {
         this(queryAnalysisClient,
                 supervisorAgent,
                 agentRegistry,
-                a2aRuntime,
+                multiAgentRuntime,
                 specialistAgents,
                 answerGenerator,
                 answerCriticAgent,
@@ -87,7 +87,29 @@ public class MultiAgentOrchestrator {
         this(queryAnalysisClient,
                 supervisorAgent,
                 agentRegistry,
-                a2aRuntime,
+                new DefaultA2aMultiAgentRuntime(a2aRuntime),
+                specialistAgents,
+                answerGenerator,
+                answerCriticAgent,
+                new NoopConversationMemoryService(),
+                null,
+                null,
+                null);
+    }
+
+    public MultiAgentOrchestrator(
+            QueryAnalysisClient queryAnalysisClient,
+            SupervisorAgent supervisorAgent,
+            A2aAgentRegistry agentRegistry,
+            MultiAgentRuntime multiAgentRuntime,
+            List<SpecialistAgent> specialistAgents,
+            AnswerGenerator answerGenerator,
+            AnswerCriticAgent answerCriticAgent
+    ) {
+        this(queryAnalysisClient,
+                supervisorAgent,
+                agentRegistry,
+                multiAgentRuntime,
                 specialistAgents,
                 answerGenerator,
                 answerCriticAgent,
@@ -110,7 +132,7 @@ public class MultiAgentOrchestrator {
         this(queryAnalysisClient,
                 supervisorAgent,
                 agentRegistry,
-                a2aRuntime,
+                new DefaultA2aMultiAgentRuntime(a2aRuntime),
                 specialistAgents,
                 answerGenerator,
                 answerCriticAgent,
@@ -124,7 +146,7 @@ public class MultiAgentOrchestrator {
             QueryAnalysisClient queryAnalysisClient,
             SupervisorAgent supervisorAgent,
             A2aAgentRegistry agentRegistry,
-            A2aRuntime a2aRuntime,
+            MultiAgentRuntime multiAgentRuntime,
             List<SpecialistAgent> specialistAgents,
             AnswerGenerator answerGenerator,
             AnswerCriticAgent answerCriticAgent,
@@ -136,7 +158,7 @@ public class MultiAgentOrchestrator {
         this.queryAnalysisClient = queryAnalysisClient;
         this.supervisorAgent = supervisorAgent;
         this.agentRegistry = agentRegistry;
-        this.a2aRuntime = a2aRuntime;
+        this.multiAgentRuntime = multiAgentRuntime;
         this.answerGenerator = answerGenerator;
         this.answerCriticAgent = answerCriticAgent;
         this.conversationMemoryService = conversationMemoryService == null
@@ -262,13 +284,15 @@ public class MultiAgentOrchestrator {
                 supervisorDecision.agentName(),
                 specialistAgents.get("follow_up")
         );
-        A2aTaskExecution taskExecution = a2aRuntime.send(
+        A2aTaskExecution taskExecution = multiAgentRuntime.execute(new MultiAgentRuntimeRequest(
                 specialistAgent,
+                specialistAgents,
                 message(request, analysis),
                 request,
                 analysis,
+                supervisorDecision,
                 3
-        );
+        ));
         SpecialistAgentResult agentResult = taskExecution.agentResult();
         trace.addAll(taskExecution.trace());
         taskExecution.trace().forEach(streamSink::trace);
@@ -414,6 +438,15 @@ public class MultiAgentOrchestrator {
                 return new AnswerDraft("MCP tool failed: " + safeObservation(toolResult), false, toolResult.finishReason());
             }
             return answerGenerator.generateFromMcpTool(request, analysis, toolResult, "", streamSink);
+        }
+        if ("multi_agent".equals(toolName)) {
+            if (toolResult == null) {
+                return new AnswerDraft("Multi-agent execution did not return a result.", false, "multi_agent_empty_result");
+            }
+            if (!toolResult.success()) {
+                return new AnswerDraft("Multi-agent execution failed: " + safeObservation(toolResult), false, toolResult.finishReason());
+            }
+            return answerGenerator.generateFromMultiAgent(request, analysis, toolResult, "", streamSink);
         }
         return answerGenerator.generate(request, analysis, agentResult.retrievalHits(), "", streamSink);
     }

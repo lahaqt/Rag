@@ -168,6 +168,8 @@ GET    /api/feedback?conversationId={conversationId}&limit=50
 
 SSE 流式接口事件包括 `metadata`、`trace_delta`、`answer_delta`、`answer_reset`、`citations`、`done` 和 `error`。
 
+`/api/chat/multi-agent` 是独立探索链路，不影响普通 `/api/chat`。默认运行时为 `rag.multi-agent.runtime=spring-ai-alibaba`，由 Spring AI Alibaba `StateGraph` 接管 multi-agent 编排；每次请求会进入 `prepare_request -> plan_agents -> run_specialist_agents -> finish_task` 图节点，可按 `requiredCapabilities` 和 supervisor 决策顺序执行 Knowledge/WebSearch/MCP/FollowUp specialist，并聚合 A2A task/artifact 输出。需要回退旧执行器时可显式设置 `rag.multi-agent.runtime=a2a`。
+
 ## 会话记忆与历史
 
 `agent-service` 同时维护两类会话能力：

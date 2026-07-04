@@ -49,6 +49,12 @@ rag:
     max-iterations: 4
     max-reflection-retries: 2
     planner-enabled: true
+  multi-agent:
+    runtime: spring-ai-alibaba
+    max-concurrency: 4
+    timeout-seconds: 12
+    failure-isolation-enabled: true
+    remote-agents: []
   memory:
     provider: in-memory
     enabled: true
