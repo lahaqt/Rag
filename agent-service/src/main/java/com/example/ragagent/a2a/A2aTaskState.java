@@ -5,5 +5,6 @@ public enum A2aTaskState {
     WORKING,
     INPUT_REQUIRED,
     COMPLETED,
-    FAILED
+    FAILED,
+    CANCELED
 }

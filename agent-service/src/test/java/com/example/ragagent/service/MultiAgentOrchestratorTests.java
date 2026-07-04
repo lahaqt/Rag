@@ -124,11 +124,114 @@ class MultiAgentOrchestratorTests {
                 .hasMessageContaining("must not be blank");
     }
 
+    @Test
+    void canRouteMultiAgentExecutionThroughSpringAiAlibabaRuntimeAdapter() {
+        RecordingStorageClient storageClient = new RecordingStorageClient(List.of(
+                new VectorSearchMatch("kb-1", "doc-1", "chunk-1", 0, "refund.txt", "Refund requires order details.", 0.91)
+        ));
+        MultiAgentOrchestrator orchestrator = multiAgentOrchestrator(
+                new RecordingQueryAnalysisClient(this::knowledgeAnalysis),
+                storageClient,
+                new StaticLlmGateway("Refund requires order details. [1]"),
+                query -> List.of(),
+                new SpringAiAlibabaMultiAgentRuntime(new A2aRuntime())
+        );
+
+        ChatResponse response = orchestrator.answer(new ChatRequest(
+                "/multi-agent What does refund require?",
+                "kb-1",
+                "session-1",
+                List.of(),
+                null
+        ));
+
+        assertThat(response.toolName()).isEqualTo("rag_retrieval");
+        assertThat(response.agentTrace().stream().map(AgentTraceStep::phase).toList())
+                .contains("spring_ai_alibaba_graph", "a2a_message", "a2a_task");
+        assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
+                .anyMatch(observation -> observation.contains("graph=rag-multi-agent"));
+    }
+
+    @Test
+    void springAiAlibabaRuntimeCanRunKnowledgeAndWebSearchAgentsInOnePlan() {
+        RecordingStorageClient storageClient = new RecordingStorageClient(List.of(
+                new VectorSearchMatch("kb-1", "doc-1", "chunk-1", 0, "refund.txt", "Refund requires order details.", 0.91)
+        ));
+        MultiAgentOrchestrator orchestrator = multiAgentOrchestrator(
+                new RecordingQueryAnalysisClient(this::hybridKnowledgeAndWebAnalysis),
+                storageClient,
+                new StaticLlmGateway("Use knowledge base evidence and current web context together. [1]"),
+                query -> List.of(new WebSearchResult(1, "Current refund update", "https://example.com/refund", "Latest refund status."))
+        );
+
+        ChatResponse response = orchestrator.answer(new ChatRequest(
+                "/multi-agent Combine refund policy with latest refund update today",
+                "kb-1",
+                "session-1",
+                List.of(),
+                null
+        ));
+
+        assertThat(response.toolName()).isEqualTo("multi_agent");
+        assertThat(response.finishReason()).isEqualTo("multi_agent_llm_generated");
+        assertThat(response.citations()).hasSize(1);
+        assertThat(response.webSearchResults()).hasSize(1);
+        assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
+                .anyMatch(observation -> observation.contains("plan=knowledge -> web_search"));
+    }
+
+    @Test
+    void springAiAlibabaRuntimeIsolatesOneSpecialistFailure() {
+        RecordingStorageClient storageClient = new RecordingStorageClient(List.of(
+                new VectorSearchMatch("kb-1", "doc-1", "chunk-1", 0, "refund.txt", "Refund requires order details.", 0.91)
+        ));
+        MultiAgentOrchestrator orchestrator = multiAgentOrchestrator(
+                new RecordingQueryAnalysisClient(this::hybridKnowledgeAndWebAnalysis),
+                storageClient,
+                new StaticLlmGateway("unused"),
+                query -> {
+                    throw new IllegalStateException("search backend unavailable");
+                }
+        );
+
+        ChatResponse response = orchestrator.answer(new ChatRequest(
+                "/multi-agent Combine refund policy with latest refund update today",
+                "kb-1",
+                "session-1",
+                List.of(),
+                null
+        ));
+
+        assertThat(response.toolName()).isEqualTo("multi_agent");
+        assertThat(response.finishReason()).startsWith("multi_agent_partial_failure");
+        assertThat(response.answer()).contains("Multi-agent execution failed");
+        assertThat(response.citations()).hasSize(1);
+        assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
+                .anyMatch(observation -> observation.contains("search backend unavailable"));
+    }
+
+
     private MultiAgentOrchestrator multiAgentOrchestrator(
             QueryAnalysisClient analysisClient,
             StorageRetrievalClient storageClient,
             LlmGateway llmGateway,
             WebSearchTool webSearchTool
+    ) {
+        return multiAgentOrchestrator(
+                analysisClient,
+                storageClient,
+                llmGateway,
+                webSearchTool,
+                new SpringAiAlibabaMultiAgentRuntime(new A2aRuntime())
+        );
+    }
+
+    private MultiAgentOrchestrator multiAgentOrchestrator(
+            QueryAnalysisClient analysisClient,
+            StorageRetrievalClient storageClient,
+            LlmGateway llmGateway,
+            WebSearchTool webSearchTool,
+            MultiAgentRuntime multiAgentRuntime
     ) {
         ToolRegistry toolRegistry = new ToolRegistry(
                 new ToolRouter(),
@@ -147,7 +250,7 @@ class MultiAgentOrchestratorTests {
                 analysisClient,
                 new SupervisorAgent(toolRegistry),
                 new A2aAgentRegistry(agents),
-                new A2aRuntime(),
+                multiAgentRuntime,
                 agents,
                 new AnswerGenerator(llmGateway, new PromptBuilder(properties), properties),
                 new AnswerCriticAgent(new ReflectionCritic())
@@ -211,6 +314,30 @@ class MultiAgentOrchestratorTests {
                 java.util.Map.of(),
                 "",
                 List.of("contains_realtime_tool_keyword:today")
+        );
+    }
+
+    private QueryAnalysisResponse hybridKnowledgeAndWebAnalysis(ChatRequest request) {
+        return new QueryAnalysisResponse(
+                request.conversationId(),
+                request.knowledgeBaseId(),
+                request.query(),
+                request.query(),
+                request.query(),
+                "knowledge",
+                0.90,
+                "knowledge_retrieval",
+                false,
+                false,
+                request.normalizedHistory().size(),
+                List.of(request.query()),
+                "PLANNED_TASK",
+                "ITERATIVE_TOOL",
+                List.of("rag_retrieval", "web_search"),
+                "",
+                java.util.Map.of(),
+                "",
+                List.of("test_multi_agent_plan")
         );
     }
 

@@ -195,6 +195,53 @@ public class AnswerGenerator {
         return withStreamSink(streamSink, () -> generateFromMcpTool(request, analysis, toolResult, reflectionHint));
     }
 
+    public AnswerDraft generateFromMultiAgent(ChatRequest request, QueryAnalysisResponse analysis, AgentToolResult toolResult) {
+        return generateFromMultiAgent(request, analysis, toolResult, "");
+    }
+
+    public AnswerDraft generateFromMultiAgent(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            AgentToolResult toolResult,
+            String reflectionHint
+    ) {
+        if (llmGateway.isConfigured()) {
+            try {
+                String answer = complete(
+                        promptBuilder.multiAgentSystemPrompt(),
+                        promptBuilder.multiAgentPrompt(request, analysis, toolResult, reflectionHint),
+                        properties.llm().temperature(),
+                        properties.llm().maxTokens()
+                );
+                boolean retry = reflectionHint != null && !reflectionHint.isBlank();
+                return new AnswerDraft(answer, true,
+                        retry ? "multi_agent_llm_generated_retry" : "multi_agent_llm_generated");
+            } catch (Exception exception) {
+                return new AnswerDraft(multiAgentFallback(toolResult, "大模型调用失败：" + exception.getMessage()),
+                        false,
+                        reflectionHint == null || reflectionHint.isBlank()
+                                ? "multi_agent_llm_failed_fallback"
+                                : "multi_agent_llm_failed_fallback_retry");
+            }
+        }
+
+        return new AnswerDraft(multiAgentFallback(toolResult, "当前未配置可用的大模型 API Key。"),
+                false,
+                reflectionHint == null || reflectionHint.isBlank()
+                        ? "multi_agent_llm_not_configured_fallback"
+                        : "multi_agent_llm_not_configured_fallback_retry");
+    }
+
+    public AnswerDraft generateFromMultiAgent(
+            ChatRequest request,
+            QueryAnalysisResponse analysis,
+            AgentToolResult toolResult,
+            String reflectionHint,
+            ChatStreamSink streamSink
+    ) {
+        return withStreamSink(streamSink, () -> generateFromMultiAgent(request, analysis, toolResult, reflectionHint));
+    }
+
     private String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
         ChatStreamSink sink = streamSink.get();
         if (sink == null || sink == ChatStreamSink.noop()) {
@@ -260,6 +307,22 @@ public class AnswerGenerator {
 
     private String mcpFallback(AgentToolResult toolResult, String reason) {
         return reason + "先返回 MCP 工具结果：\n\n" + safeObservation(toolResult);
+    }
+
+    private String multiAgentFallback(AgentToolResult toolResult, String reason) {
+        StringBuilder answer = new StringBuilder(reason).append("\n\n");
+        if (!toolResult.retrievalHits().isEmpty()) {
+            answer.append("知识库检索摘要：\n");
+            answer.append(fallbackAnswer(toolResult.retrievalHits(), "")).append("\n\n");
+        }
+        if (!toolResult.webSearchResults().isEmpty()) {
+            answer.append("联网搜索摘要：\n");
+            answer.append(webSearchFallback(toolResult.webSearchResults(), "")).append("\n\n");
+        }
+        if (!isBlank(toolResult.observation())) {
+            answer.append("Agent observations:\n").append(toolResult.observation());
+        }
+        return answer.toString().trim();
     }
 
     private String safeObservation(AgentToolResult toolResult) {
