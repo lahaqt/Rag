@@ -1,36 +1,53 @@
 :root {
-  --app-bg: #eef1ee;
-  --workspace: #fbfaf7;
-  --sidebar-bg: #f7f7f6;
-  --panel: rgba(246, 247, 243, 0.86);
-  --panel-soft: rgba(255, 255, 255, 0.68);
-  --topbar: rgba(255, 255, 255, 0.64);
-  --card: rgba(255, 255, 252, 0.82);
-  --composer: rgba(255, 255, 255, 0.9);
-  --assistant-bubble: rgba(255, 255, 252, 0.9);
-  --user-bubble: #ecefec;
-  --control: rgba(255, 255, 255, 0.68);
-  --hover: rgba(32, 33, 35, 0.055);
-  --active: rgba(28, 125, 95, 0.095);
-  --input: rgba(255, 255, 255, 0.86);
-  --border: rgba(34, 38, 35, 0.1);
-  --border-strong: rgba(34, 38, 35, 0.16);
-  --library-border: rgba(17, 19, 18, 0.13);
-  --library-dashed: rgba(17, 19, 18, 0.2);
-  --library-chip: rgba(17, 19, 18, 0.045);
-  --text: #383c3a;
-  --text-strong: #171a19;
-  --sidebar-text: #111312;
-  --text-muted: #707670;
-  --text-faint: #a0a79f;
-  --sidebar-hover: rgba(17, 19, 18, 0.055);
-  --sidebar-active: rgba(17, 19, 18, 0.085);
-  --soft-shadow: 0 14px 34px rgba(28, 33, 30, 0.07);
-  --composer-shadow: 0 24px 70px rgba(28, 33, 30, 0.13);
+  --app-bg: #edf1f5;
+  --workspace: #f6f7f9;
+  --sidebar-bg: #e9eef3;
+  --panel: #f8fafc;
+  --panel-soft: #ffffff;
+  --topbar: rgba(255, 255, 255, 0.88);
+  --surface: #ffffff;
+  --surface-muted: #f2f5f7;
+  --card: #ffffff;
+  --composer: #ffffff;
+  --assistant-bubble: #ffffff;
+  --user-bubble: #192129;
+  --control: #ffffff;
+  --hover: rgba(15, 23, 42, 0.055);
+  --active: rgba(15, 122, 95, 0.11);
+  --input: #ffffff;
+  --border: rgba(15, 23, 42, 0.1);
+  --border-strong: rgba(15, 23, 42, 0.18);
+  --library-border: rgba(15, 23, 42, 0.12);
+  --library-dashed: rgba(15, 23, 42, 0.24);
+  --library-chip: rgba(15, 23, 42, 0.055);
+  --text: #35404a;
+  --text-strong: #111827;
+  --sidebar-text: #17212b;
+  --text-muted: #66737f;
+  --text-faint: #98a3ad;
+  --brand: #16745f;
+  --brand-strong: #0c5f4b;
+  --brand-soft: rgba(15, 122, 95, 0.1);
+  --info: #2563eb;
+  --info-soft: rgba(37, 99, 235, 0.1);
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.12);
+  --danger: #b42318;
+  --danger-soft: rgba(180, 35, 24, 0.1);
+  --success: #087a54;
+  --success-soft: rgba(8, 122, 84, 0.11);
+  --sidebar-hover: rgba(15, 23, 42, 0.055);
+  --sidebar-active: rgba(15, 122, 95, 0.12);
+  --soft-shadow: 0 1px 2px rgba(15, 23, 42, 0.05), 0 14px 34px rgba(30, 41, 59, 0.08);
+  --composer-shadow: 0 1px 2px rgba(15, 23, 42, 0.08), 0 22px 54px rgba(30, 41, 59, 0.14);
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
   color: var(--text);
   background: var(--app-bg);
   font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Aptos, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
     "Microsoft YaHei", "PingFang SC", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -40,34 +57,47 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --app-bg: #151715;
-    --workspace: #1f211f;
-    --sidebar-bg: #1c1d1b;
-    --panel: rgba(29, 31, 30, 0.88);
-    --panel-soft: rgba(255, 255, 255, 0.045);
-    --topbar: rgba(31, 33, 31, 0.74);
-    --card: rgba(38, 41, 39, 0.84);
-    --composer: rgba(42, 45, 43, 0.94);
-    --assistant-bubble: rgba(42, 45, 43, 0.92);
-    --user-bubble: #303431;
-    --control: rgba(255, 255, 255, 0.058);
-    --hover: rgba(255, 255, 255, 0.078);
-    --active: rgba(42, 145, 111, 0.16);
-    --input: rgba(255, 255, 255, 0.065);
-    --border: rgba(255, 255, 255, 0.095);
-    --border-strong: rgba(255, 255, 255, 0.16);
-    --library-border: rgba(255, 255, 255, 0.16);
-    --library-dashed: rgba(255, 255, 255, 0.24);
-    --library-chip: rgba(255, 255, 255, 0.08);
-    --text: #d6dad4;
-    --text-strong: #f8faf7;
-    --sidebar-text: #ecefeb;
-    --text-muted: #a0a79f;
-    --text-faint: #747b74;
-    --sidebar-hover: rgba(255, 255, 255, 0.075);
-    --sidebar-active: rgba(255, 255, 255, 0.105);
-    --soft-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
-    --composer-shadow: 0 26px 80px rgba(0, 0, 0, 0.32);
+    --app-bg: #0d1117;
+    --workspace: #10151c;
+    --sidebar-bg: #0f141b;
+    --panel: #111821;
+    --panel-soft: #151d27;
+    --topbar: rgba(17, 24, 33, 0.9);
+    --surface: #141b24;
+    --surface-muted: #111821;
+    --card: #151d27;
+    --composer: #161f2a;
+    --assistant-bubble: #151d27;
+    --user-bubble: #e6edf3;
+    --control: #182331;
+    --hover: rgba(255, 255, 255, 0.07);
+    --active: rgba(47, 168, 125, 0.15);
+    --input: #111923;
+    --border: rgba(226, 232, 240, 0.1);
+    --border-strong: rgba(226, 232, 240, 0.18);
+    --library-border: rgba(226, 232, 240, 0.13);
+    --library-dashed: rgba(226, 232, 240, 0.25);
+    --library-chip: rgba(226, 232, 240, 0.07);
+    --text: #c8d1da;
+    --text-strong: #f7fafc;
+    --sidebar-text: #e6edf3;
+    --text-muted: #97a6b5;
+    --text-faint: #667486;
+    --brand: #2fa87d;
+    --brand-strong: #6ad0aa;
+    --brand-soft: rgba(47, 168, 125, 0.15);
+    --info: #6ea8ff;
+    --info-soft: rgba(110, 168, 255, 0.14);
+    --warning: #f2b15f;
+    --warning-soft: rgba(242, 177, 95, 0.14);
+    --danger: #ff8a80;
+    --danger-soft: rgba(255, 138, 128, 0.14);
+    --success: #5fd3a5;
+    --success-soft: rgba(95, 211, 165, 0.14);
+    --sidebar-hover: rgba(255, 255, 255, 0.065);
+    --sidebar-active: rgba(47, 168, 125, 0.17);
+    --soft-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 18px 38px rgba(0, 0, 0, 0.25);
+    --composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.36), 0 24px 58px rgba(0, 0, 0, 0.36);
   }
 }
 
@@ -91,7 +121,16 @@ button,
 input,
 select,
 textarea {
-  outline-color: #1c7d5f;
+  outline-color: var(--brand);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
 }
 
 button {
@@ -100,5 +139,5 @@ button {
 
 ::selection {
   color: #ffffff;
-  background: #1c7d5f;
+  background: var(--brand);
 }
