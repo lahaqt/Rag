@@ -31,7 +31,7 @@ public class A2aAgentRegistry {
                 "0.3.0",
                 "rag_multi_agent",
                 "RAG Multi-Agent Orchestrator",
-                "Routes explicit /multi-agent chat requests through A2A-style specialist agent tasks.",
+                "Routes explicit /multi-agent chat requests through the Spring AI Alibaba graph runtime.",
                 "/api/chat/multi-agent",
                 "0.1.0",
                 new A2aAgentCapabilities(true, false, true),

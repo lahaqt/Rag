@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.example.ragagent.a2a.A2aAgentRegistry;
-import com.example.ragagent.a2a.A2aRuntime;
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
@@ -49,7 +48,7 @@ class MultiAgentOrchestratorTests {
         assertThat(storageClient.requests.get(0).query()).isEqualTo("What does refund require?");
         assertThat(response.toolName()).isEqualTo("rag_retrieval");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::phase).toList())
-                .contains("supervisor", "a2a_handoff", "a2a_message", "agent", "a2a_task", "answer", "critic_review");
+                .contains("supervisor", "spring_ai_alibaba_handoff", "spring_ai_alibaba_graph", "agent", "spring_ai_alibaba_agent", "answer", "critic_review");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
                 .anyMatch(observation -> observation.contains("taskId=task-knowledge"));
     }
@@ -134,7 +133,7 @@ class MultiAgentOrchestratorTests {
                 storageClient,
                 new StaticLlmGateway("Refund requires order details. [1]"),
                 query -> List.of(),
-                new SpringAiAlibabaMultiAgentRuntime(new A2aRuntime())
+                new SpringAiAlibabaMultiAgentRuntime()
         );
 
         ChatResponse response = orchestrator.answer(new ChatRequest(
@@ -147,7 +146,7 @@ class MultiAgentOrchestratorTests {
 
         assertThat(response.toolName()).isEqualTo("rag_retrieval");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::phase).toList())
-                .contains("spring_ai_alibaba_graph", "a2a_message", "a2a_task");
+                .contains("spring_ai_alibaba_graph", "spring_ai_alibaba_agent");
         assertThat(response.agentTrace().stream().map(AgentTraceStep::observation).toList())
                 .anyMatch(observation -> observation.contains("graph=rag-multi-agent"));
     }
@@ -222,7 +221,7 @@ class MultiAgentOrchestratorTests {
                 storageClient,
                 llmGateway,
                 webSearchTool,
-                new SpringAiAlibabaMultiAgentRuntime(new A2aRuntime())
+                new SpringAiAlibabaMultiAgentRuntime()
         );
     }
 

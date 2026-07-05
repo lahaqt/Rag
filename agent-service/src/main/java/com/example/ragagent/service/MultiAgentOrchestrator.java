@@ -4,7 +4,6 @@ import com.example.ragagent.a2a.A2aAgentRegistry;
 import com.example.ragagent.a2a.A2aArtifact;
 import com.example.ragagent.a2a.A2aMessage;
 import com.example.ragagent.a2a.A2aPart;
-import com.example.ragagent.a2a.A2aRuntime;
 import com.example.ragagent.a2a.A2aTask;
 import com.example.ragagent.a2a.A2aTaskExecution;
 import com.example.ragagent.a2a.A2aTaskState;
@@ -79,28 +78,6 @@ public class MultiAgentOrchestrator {
             QueryAnalysisClient queryAnalysisClient,
             SupervisorAgent supervisorAgent,
             A2aAgentRegistry agentRegistry,
-            A2aRuntime a2aRuntime,
-            List<SpecialistAgent> specialistAgents,
-            AnswerGenerator answerGenerator,
-            AnswerCriticAgent answerCriticAgent
-    ) {
-        this(queryAnalysisClient,
-                supervisorAgent,
-                agentRegistry,
-                new DefaultA2aMultiAgentRuntime(a2aRuntime),
-                specialistAgents,
-                answerGenerator,
-                answerCriticAgent,
-                new NoopConversationMemoryService(),
-                null,
-                null,
-                null);
-    }
-
-    public MultiAgentOrchestrator(
-            QueryAnalysisClient queryAnalysisClient,
-            SupervisorAgent supervisorAgent,
-            A2aAgentRegistry agentRegistry,
             MultiAgentRuntime multiAgentRuntime,
             List<SpecialistAgent> specialistAgents,
             AnswerGenerator answerGenerator,
@@ -114,29 +91,6 @@ public class MultiAgentOrchestrator {
                 answerGenerator,
                 answerCriticAgent,
                 new NoopConversationMemoryService(),
-                null,
-                null,
-                null);
-    }
-
-    public MultiAgentOrchestrator(
-            QueryAnalysisClient queryAnalysisClient,
-            SupervisorAgent supervisorAgent,
-            A2aAgentRegistry agentRegistry,
-            A2aRuntime a2aRuntime,
-            List<SpecialistAgent> specialistAgents,
-            AnswerGenerator answerGenerator,
-            AnswerCriticAgent answerCriticAgent,
-            ConversationMemoryService conversationMemoryService
-    ) {
-        this(queryAnalysisClient,
-                supervisorAgent,
-                agentRegistry,
-                new DefaultA2aMultiAgentRuntime(a2aRuntime),
-                specialistAgents,
-                answerGenerator,
-                answerCriticAgent,
-                conversationMemoryService,
                 null,
                 null,
                 null);
@@ -273,7 +227,7 @@ public class MultiAgentOrchestrator {
         ));
         addTrace(trace, streamSink, new AgentTraceStep(
                 2,
-                "a2a_handoff",
+                "spring_ai_alibaba_handoff",
                 supervisorDecision.route(),
                 supervisorDecision.agentName(),
                 "agent_card_selected",

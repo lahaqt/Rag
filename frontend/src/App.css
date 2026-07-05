@@ -4186,6 +4186,447 @@ button {
   }
 }
 
+/* ============================================================
+   动态元素与现代化组件增强 (Dynamic & Modern UI Enhancements)
+   附加式增量：仅追加新动效与组件样式，不删除既有规则。
+   ============================================================ */
+
+/* 1. 自定义滚动条 — 细腻、品牌渐变 --------------------------- */
+.sidebar,
+.inspector,
+.chat-stage,
+.recent-list,
+.library-container,
+.mcp-container,
+.search-container {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(22, 116, 95, 0.34) transparent;
+}
+
+.sidebar::-webkit-scrollbar,
+.inspector::-webkit-scrollbar,
+.chat-stage::-webkit-scrollbar,
+.recent-list::-webkit-scrollbar,
+.library-container::-webkit-scrollbar,
+.mcp-container::-webkit-scrollbar,
+.search-container::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.sidebar::-webkit-scrollbar-track,
+.inspector::-webkit-scrollbar-track,
+.chat-stage::-webkit-scrollbar-track,
+.recent-list::-webkit-scrollbar-track,
+.library-container::-webkit-scrollbar-track,
+.mcp-container::-webkit-scrollbar-track,
+.search-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sidebar::-webkit-scrollbar-thumb,
+.inspector::-webkit-scrollbar-thumb,
+.chat-stage::-webkit-scrollbar-thumb,
+.recent-list::-webkit-scrollbar-thumb,
+.library-container::-webkit-scrollbar-thumb,
+.mcp-container::-webkit-scrollbar-thumb,
+.search-container::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background: linear-gradient(180deg, rgba(22, 116, 95, 0.42), rgba(37, 99, 235, 0.38));
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover,
+.inspector::-webkit-scrollbar-thumb:hover,
+.chat-stage::-webkit-scrollbar-thumb:hover,
+.recent-list::-webkit-scrollbar-thumb:hover,
+.library-container::-webkit-scrollbar-thumb:hover,
+.mcp-container::-webkit-scrollbar-thumb:hover,
+.search-container::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(22, 116, 95, 0.7), rgba(37, 99, 235, 0.64));
+}
+
+/* 2. 消息入场动画 — 轻柔上浮 -------------------------------- */
+.message {
+  animation: message-rise 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes message-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* 3. 流式光标 — 渐变闪烁竖线 -------------------------------- */
+.stream-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.05em;
+  margin-left: 3px;
+  vertical-align: -0.18em;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--brand), var(--info));
+  animation: caret-blink 1s ease-in-out infinite;
+}
+
+@keyframes caret-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0;
+  }
+}
+
+/* 4. 强化 typing 指示器 — 渐变圆点 + shimmer ----------------- */
+.typing {
+  position: relative;
+  overflow: hidden;
+}
+
+.typing::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(22, 116, 95, 0.1),
+    transparent
+  );
+  background-size: 220% 100%;
+  animation: typing-shimmer 1.6s ease-in-out infinite;
+}
+
+.typing span {
+  background: linear-gradient(180deg, var(--brand), var(--info));
+  box-shadow: 0 0 8px rgba(22, 116, 95, 0.42);
+}
+
+@keyframes typing-shimmer {
+  0% {
+    background-position: 220% 0;
+  }
+
+  100% {
+    background-position: -220% 0;
+  }
+}
+
+/* 5. 品牌标识呼吸辉光 --------------------------------------- */
+.brand-mark {
+  animation: brand-pulse 3.2s ease-in-out infinite;
+}
+
+@keyframes brand-pulse {
+  0%,
+  100% {
+    box-shadow: 0 10px 24px rgba(22, 116, 95, 0.24);
+  }
+
+  50% {
+    box-shadow:
+      0 12px 30px rgba(22, 116, 95, 0.44),
+      0 0 0 4px rgba(22, 116, 95, 0.1);
+  }
+}
+
+/* 6. 发送按钮 — 渐变 + shimmer 扫光 + hover 上浮 ------------ */
+.send-button {
+  position: relative;
+  overflow: hidden;
+  color: #fff;
+  background: linear-gradient(135deg, var(--brand), var(--info));
+  box-shadow: 0 8px 20px rgba(22, 116, 95, 0.3);
+}
+
+.send-button::before {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(
+    120deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.45) 50%,
+    transparent 70%
+  );
+  transform: translateX(-130%);
+  transition: transform 620ms ease;
+}
+
+.send-button:hover:not(:disabled)::before {
+  transform: translateX(130%);
+}
+
+.send-button:hover:not(:disabled) {
+  background: linear-gradient(135deg, var(--brand), var(--info));
+  transform: translateY(-1px) scale(1.05);
+  box-shadow: 0 12px 28px rgba(22, 116, 95, 0.44);
+}
+
+.send-button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+}
+
+.send-button:disabled {
+  color: var(--text-faint);
+  background: var(--surface-muted);
+  box-shadow: none;
+}
+
+/* 7. 主操作按钮 shimmer 扫光 -------------------------------- */
+.primary-action {
+  position: relative;
+  overflow: hidden;
+}
+
+.primary-action::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  content: "";
+  background: linear-gradient(
+    120deg,
+    transparent 30%,
+    rgba(255, 255, 255, 0.4) 50%,
+    transparent 70%
+  );
+  transform: translateX(-130%);
+  transition: transform 700ms ease;
+}
+
+.primary-action:hover::after {
+  transform: translateX(130%);
+}
+
+/* 8. 会话行 hover — 左侧 accent 条 + 轻微右移 --------------- */
+.recent-item {
+  position: relative;
+}
+
+.recent-item::before {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 3px;
+  height: 0;
+  border-radius: 999px;
+  content: "";
+  background: linear-gradient(180deg, var(--brand), var(--info));
+  transform: translateY(-50%);
+  transition: height 180ms ease;
+}
+
+.recent-item:hover::before,
+.recent-item.active::before {
+  height: 60%;
+}
+
+.recent-item:hover {
+  transform: translateX(2px);
+}
+
+/* 9. 上下文条 chip — 错位 fade 入场 ------------------------- */
+.context-strip span {
+  animation: chip-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.context-strip span:nth-child(1) {
+  animation-delay: 40ms;
+}
+
+.context-strip span:nth-child(2) {
+  animation-delay: 90ms;
+}
+
+.context-strip span:nth-child(3) {
+  animation-delay: 140ms;
+}
+
+.context-strip span:nth-child(4) {
+  animation-delay: 190ms;
+}
+
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 10. 命令菜单 — 下滑 fade 入场 ------------------------------ */
+.command-menu {
+  transform-origin: top center;
+  animation: menu-slide 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes menu-slide {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scaleY(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+  }
+}
+
+.command-menu button {
+  transition:
+    background 140ms ease,
+    transform 140ms ease;
+}
+
+.command-menu button:hover {
+  transform: translateX(2px);
+}
+
+/* 11. live-card — 动态渐变描边 ------------------------------- */
+.inspector-card.live-card {
+  position: relative;
+  border: 1px solid transparent;
+  background-clip: padding-box;
+}
+
+.inspector-card.live-card::before {
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  border-radius: inherit;
+  content: "";
+  background: conic-gradient(
+    from 0deg,
+    var(--brand),
+    var(--info),
+    var(--brand),
+    var(--info),
+    var(--brand)
+  );
+  opacity: 0.55;
+  animation: border-rotate 6s linear infinite;
+}
+
+@keyframes border-rotate {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 12. 引用 / 反馈按钮 — 复制成功态 --------------------------- */
+.message-tools button.copied {
+  color: var(--success);
+  border-color: rgba(8, 122, 84, 0.28);
+  background: var(--success-soft);
+}
+
+.message-tools button {
+  transition:
+    background 140ms ease,
+    color 140ms ease,
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.message-tools button:hover {
+  transform: translateY(-1px);
+}
+
+/* 13. prompt-grid 按钮 hover 上浮 ---------------------------- */
+.prompt-grid button {
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 160ms ease;
+}
+
+.prompt-grid button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 32px rgba(30, 41, 59, 0.12);
+}
+
+/* 14. inspector 卡片 hover 上浮 ------------------------------ */
+.inspector-card {
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease;
+}
+
+.inspector-card:hover {
+  transform: translateY(-1px);
+}
+
+/* 15. 滚动到底浮动按钮 -------------------------------------- */
+.scroll-to-bottom {
+  position: sticky;
+  bottom: 16px;
+  align-self: center;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-top: -56px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  color: var(--text-strong);
+  background: var(--surface);
+  box-shadow: 0 8px 22px rgba(30, 41, 59, 0.18);
+  cursor: pointer;
+  animation: scroll-btn-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  z-index: 3;
+}
+
+.scroll-to-bottom:hover {
+  color: var(--brand);
+  border-color: var(--brand);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 26px rgba(22, 116, 95, 0.26);
+}
+
+@keyframes scroll-btn-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.85);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* 16. 暗色模式下的微调 -------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  .send-button:hover:not(:disabled) {
+    box-shadow: 0 12px 28px rgba(47, 168, 125, 0.4);
+  }
+
+  .prompt-grid button:hover {
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .scroll-to-bottom {
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.5);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
