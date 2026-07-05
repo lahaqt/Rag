@@ -631,6 +631,11 @@ function App() {
     Object.fromEntries(initialConversations.map((item) => [item.id, item.messages])) as Record<string, Message[]>,
   )
   const [isStreaming, setIsStreaming] = useState(false)
+  const [copiedMessageId, setCopiedMessageId] = useState<number | null>(null)
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false)
+  const chatStageRef = useRef<HTMLDivElement | null>(null)
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const isPinnedRef = useRef(true)
   const nextMessageId = useRef(100)
   const uploadInputRef = useRef<HTMLInputElement | null>(null)
   const composerUploadInputRef = useRef<HTMLInputElement | null>(null)
@@ -676,6 +681,57 @@ function App() {
       return () => clearTimeout(timer)
     }
   }, [activeView, activeId, scrollToMessageId])
+
+  function handleChatStageScroll() {
+    const stage = chatStageRef.current
+    if (!stage) return
+    const remaining = stage.scrollHeight - stage.scrollTop - stage.clientHeight
+    const pinned = remaining <= 120
+    isPinnedRef.current = pinned
+    setShowScrollToBottom(remaining > 120)
+  }
+
+  function scrollChatToBottom() {
+    const stage = chatStageRef.current
+    if (!stage) return
+    stage.scrollTo({ top: stage.scrollHeight, behavior: 'smooth' })
+    isPinnedRef.current = true
+    setShowScrollToBottom(false)
+  }
+
+  async function handleCopyMessage(message: Message) {
+    try {
+      await navigator.clipboard.writeText(message.content)
+      setCopiedMessageId(message.id)
+      if (copiedTimerRef.current) {
+        clearTimeout(copiedTimerRef.current)
+      }
+      copiedTimerRef.current = setTimeout(() => setCopiedMessageId(null), 1600)
+    } catch {
+      /* clipboard unavailable — silently ignore */
+    }
+  }
+
+  // Auto-follow to bottom while streaming / on new messages, if user is pinned.
+  useEffect(() => {
+    if (!isPinnedRef.current) return
+    const stage = chatStageRef.current
+    if (!stage) return
+    stage.scrollTop = stage.scrollHeight
+  }, [messages, isStreaming])
+
+  // Reset pinned state on conversation switch.
+  useEffect(() => {
+    isPinnedRef.current = true
+    setShowScrollToBottom(false)
+  }, [activeId])
+
+  // Clear the copied-feedback timer on unmount.
+  useEffect(() => () => {
+    if (copiedTimerRef.current) {
+      clearTimeout(copiedTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     let ignore = false
@@ -2846,7 +2902,7 @@ function App() {
             </div>
           </header>
 
-        <div className="chat-stage">
+        <div className="chat-stage" ref={chatStageRef} onScroll={handleChatStageScroll}>
           <div className="context-strip">
             <span>
               <CheckCircle2 size={14} />
@@ -2934,6 +2990,9 @@ function App() {
                           }
                           return <p key={index}>{block.text}</p>
                         })}
+                        {isStreaming && message.id === messages[messages.length - 1]?.id && (
+                          <span className="stream-caret" aria-hidden="true" />
+                        )}
                       </div>
                     ) : (
                       <p>{message.content}</p>
@@ -2941,9 +3000,23 @@ function App() {
                   </div>
                   {message.role === 'assistant' && (
                     <div className="message-tools">
-                      <button type="button">
-                        <Copy size={14} />
-                        复制
+                      <button
+                        className={copiedMessageId === message.id ? 'copied' : ''}
+                        onClick={() => handleCopyMessage(message)}
+                        title={copiedMessageId === message.id ? '已复制' : '复制回答'}
+                        type="button"
+                      >
+                        {copiedMessageId === message.id ? (
+                          <>
+                            <CheckCircle2 size={14} />
+                            已复制
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={14} />
+                            复制
+                          </>
+                        )}
                       </button>
                       <button type="button">
                         <BookOpen size={14} />
@@ -3025,6 +3098,17 @@ function App() {
               </article>
             ))}
           </div>
+          {showScrollToBottom && (
+            <button
+              className="scroll-to-bottom"
+              onClick={scrollChatToBottom}
+              title="滚动到底部"
+              aria-label="滚动到底部"
+              type="button"
+            >
+              <ArrowDown size={18} />
+            </button>
+          )}
         </div>
 
         <div className="composer-zone">

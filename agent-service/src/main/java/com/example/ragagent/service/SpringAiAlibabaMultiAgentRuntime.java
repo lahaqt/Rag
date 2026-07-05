@@ -9,7 +9,6 @@ import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.a2a.A2aArtifact;
 import com.example.ragagent.a2a.A2aMessage;
 import com.example.ragagent.a2a.A2aPart;
-import com.example.ragagent.a2a.A2aRuntime;
 import com.example.ragagent.a2a.A2aTask;
 import com.example.ragagent.a2a.A2aTaskExecution;
 import com.example.ragagent.a2a.A2aTaskState;
@@ -29,11 +28,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
-@ConditionalOnProperty(prefix = "rag.multi-agent", name = "runtime", havingValue = "spring-ai-alibaba", matchIfMissing = true)
 public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
     private static final String NODE_PREPARE = "prepare_request";
     private static final String NODE_PLAN = "plan_agents";
@@ -42,7 +39,6 @@ public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
     private static final String KEY_RUN_ID = "runId";
     private static final String KEY_NODE = "node";
 
-    private final A2aRuntime a2aRuntime;
     private final RagProperties properties;
     private final ExecutorService executor;
     private final boolean ownsExecutor;
@@ -52,9 +48,8 @@ public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
     private final ConcurrentMap<String, List<String>> plans = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, A2aTaskExecution> executions = new ConcurrentHashMap<>();
 
-    public SpringAiAlibabaMultiAgentRuntime(A2aRuntime a2aRuntime) {
+    public SpringAiAlibabaMultiAgentRuntime() {
         this(
-                a2aRuntime,
                 new RagProperties(null, null, null, null, null, null, null, null, null),
                 Executors.newFixedThreadPool(4),
                 true
@@ -62,9 +57,8 @@ public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
     }
 
     @Autowired
-    public SpringAiAlibabaMultiAgentRuntime(A2aRuntime a2aRuntime, RagProperties properties) {
+    public SpringAiAlibabaMultiAgentRuntime(RagProperties properties) {
         this(
-                a2aRuntime,
                 properties,
                 Executors.newFixedThreadPool(properties == null || properties.multiAgent() == null
                         ? 4
@@ -74,12 +68,10 @@ public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
     }
 
     public SpringAiAlibabaMultiAgentRuntime(
-            A2aRuntime a2aRuntime,
             RagProperties properties,
             ExecutorService executor,
             boolean ownsExecutor
     ) {
-        this.a2aRuntime = a2aRuntime;
         this.properties = properties == null
                 ? new RagProperties(null, null, null, null, null, null, null, null, null)
                 : properties;
@@ -102,7 +94,7 @@ public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
                     .orElseThrow(() -> new IllegalStateException("Spring AI Alibaba graph returned empty state."));
             A2aTaskExecution execution = executions.get(runId);
             if (execution == null) {
-                throw new IllegalStateException("Spring AI Alibaba graph did not produce an A2A task execution.");
+                throw new IllegalStateException("Spring AI Alibaba graph did not produce a task execution.");
             }
             return execution;
         } finally {
@@ -213,19 +205,82 @@ public class SpringAiAlibabaMultiAgentRuntime implements MultiAgentRuntime {
             int startStep
     ) {
         try {
-            return a2aRuntime.send(
-                    specialistAgent,
-                    request.message(),
-                    request.request(),
-                    request.analysis(),
-                    startStep
-            );
+            SpecialistAgentResult result = specialistAgent.run(request.request(), request.analysis(), startStep);
+            return completedExecution(request, specialistAgent, result);
         } catch (Exception exception) {
             if (!failureIsolationEnabled()) {
                 throw new CompletionException(exception);
             }
             return failedExecution(request, specialistAgent, startStep, exception);
         }
+    }
+
+    private A2aTaskExecution completedExecution(
+            MultiAgentRuntimeRequest request,
+            SpecialistAgent specialistAgent,
+            SpecialistAgentResult result
+    ) {
+        A2aTask task = completedTask(request, specialistAgent, result);
+        SpecialistAgentResult resultWithTask = result.withA2aTask(task);
+        List<AgentTraceStep> trace = new ArrayList<>(result.trace());
+        trace.add(new AgentTraceStep(
+                request.startStep() + trace.size() + 1,
+                "spring_ai_alibaba_agent",
+                request.analysis().route(),
+                specialistAgent.name(),
+                "agent_task_completed",
+                "graph=rag-multi-agent; delegatedAgent=" + specialistAgent.name()
+                        + "; taskId=" + task.id()
+        ));
+        return new A2aTaskExecution(task, resultWithTask, trace);
+    }
+
+    private A2aTask completedTask(
+            MultiAgentRuntimeRequest request,
+            SpecialistAgent specialistAgent,
+            SpecialistAgentResult result
+    ) {
+        A2aMessage taskMessage = new A2aMessage(
+                "agent",
+                "msg-" + UUID.randomUUID(),
+                request.message().contextId(),
+                "task-" + specialistAgent.name() + "-" + UUID.randomUUID(),
+                List.of(),
+                List.of(A2aPart.text(result.toolResult() == null
+                        ? "Agent completed without a tool result."
+                        : result.toolResult().observation()))
+        );
+        return new A2aTask(
+                taskMessage.taskId(),
+                taskMessage.contextId(),
+                completedState(result, taskMessage),
+                List.of(request.message(), taskMessage),
+                List.of(artifact(specialistAgent, result))
+        );
+    }
+
+    private A2aTaskStatus completedState(SpecialistAgentResult result, A2aMessage taskMessage) {
+        A2aTaskState state = result.toolResult() == null || result.toolResult().success()
+                ? A2aTaskState.COMPLETED
+                : A2aTaskState.FAILED;
+        return new A2aTaskStatus(state, taskMessage, Instant.now());
+    }
+
+    private A2aArtifact artifact(SpecialistAgent specialistAgent, SpecialistAgentResult result) {
+        AgentToolResult toolResult = result.toolResult();
+        return new A2aArtifact(
+                "artifact-" + specialistAgent.name() + "-" + UUID.randomUUID(),
+                specialistAgent.name() + "-result",
+                "Specialist result produced inside the Spring AI Alibaba graph runtime.",
+                List.of(
+                        A2aPart.text(toolResult == null ? "" : toolResult.observation()),
+                        A2aPart.data(Map.of(
+                                "agentName", specialistAgent.name(),
+                                "success", toolResult == null || toolResult.success(),
+                                "finishReason", toolResult == null ? "" : toolResult.finishReason()
+                        ))
+                )
+        );
     }
 
     private A2aTaskExecution failedExecution(
