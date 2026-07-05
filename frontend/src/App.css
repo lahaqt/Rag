@@ -135,7 +135,6 @@ button {
 .model-picker button,
 .pill-button,
 .ghost-button,
-.prompt-grid button,
 .message-tools button,
 .sources button,
   .mini-chip,
@@ -168,7 +167,6 @@ button {
 .model-picker button:hover,
 .pill-button:hover,
 .ghost-button:hover,
-.prompt-grid button:hover,
 .message-tools button:hover,
   .sources button:hover,
   .mini-chip:hover,
@@ -1881,28 +1879,6 @@ button {
   border-radius: 12px;
 }
 
-.prompt-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  max-width: 960px;
-  margin: 0 auto 26px;
-}
-
-.prompt-grid button {
-  display: flex;
-  min-height: 58px;
-  align-items: center;
-  gap: 10px;
-  padding: 0 14px;
-  border-color: var(--border);
-  border-radius: 16px;
-  color: var(--text-strong);
-  background: var(--card);
-  box-shadow: var(--soft-shadow);
-  text-align: left;
-}
-
 .message-list {
   display: flex;
   max-width: 960px;
@@ -2804,10 +2780,6 @@ button {
     display: grid;
   }
 
-  .prompt-grid {
-    grid-template-columns: 1fr;
-  }
-
   .message,
   .message.user {
     grid-template-columns: 32px minmax(0, 1fr);
@@ -3156,7 +3128,6 @@ button {
 
 .context-strip,
 .conversation-title,
-.prompt-grid,
 .message-list,
 .command-menu,
 .composer {
@@ -3224,23 +3195,6 @@ button {
 .mcp-call-button {
   min-height: 36px;
   background: var(--surface);
-}
-
-.prompt-grid {
-  gap: 8px;
-  margin-bottom: 24px;
-}
-
-.prompt-grid button {
-  min-height: 60px;
-  border-radius: var(--radius-md);
-  background: var(--surface);
-  box-shadow: none;
-}
-
-.prompt-grid button:hover {
-  transform: translateY(-1px);
-  box-shadow: var(--soft-shadow);
 }
 
 .message-list {
@@ -3881,7 +3835,6 @@ button {
 
 .context-strip,
 .conversation-title,
-.prompt-grid,
 .message-list,
 .command-menu,
 .composer {
@@ -3909,15 +3862,6 @@ button {
 .conversation-title h1 {
   margin-top: 8px;
   letter-spacing: 0;
-}
-
-.prompt-grid button {
-  align-items: center;
-  border-color: var(--border);
-}
-
-.prompt-grid button svg {
-  color: var(--brand);
 }
 
 .message-list {
@@ -4548,19 +4492,6 @@ button {
   transform: translateY(-1px);
 }
 
-/* 13. prompt-grid 按钮 hover 上浮 ---------------------------- */
-.prompt-grid button {
-  transition:
-    transform 180ms ease,
-    box-shadow 180ms ease,
-    border-color 160ms ease;
-}
-
-.prompt-grid button:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 16px 32px rgba(30, 41, 59, 0.12);
-}
-
 /* 14. inspector 卡片 hover 上浮 ------------------------------ */
 .inspector-card {
   transition:
@@ -4616,10 +4547,6 @@ button {
 @media (prefers-color-scheme: dark) {
   .send-button:hover:not(:disabled) {
     box-shadow: 0 12px 28px rgba(47, 168, 125, 0.4);
-  }
-
-  .prompt-grid button:hover {
-    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.4);
   }
 
   .scroll-to-bottom {
