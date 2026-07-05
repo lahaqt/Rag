@@ -25,7 +25,6 @@ import {
   Search,
   Server,
   Settings,
-  ShieldCheck,
   SlidersHorizontal,
   Sparkles,
   TerminalSquare,
@@ -401,12 +400,6 @@ const initialConversations: Conversation[] = [
       },
     ],
   },
-]
-
-const quickPrompts = [
-  { icon: Search, text: '检索当前知识库的关键结论' },
-  { icon: ShieldCheck, text: '只基于引用来源回答' },
-  { icon: FileText, text: '生成接口对接清单' },
 ]
 
 const sourcePreview = [
@@ -2922,18 +2915,6 @@ function App() {
               <FolderKanban size={16} />
               切换知识库
             </button>
-          </div>
-
-          <div className="prompt-grid">
-            {quickPrompts.map((prompt) => {
-              const Icon = prompt.icon
-              return (
-                <button key={prompt.text} onClick={() => sendMessage(undefined, prompt.text)} type="button">
-                  <Icon size={17} />
-                  <span>{prompt.text}</span>
-                </button>
-              )
-            })}
           </div>
 
           <div className="message-list">
