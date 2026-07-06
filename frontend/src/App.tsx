@@ -48,6 +48,7 @@ export type Message = {
   content: string
   sources?: string[]
   citations?: ChatCitation[]
+  retrievalStatus?: RetrievalStatus
   agentMode?: 'default' | 'multi-agent'
   command?: SlashCommandName
   agentTrace?: AgentTraceStep[]
@@ -153,6 +154,30 @@ type ChatCitation = {
   content?: string
 }
 
+type RetrievalHit = {
+  index: number
+  knowledgeBaseId?: string
+  documentId?: string
+  chunkId?: string
+  documentName: string
+  chunkIndex: number
+  content?: string
+  score: number
+}
+
+type RetrievalStatusState = 'idle' | 'retrieving' | 'generating' | 'done' | 'error'
+
+type RetrievalStatus = {
+  state: RetrievalStatusState
+  query?: string
+  rewrittenQuery?: string
+  toolName?: string
+  finishReason?: string
+  hitCount: number
+  averageScore?: number
+  error?: string
+}
+
 type AgentChatResponse = {
   conversationId: string
   answer: string
@@ -164,6 +189,7 @@ type AgentChatResponse = {
   spanId?: string
   rewrittenQuery: string
   citations: ChatCitation[]
+  retrievalHits?: RetrievalHit[]
   agentTrace?: AgentTraceStep[]
   toolName?: string
   webSearchResults?: Array<{
@@ -424,6 +450,94 @@ function citationKey(citation: ChatCitation) {
   return citation.chunkId || `${citation.documentId || citation.documentName}-${citation.chunkIndex}-${citation.index}`
 }
 
+function scoreAverage(items: Array<{ score: number }>) {
+  if (items.length === 0) {
+    return undefined
+  }
+  return items.reduce((total, item) => total + item.score, 0) / items.length
+}
+
+function statusFromCitations(
+  current: RetrievalStatus | undefined,
+  citations: ChatCitation[] = [],
+  retrievalHits: RetrievalHit[] = [],
+): RetrievalStatus {
+  const scoreItems = citations.length > 0 ? citations : retrievalHits
+  return {
+    state: 'done',
+    query: current?.query,
+    rewrittenQuery: current?.rewrittenQuery,
+    toolName: current?.toolName,
+    finishReason: current?.finishReason,
+    hitCount: Math.max(citations.length, retrievalHits.length, current?.hitCount ?? 0),
+    averageScore: scoreAverage(scoreItems) ?? current?.averageScore,
+  }
+}
+
+function statusFromStoredMessage(
+  record: ConversationMessageRecord,
+  parsedCitations: { citations?: ChatCitation[]; sources?: string[] },
+): RetrievalStatus | undefined {
+  if (record.role !== 'assistant') {
+    return undefined
+  }
+  const citations = parsedCitations.citations ?? []
+  const sources = parsedCitations.sources ?? []
+  if (citations.length === 0 && sources.length === 0 && !record.finishReason && !record.toolName) {
+    return undefined
+  }
+  return {
+    state: record.finishReason === 'error' ? 'error' : 'done',
+    toolName: record.toolName,
+    finishReason: record.finishReason,
+    hitCount: citations.length || sources.length,
+    averageScore: scoreAverage(citations),
+  }
+}
+
+function retrievalStatusLabel(status?: RetrievalStatus) {
+  if (!status) {
+    return '暂无检索'
+  }
+  if (status.state === 'retrieving') {
+    return '检索中'
+  }
+  if (status.state === 'generating') {
+    return '生成中'
+  }
+  if (status.state === 'error') {
+    return '失败'
+  }
+  return status.hitCount > 0 ? '已完成' : '无命中'
+}
+
+function retrievalStatusMeta(status?: RetrievalStatus) {
+  if (!status) {
+    return '等待新的对话检索'
+  }
+  const items = [status.toolName, status.finishReason].filter(Boolean)
+  if (items.length > 0) {
+    return items.join(' · ')
+  }
+  return status.rewrittenQuery || status.query || '本轮对话'
+}
+
+function retrievalFlowClass(status: RetrievalStatus | undefined, stage: 'query' | 'retrieve' | 'generate') {
+  if (!status || status.state === 'idle') {
+    return ''
+  }
+  if (status.state === 'error') {
+    return stage === 'query' ? 'done' : 'error'
+  }
+  if (stage === 'query') {
+    return 'done'
+  }
+  if (stage === 'retrieve') {
+    return ['retrieving', 'generating', 'done'].includes(status.state) ? 'done' : ''
+  }
+  return ['generating', 'done'].includes(status.state) ? 'done' : ''
+}
+
 function formatDate(value?: string | null) {
   if (!value) {
     return '-'
@@ -546,6 +660,7 @@ function mapMessageRecord(record: ConversationMessageRecord): Message {
     content: record.content,
     citations: parsedCitations.citations,
     sources: parsedCitations.sources,
+    retrievalStatus: statusFromStoredMessage(record, parsedCitations),
   }
 }
 
@@ -652,6 +767,11 @@ function App() {
 
   const activeCitations = useMemo(
     () => [...messages].reverse().find((message) => message.role === 'assistant' && message.citations?.length)?.citations ?? [],
+    [messages],
+  )
+
+  const latestRetrievalStatus = useMemo(
+    () => [...messages].reverse().find((message) => message.role === 'assistant' && message.retrievalStatus)?.retrievalStatus,
     [messages],
   )
 
@@ -1104,6 +1224,9 @@ function App() {
         updateMessage(conversationId, assistantMessageId, (message) => ({
           ...message,
           content: message.content + content,
+          retrievalStatus: message.retrievalStatus
+            ? { ...message.retrievalStatus, state: 'generating' }
+            : message.retrievalStatus,
         }))
       } else if (event === 'answer_reset') {
         updateMessage(conversationId, assistantMessageId, (message) => ({
@@ -1115,6 +1238,13 @@ function App() {
         updateMessage(conversationId, assistantMessageId, (message) => ({
           ...message,
           agentTrace: mergeTrace(message.agentTrace, [step]),
+          retrievalStatus: message.retrievalStatus
+            ? {
+                ...message.retrievalStatus,
+                state: message.retrievalStatus.state === 'generating' ? 'generating' : 'retrieving',
+                toolName: step.toolName || message.retrievalStatus.toolName,
+              }
+            : message.retrievalStatus,
         }))
       } else if (event === 'metadata' && typeof data === 'object' && data) {
         const metadata = data as Partial<AgentChatResponse>
@@ -1123,6 +1253,22 @@ function App() {
           traceId: metadata.traceId,
           spanId: metadata.spanId,
           agentTrace: mergeTrace(message.agentTrace, metadata.agentTrace),
+          retrievalStatus: message.retrievalStatus
+            ? {
+                ...message.retrievalStatus,
+                state: 'generating',
+                rewrittenQuery: metadata.rewrittenQuery || message.retrievalStatus.rewrittenQuery,
+                toolName: metadata.toolName || message.retrievalStatus.toolName,
+                finishReason: metadata.finishReason || message.retrievalStatus.finishReason,
+              }
+            : message.retrievalStatus,
+        }))
+      } else if (event === 'citations' && Array.isArray(data)) {
+        const citations = data.filter(isChatCitation)
+        updateMessage(conversationId, assistantMessageId, (message) => ({
+          ...message,
+          citations,
+          retrievalStatus: statusFromCitations(message.retrievalStatus, citations),
         }))
       } else if (event === 'done') {
         completedResponses.push(data as AgentChatResponse)
@@ -1272,6 +1418,11 @@ function App() {
       agentMode: isMultiAgent ? 'multi-agent' : 'default',
       command: commandName,
       agentTrace: [],
+      retrievalStatus: {
+        state: 'retrieving',
+        query,
+        hitCount: 0,
+      },
     }
     setMessagesByConversation((current) => ({
       ...current,
@@ -1318,6 +1469,18 @@ function App() {
           feedbackQuestion: query,
           feedbackKnowledgeBaseId: activeKnowledgeBaseId,
           citations: chatResponse.citations,
+          retrievalStatus: statusFromCitations(
+            {
+              state: 'done',
+              query,
+              rewrittenQuery: chatResponse.rewrittenQuery,
+              toolName: chatResponse.toolName,
+              finishReason: chatResponse.finishReason,
+              hitCount: 0,
+            },
+            chatResponse.citations,
+            chatResponse.retrievalHits,
+          ),
           sources:
             chatResponse.citations.length > 0
               ? chatResponse.citations.map(
@@ -1353,6 +1516,12 @@ function App() {
           content: error instanceof Error ? `Agent 问答失败：${error.message}` : 'Agent 问答失败',
           agentMode: isMultiAgent ? 'multi-agent' : 'default',
           command: commandName,
+          retrievalStatus: {
+            state: 'error',
+            query,
+            hitCount: 0,
+            error: error instanceof Error ? error.message : 'Agent 问答失败',
+          },
         }
         updateMessage(activeId, assistantMessageId, () => errorAssistantMessage)
       })
@@ -3165,23 +3334,29 @@ function App() {
         <section className="inspector-card live-card">
           <div className="inspector-heading">
             <span>检索状态</span>
-            <strong>Ready</strong>
+            <strong>{retrievalStatusLabel(latestRetrievalStatus)}</strong>
           </div>
           <div className="retrieval-flow">
-            <div className="done">Query</div>
-            <div className="done">Retrieve</div>
-            <div>Generate</div>
+            <div className={retrievalFlowClass(latestRetrievalStatus, 'query')}>Query</div>
+            <div className={retrievalFlowClass(latestRetrievalStatus, 'retrieve')}>Retrieve</div>
+            <div className={retrievalFlowClass(latestRetrievalStatus, 'generate')}>Generate</div>
           </div>
+          <p className="retrieval-meta">{retrievalStatusMeta(latestRetrievalStatus)}</p>
           <div className="metrics">
             <div>
               <span>命中文档</span>
-              <strong>8</strong>
+              <strong>{latestRetrievalStatus?.hitCount ?? 0}</strong>
             </div>
             <div>
               <span>平均相似度</span>
-              <strong>0.78</strong>
+              <strong>
+                {typeof latestRetrievalStatus?.averageScore === 'number'
+                  ? latestRetrievalStatus.averageScore.toFixed(2)
+                  : '-'}
+              </strong>
             </div>
           </div>
+          {latestRetrievalStatus?.error && <p className="retrieval-error">{latestRetrievalStatus.error}</p>}
         </section>
 
         <section className="inspector-card">

@@ -2421,6 +2421,24 @@ button {
   border-color: rgba(28, 125, 95, 0.2);
 }
 
+.retrieval-flow .error {
+  color: #9f2f2f;
+  background: rgba(207, 77, 77, 0.11);
+  border-color: rgba(207, 77, 77, 0.24);
+}
+
+.retrieval-meta,
+.retrieval-error {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.retrieval-error {
+  color: #9f2f2f;
+}
+
 .inspector-card label {
   display: grid;
   gap: 7px;
