@@ -1,11 +1,11 @@
 package com.example.ragagent.service;
 
-import com.example.ragagent.a2a.A2aAgentCard;
-import com.example.ragagent.a2a.A2aAgentSkill;
-import com.example.ragagent.a2a.A2aCards;
+import com.example.ragagent.a2a.A2aAgentCards;
 import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
+import io.a2a.spec.AgentCard;
+import io.a2a.spec.AgentSkill;
 import java.util.List;
 import org.springframework.stereotype.Service;
 
@@ -23,20 +23,20 @@ public class McpToolAgent implements SpecialistAgent {
     }
 
     @Override
-    public A2aAgentCard agentCard() {
-        return A2aCards.specialist(
+    public AgentCard agentCard() {
+        return A2aAgentCards.specialist(
                 name(),
                 "MCP Tool Agent",
                 "Selects and invokes connected Model Context Protocol tools.",
-                new A2aAgentSkill(
-                        "mcp_tool_call",
-                        "MCP tool call",
-                        "Call enterprise tools exposed through configured MCP servers.",
-                        List.of("mcp", "tool", "enterprise-api"),
-                        List.of("Use the order status MCP tool.", "Call the customer profile tool."),
-                        List.of("text/plain"),
-                        List.of("text/plain", "application/json")
-                )
+                new AgentSkill.Builder()
+                        .id("mcp_tool_call")
+                        .name("MCP tool call")
+                        .description("Call enterprise tools exposed through configured MCP servers.")
+                        .tags(List.of("mcp", "tool", "enterprise-api"))
+                        .examples(List.of("Use the order status MCP tool.", "Call the customer profile tool."))
+                        .inputModes(List.of("text/plain"))
+                        .outputModes(List.of("text/plain", "application/json"))
+                        .build()
         );
     }
 

@@ -4,6 +4,23 @@ server:
 spring:
   application:
     name: rag-agent-service
+  ai:
+    alibaba:
+      a2a:
+        server:
+          type: jsonrpc
+          agent-card-url: /.well-known/agent.json
+          message-url: /api/chat/multi-agent/a2a
+          version: 0.3.0
+          card:
+            name: RAG Multi-Agent Orchestrator
+            description: Routes explicit /multi-agent chat requests through the Spring AI Alibaba graph runtime.
+            url: http://127.0.0.1:28083/api/chat/multi-agent/a2a
+        nacos:
+          registry:
+            enabled: false
+          discovery:
+            enabled: false
   datasource:
     url: jdbc:postgresql://localhost:25432/rag
     username: rag
