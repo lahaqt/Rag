@@ -46,6 +46,11 @@ Thumbs.db
 *.sln
 *.sw?
 /docs
+/documents/
+docs/
+documents/
+test/
+tests/
 /.playwright-mcp
 rag-home.png
 /.claude
