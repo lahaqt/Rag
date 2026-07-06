@@ -9,9 +9,24 @@ public record ChatRequest(
         String knowledgeBaseId,
         String conversationId,
         @Valid List<ChatMessage> history,
-        ChatOptions options
+        ChatOptions options,
+        @Valid List<ChatAttachment> attachments
 ) {
+    public ChatRequest(
+            String query,
+            String knowledgeBaseId,
+            String conversationId,
+            List<ChatMessage> history,
+            ChatOptions options
+    ) {
+        this(query, knowledgeBaseId, conversationId, history, options, List.of());
+    }
+
     public List<ChatMessage> normalizedHistory() {
         return history == null ? List.of() : history;
+    }
+
+    public List<ChatAttachment> normalizedAttachments() {
+        return attachments == null ? List.of() : attachments;
     }
 }
