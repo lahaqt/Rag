@@ -40,6 +40,14 @@ import type { ChangeEvent, FormEvent } from 'react'
 import { searchConversations } from './search'
 import type { SearchResult } from './search'
 import { shouldSkipFeedback } from './feedback'
+import type { ChatAttachment } from './attachments'
+import {
+  formatAttachmentSize,
+  isAllowedAttachmentType,
+  MAX_ATTACHMENT_COUNT,
+  MAX_ATTACHMENT_SIZE,
+  readAttachment,
+} from './attachments'
 import './App.css'
 
 export type Message = {
@@ -63,6 +71,7 @@ export type Message = {
   feedbackError?: string
   feedbackQuestion?: string
   feedbackKnowledgeBaseId?: string
+  attachments?: ChatAttachment[]
 }
 
 export type Conversation = {
@@ -700,6 +709,7 @@ function App() {
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [activeKnowledgeBaseId, setActiveKnowledgeBaseId] = useState('')
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([])
+  const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([])
   const [vectorStatus, setVectorStatus] = useState<VectorStatus | null>(null)
   const [knowledgeLoading, setKnowledgeLoading] = useState(false)
   const [knowledgeError, setKnowledgeError] = useState('')
@@ -1358,6 +1368,7 @@ function App() {
       content: text,
       agentMode: isMultiAgent ? 'multi-agent' : 'default',
       command: commandName,
+      attachments: pendingAttachments.length > 0 ? [...pendingAttachments] : undefined,
     }
 
     const assistantMessageId = nextMessageId.current++
@@ -1367,7 +1378,9 @@ function App() {
       content: '正在处理请求...',
     }
 
+    const attachmentsForRequest = pendingAttachments.length > 0 ? [...pendingAttachments] : undefined
     setDraft('')
+    setPendingAttachments([])
     setMessagesByConversation((current) => ({
       ...current,
       [activeId]: [...(current[activeId] ?? []), nextUserMessage],
@@ -1447,6 +1460,7 @@ function App() {
           queryExpansionCount: 4,
           userId: USER_ID,
         },
+        attachments: attachmentsForRequest,
       },
       activeId,
       assistantMessageId,
@@ -1654,20 +1668,39 @@ function App() {
     setPreviewLoading(false)
   }
 
-  function handleComposerUploadChange(event: ChangeEvent<HTMLInputElement>) {
+  async function handleComposerUploadChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0]
     if (event.target) {
       event.target.value = ''
     }
     if (!file) return
-    if (file.type.startsWith('image/')) {
-      window.alert(
-        `无法读取图片「${file.name}」：当前模型不支持图片输入。请改用文本或 PDF / Word 等可解析的文档类型。`,
-      )
+
+    if (!isAllowedAttachmentType(file)) {
+      window.alert(`Cannot attach ${file.name}. Only TXT, Markdown, CSV, and JSON files are supported.`)
       return
     }
+
+    if (file.size > MAX_ATTACHMENT_SIZE) {
+      window.alert(`${file.name} exceeds the 1 MB attachment limit.`)
+      return
+    }
+
+    if (pendingAttachments.length >= MAX_ATTACHMENT_COUNT) {
+      window.alert(`A message can include at most ${MAX_ATTACHMENT_COUNT} attachments.`)
+      return
+    }
+
     setKnowledgeError('')
-    uploadDocument(file)
+    try {
+      const attachment = await readAttachment(file)
+      setPendingAttachments((current) => [...current, attachment])
+    } catch (error) {
+      window.alert(`Failed to read ${file.name}: ${error instanceof Error ? error.message : 'unknown error'}`)
+    }
+  }
+
+  function removePendingAttachment(index: number) {
+    setPendingAttachments((current) => current.filter((_, itemIndex) => itemIndex !== index))
   }
 
   async function apiErrorMessage(response: Response, fallback: string) {
@@ -3148,6 +3181,22 @@ function App() {
                       <p>{message.content}</p>
                     )}
                   </div>
+                  {message.role === 'user' && message.attachments && message.attachments.length > 0 && (
+                    <div className="message-attachments">
+                      {message.attachments.map((attachment, index) => (
+                        <details key={`${attachment.fileName}-${index}`} className="attachment-card readonly">
+                          <summary>
+                            <span className="attachment-name">{attachment.fileName}</span>
+                            <span className="attachment-size">{formatAttachmentSize(attachment.size)}</span>
+                          </summary>
+                          <pre className="attachment-preview">
+                            {attachment.content.slice(0, 500)}
+                            {attachment.content.length > 500 ? '...' : ''}
+                          </pre>
+                        </details>
+                      ))}
+                    </div>
+                  )}
                   {message.role === 'assistant' && (
                     <div className="message-tools">
                       <button
@@ -3295,6 +3344,30 @@ function App() {
             </div>
           )}
           <form className="composer" onSubmit={sendMessage}>
+            {pendingAttachments.length > 0 && (
+              <div className="composer-attachments">
+                {pendingAttachments.map((attachment, index) => (
+                  <details key={`${attachment.fileName}-${index}`} className="attachment-card">
+                    <summary>
+                      <span className="attachment-name">{attachment.fileName}</span>
+                      <span className="attachment-size">{formatAttachmentSize(attachment.size)}</span>
+                      <button
+                        type="button"
+                        className="attachment-remove"
+                        onClick={() => removePendingAttachment(index)}
+                        title="Remove attachment"
+                      >
+                        x
+                      </button>
+                    </summary>
+                    <pre className="attachment-preview">
+                      {attachment.content.slice(0, 500)}
+                      {attachment.content.length > 500 ? '...' : ''}
+                    </pre>
+                  </details>
+                ))}
+              </div>
+            )}
             <textarea
               aria-label="输入问题"
               onChange={(event) => setDraft(event.target.value)}
@@ -3313,7 +3386,7 @@ function App() {
                   <Paperclip size={17} />
                 </button>
                 <input
-                  accept="*"
+                  accept=".txt,.md,.markdown,.csv,.json,text/plain,text/markdown,text/csv,application/json"
                   hidden
                   onChange={handleComposerUploadChange}
                   ref={composerUploadInputRef}

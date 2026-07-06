@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.dto.ChatAttachment;
 import com.example.ragagent.dto.ChatMessage;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
@@ -77,8 +78,13 @@ public class PromptBuilder {
         prompt.append("改写后问题：").append(nullToEmpty(analysis.rewrittenQuery())).append("\n");
         prompt.append("意图：").append(nullToEmpty(analysis.intent())).append("\n\n");
 
+        int remainingContextCharacters = appendAttachments(
+                prompt,
+                request.normalizedAttachments(),
+                properties.prompt().maxContextCharacters()
+        );
         appendHistory(prompt, request.normalizedHistory());
-        appendContext(prompt, hits);
+        appendContext(prompt, hits, remainingContextCharacters);
 
         prompt.append("""
 
@@ -111,8 +117,13 @@ public class PromptBuilder {
         prompt.append("工具：").append(toolDecision.toolName()).append("\n");
         prompt.append("搜索 query：").append(toolDecision.query()).append("\n\n");
 
+        int remainingContextCharacters = appendAttachments(
+                prompt,
+                request.normalizedAttachments(),
+                properties.prompt().maxContextCharacters()
+        );
         appendHistory(prompt, request.normalizedHistory());
-        appendWebResults(prompt, results);
+        appendWebResults(prompt, results, remainingContextCharacters);
 
         prompt.append("""
 
@@ -140,10 +151,15 @@ public class PromptBuilder {
         prompt.append("工具：").append(nullToEmpty(toolResult.toolName())).append("\n");
         prompt.append("工具 query：").append(nullToEmpty(toolResult.query())).append("\n\n");
 
+        int remainingContextCharacters = appendAttachments(
+                prompt,
+                request.normalizedAttachments(),
+                properties.prompt().maxContextCharacters()
+        );
         appendHistory(prompt, request.normalizedHistory());
 
         prompt.append("MCP 工具返回：\n");
-        prompt.append(trim(nullToEmpty(toolResult.observation()), properties.prompt().maxContextCharacters()));
+        prompt.append(trim(nullToEmpty(toolResult.observation()), remainingContextCharacters));
         prompt.append("""
 
                 请基于上面的 MCP 工具返回回答用户问题。
@@ -165,12 +181,17 @@ public class PromptBuilder {
         prompt.append("意图：").append(nullToEmpty(analysis.intent())).append("\n");
         prompt.append("执行结果：").append(nullToEmpty(toolResult.finishReason())).append("\n\n");
 
+        int remainingContextCharacters = appendAttachments(
+                prompt,
+                request.normalizedAttachments(),
+                properties.prompt().maxContextCharacters()
+        );
         appendHistory(prompt, request.normalizedHistory());
-        appendContext(prompt, toolResult.retrievalHits());
+        remainingContextCharacters = appendContext(prompt, toolResult.retrievalHits(), remainingContextCharacters);
         prompt.append("\n");
-        appendWebResults(prompt, toolResult.webSearchResults());
+        remainingContextCharacters = appendWebResults(prompt, toolResult.webSearchResults(), remainingContextCharacters);
         prompt.append("\nAgent observations:\n");
-        prompt.append(trim(nullToEmpty(toolResult.observation()), properties.prompt().maxContextCharacters()));
+        prompt.append(trim(nullToEmpty(toolResult.observation()), remainingContextCharacters));
         prompt.append("""
 
                 请基于上面的多 Agent 结果回答用户问题。
@@ -185,6 +206,41 @@ public class PromptBuilder {
             return;
         }
         prompt.append("\n反思提示：").append(reflectionHint).append("\n");
+    }
+
+    private int appendAttachments(StringBuilder prompt, List<ChatAttachment> attachments, int maxCharacters) {
+        if (attachments == null || attachments.isEmpty()) {
+            return maxCharacters;
+        }
+
+        int remaining = maxCharacters;
+        int index = 1;
+        StringBuilder section = new StringBuilder("Attachments:\n");
+        for (ChatAttachment attachment : attachments) {
+            if (attachment == null || attachment.content() == null || attachment.content().isBlank()) {
+                continue;
+            }
+            String block = "[%d] File: %s\n%s\n\n".formatted(
+                    index++,
+                    nullToEmpty(attachment.fileName()),
+                    nullToEmpty(attachment.content())
+            );
+            if (block.length() > remaining) {
+                section.append(trim(block, remaining));
+                remaining = 0;
+                break;
+            }
+            section.append(block);
+            remaining -= block.length();
+            if (remaining <= 0) {
+                break;
+            }
+        }
+        if (index == 1) {
+            return maxCharacters;
+        }
+        prompt.append(section).append("\n");
+        return remaining;
     }
 
     private void appendHistory(StringBuilder prompt, List<ChatMessage> history) {
@@ -217,14 +273,18 @@ public class PromptBuilder {
                 .append("\n");
     }
 
-    private void appendContext(StringBuilder prompt, List<RetrievalHit> hits) {
+    private int appendContext(StringBuilder prompt, List<RetrievalHit> hits) {
+        return appendContext(prompt, hits, properties.prompt().maxContextCharacters());
+    }
+
+    private int appendContext(StringBuilder prompt, List<RetrievalHit> hits, int maxCharacters) {
         prompt.append("知识库片段：\n");
         if (hits.isEmpty()) {
             prompt.append("(无检索结果)\n");
-            return;
+            return maxCharacters;
         }
 
-        int remaining = properties.prompt().maxContextCharacters();
+        int remaining = maxCharacters;
         for (RetrievalHit hit : hits) {
             String block = "[%d] 文档：%s，chunk：%s，分数：%.4f\n%s\n\n".formatted(
                     hit.index(),
@@ -243,16 +303,21 @@ public class PromptBuilder {
                 break;
             }
         }
+        return remaining;
     }
 
-    private void appendWebResults(StringBuilder prompt, List<WebSearchResult> results) {
+    private int appendWebResults(StringBuilder prompt, List<WebSearchResult> results) {
+        return appendWebResults(prompt, results, properties.prompt().maxContextCharacters());
+    }
+
+    private int appendWebResults(StringBuilder prompt, List<WebSearchResult> results, int maxCharacters) {
         prompt.append("网页搜索结果：\n");
         if (results.isEmpty()) {
             prompt.append("(无搜索结果)\n");
-            return;
+            return maxCharacters;
         }
 
-        int remaining = properties.prompt().maxContextCharacters();
+        int remaining = maxCharacters;
         for (WebSearchResult result : results) {
             String block = "[%d] 标题：%s\nURL：%s\n摘要：%s\n\n".formatted(
                     result.index(),
@@ -270,10 +335,11 @@ public class PromptBuilder {
                 break;
             }
         }
+        return remaining;
     }
 
     private String trim(String value, int maxLength) {
-        if (value == null) {
+        if (value == null || maxLength <= 0) {
             return "";
         }
         String normalized = value.replaceAll("\\s+", " ").trim();
