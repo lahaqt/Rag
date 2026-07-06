@@ -3306,7 +3306,7 @@ button {
 
 .composer-zone {
   padding: 12px min(6vw, 72px) 22px;
-  background: linear-gradient(180deg, rgba(247, 248, 250, 0), var(--workspace) 28%);
+  background: linear-gradient(180deg, rgba(232, 244, 252, 0), var(--workspace) 28%);
 }
 
 .command-menu,
@@ -3976,8 +3976,7 @@ button {
 }
 
 @media (prefers-color-scheme: dark) {
-  .app-shell,
-  .app-shell.library-mode {
+  .app-shell {
     background:
       linear-gradient(135deg, rgba(22, 116, 95, 0.06), transparent 34%),
       linear-gradient(315deg, rgba(59, 130, 246, 0.05), transparent 32%),
@@ -4080,8 +4079,8 @@ button {
   content: "";
   opacity: 0.6;
   background-image:
-    linear-gradient(rgba(22, 116, 95, 0.08) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(37, 99, 235, 0.07) 1px, transparent 1px);
+    linear-gradient(rgba(22, 116, 95, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59, 130, 246, 0.04) 1px, transparent 1px);
   background-size: 42px 42px;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.84), rgba(0, 0, 0, 0.2) 72%, transparent);
   animation: background-grid-drift 26s linear infinite;
@@ -4098,9 +4097,9 @@ button {
   content: "";
   opacity: 0.72;
   background:
-    linear-gradient(118deg, transparent 8%, rgba(22, 116, 95, 0.16) 22%, transparent 38%),
-    linear-gradient(302deg, transparent 18%, rgba(37, 99, 235, 0.12) 44%, transparent 64%),
-    linear-gradient(18deg, rgba(255, 255, 255, 0.44), transparent 48%);
+    linear-gradient(118deg, transparent 8%, rgba(22, 116, 95, 0.12) 22%, transparent 38%),
+    linear-gradient(302deg, transparent 18%, rgba(59, 130, 246, 0.1) 44%, transparent 64%),
+    linear-gradient(18deg, rgba(255, 255, 255, 0.4), transparent 48%);
   background-size: 230% 230%, 260% 260%, 170% 170%;
   animation: background-light-sweep 18s ease-in-out infinite alternate;
 }
@@ -4141,21 +4140,21 @@ button {
   .library-page::before,
   .mcp-page::before,
   .search-page::before {
-    opacity: 0.38;
+    opacity: 0.35;
     background-image:
-      linear-gradient(rgba(47, 168, 125, 0.12) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(110, 168, 255, 0.1) 1px, transparent 1px);
+      linear-gradient(rgba(47, 168, 125, 0.1) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(110, 168, 255, 0.08) 1px, transparent 1px);
   }
 
   .workspace::after,
   .library-page::after,
   .mcp-page::after,
   .search-page::after {
-    opacity: 0.42;
+    opacity: 0.4;
     background:
-      linear-gradient(118deg, transparent 8%, rgba(47, 168, 125, 0.18) 22%, transparent 38%),
-      linear-gradient(302deg, transparent 18%, rgba(110, 168, 255, 0.13) 44%, transparent 64%),
-      linear-gradient(18deg, rgba(255, 255, 255, 0.04), transparent 48%);
+      linear-gradient(118deg, transparent 8%, rgba(47, 168, 125, 0.15) 22%, transparent 38%),
+      linear-gradient(302deg, transparent 18%, rgba(110, 168, 255, 0.11) 44%, transparent 64%),
+      linear-gradient(18deg, rgba(255, 255, 255, 0.03), transparent 48%);
   }
 }
 
