@@ -11,11 +11,14 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class VectorIndexService implements VectorIndexPort {
     private static final int RRF_K = 60;
+    private static final Logger log = LoggerFactory.getLogger(VectorIndexService.class);
 
     private final EmbeddingClient embeddingClient;
     private final VectorStore vectorStore;
@@ -93,7 +96,15 @@ public class VectorIndexService implements VectorIndexPort {
         int candidateTopK = Math.max(topK * 3, topK);
         List<List<VectorSearchMatch>> rankedLists = new ArrayList<>();
         if ("vector".equals(mode) || "hybrid".equals(mode)) {
-            rankedLists.addAll(vectorSearch(knowledgeBaseId, queries, candidateTopK, similarityThreshold));
+            try {
+                rankedLists.addAll(vectorSearch(knowledgeBaseId, queries, candidateTopK, similarityThreshold));
+            } catch (RuntimeException exception) {
+                if ("vector".equals(mode)) {
+                    throw exception;
+                }
+                log.warn("Vector retrieval failed in hybrid mode; falling back to BM25. knowledgeBaseId={} queryCount={} error={}",
+                        knowledgeBaseId, queries.size(), exception.getMessage());
+            }
         }
         if ("bm25".equals(mode) || "hybrid".equals(mode)) {
             rankedLists.addAll(bm25Search(knowledgeBaseId, queries, candidateTopK));

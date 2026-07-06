@@ -57,3 +57,8 @@ rag-home.png
 /%SystemDrive%
 *.md
 .worktrees/
+/.superpowers
+/.codex-run
+evaluation-service/datasets/sample_rag_eval.jsonl
+evaluation-service/datasets/documents_generated_eval.jsonl
+/!

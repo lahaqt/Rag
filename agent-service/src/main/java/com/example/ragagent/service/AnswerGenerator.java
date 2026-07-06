@@ -5,12 +5,16 @@ import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
 import com.example.ragagent.dto.WebSearchResult;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Supplier;
+import java.util.regex.Pattern;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AnswerGenerator {
+    private static final Pattern CITATION_MARKER = Pattern.compile("\\[\\d+]");
+
     private final LlmGateway llmGateway;
     private final PromptBuilder promptBuilder;
     private final RagProperties properties;
@@ -70,6 +74,7 @@ public class AnswerGenerator {
                         properties.llm().temperature(),
                         properties.llm().maxTokens()
                 );
+                answer = ensureCitationMarkers(answer, retrievalCitationIndexes(hits));
                 String finishReason = reflectionHint == null || reflectionHint.isBlank()
                         ? "llm_generated" : "llm_generated_reflection_retry";
                 return new AnswerDraft(answer, true, finishReason);
@@ -123,6 +128,7 @@ public class AnswerGenerator {
                         properties.llm().temperature(),
                         properties.llm().maxTokens()
                 );
+                answer = ensureCitationMarkers(answer, webCitationIndexes(results));
                 boolean retry = reflectionHint != null && !reflectionHint.isBlank();
                 return new AnswerDraft(answer, true,
                         retry ? "web_search_llm_generated_retry" : "web_search_llm_generated");
@@ -213,6 +219,7 @@ public class AnswerGenerator {
                         properties.llm().temperature(),
                         properties.llm().maxTokens()
                 );
+                answer = ensureCitationMarkers(answer, multiAgentCitationIndexes(toolResult));
                 boolean retry = reflectionHint != null && !reflectionHint.isBlank();
                 return new AnswerDraft(answer, true,
                         retry ? "multi_agent_llm_generated_retry" : "multi_agent_llm_generated");
@@ -323,6 +330,34 @@ public class AnswerGenerator {
             answer.append("Agent observations:\n").append(toolResult.observation());
         }
         return answer.toString().trim();
+    }
+
+    private String ensureCitationMarkers(String answer, List<Integer> citationIndexes) {
+        if (answer == null || answer.isBlank() || citationIndexes.isEmpty()
+                || CITATION_MARKER.matcher(answer).find()) {
+            return answer;
+        }
+        StringBuilder suffix = new StringBuilder("\n\n参考来源：");
+        citationIndexes.stream()
+                .distinct()
+                .limit(3)
+                .forEach(index -> suffix.append("[").append(index).append("] "));
+        return answer.stripTrailing() + suffix.toString().stripTrailing();
+    }
+
+    private List<Integer> retrievalCitationIndexes(List<RetrievalHit> hits) {
+        return hits.stream().map(RetrievalHit::index).toList();
+    }
+
+    private List<Integer> webCitationIndexes(List<WebSearchResult> results) {
+        return results.stream().map(WebSearchResult::index).toList();
+    }
+
+    private List<Integer> multiAgentCitationIndexes(AgentToolResult toolResult) {
+        List<Integer> indexes = new ArrayList<>();
+        indexes.addAll(retrievalCitationIndexes(toolResult.retrievalHits()));
+        indexes.addAll(webCitationIndexes(toolResult.webSearchResults()));
+        return indexes;
     }
 
     private String safeObservation(AgentToolResult toolResult) {
