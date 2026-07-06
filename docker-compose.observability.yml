@@ -1,0 +1,29 @@
+services:
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    container_name: rag-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+    networks:
+      - rag_default
+
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: rag-otel-collector
+    command: ["--config=/etc/otelcol/config.yml"]
+    volumes:
+      - ./observability/otel-collector-config.yml:/etc/otelcol/config.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "55679:55679"
+    depends_on:
+      - jaeger
+    networks:
+      - rag_default
+
+networks:
+  rag_default:
+    driver: bridge

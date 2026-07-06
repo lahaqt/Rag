@@ -1,11 +1,11 @@
 package com.example.ragagent.service;
 
-import com.example.ragagent.a2a.A2aAgentCard;
-import com.example.ragagent.a2a.A2aAgentSkill;
-import com.example.ragagent.a2a.A2aCards;
+import com.example.ragagent.a2a.A2aAgentCards;
 import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
+import io.a2a.spec.AgentCard;
+import io.a2a.spec.AgentSkill;
 import java.util.List;
 import org.springframework.stereotype.Service;
 
@@ -23,20 +23,20 @@ public class WebSearchAgent implements SpecialistAgent {
     }
 
     @Override
-    public A2aAgentCard agentCard() {
-        return A2aCards.specialist(
+    public AgentCard agentCard() {
+        return A2aAgentCards.specialist(
                 name(),
                 "Web Search Agent",
                 "Searches current external information for realtime questions.",
-                new A2aAgentSkill(
-                        "web_search",
-                        "Realtime web search",
-                        "Find current weather, news, prices, exchange rates, and other time-sensitive information.",
-                        List.of("web", "realtime", "search"),
-                        List.of("What is Beijing weather today?", "Search the latest logistics delay news."),
-                        List.of("text/plain"),
-                        List.of("text/plain", "application/json")
-                )
+                new AgentSkill.Builder()
+                        .id("web_search")
+                        .name("Realtime web search")
+                        .description("Find current weather, news, prices, exchange rates, and other time-sensitive information.")
+                        .tags(List.of("web", "realtime", "search"))
+                        .examples(List.of("What is Beijing weather today?", "Search the latest logistics delay news."))
+                        .inputModes(List.of("text/plain"))
+                        .outputModes(List.of("text/plain", "application/json"))
+                        .build()
         );
     }
 
