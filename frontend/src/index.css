@@ -1,3 +1,8 @@
+/*
+ * ── Glacier Glass — backed-up original token set ──────────────────────────
+ * To restore, copy back into the :root and dark-mode blocks below.
+ */
+/*
 :root {
   --app-bg: #edf1f5;
   --workspace: #f6f7f9;
@@ -95,6 +100,110 @@
     --success: #5fd3a5;
     --success-soft: rgba(95, 211, 165, 0.14);
     --sidebar-hover: rgba(255, 255, 255, 0.065);
+    --sidebar-active: rgba(47, 168, 125, 0.17);
+    --soft-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 18px 38px rgba(0, 0, 0, 0.25);
+    --composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.36), 0 24px 58px rgba(0, 0, 0, 0.36);
+  }
+}
+*/
+
+:root {
+  --app-bg: #e8f4fc;
+  --workspace: #f6f9fc;
+  --sidebar-bg: #eaf6fc;
+  --panel: rgba(255, 255, 255, 0.78);
+  --panel-soft: rgba(255, 255, 255, 0.7);
+  --topbar: rgba(255, 255, 255, 0.82);
+  --surface: rgba(255, 255, 255, 0.72);
+  --surface-muted: rgba(232, 244, 252, 0.65);
+  --card: rgba(255, 255, 255, 0.74);
+  --composer: rgba(255, 255, 255, 0.82);
+  --assistant-bubble: rgba(255, 255, 255, 0.8);
+  --user-bubble: linear-gradient(135deg, #0f4c75, #1a5a8a);
+  --control: rgba(255, 255, 255, 0.68);
+  --hover: rgba(37, 99, 235, 0.06);
+  --active: rgba(22, 116, 95, 0.11);
+  --input: rgba(255, 255, 255, 0.85);
+  --border: rgba(37, 99, 235, 0.12);
+  --border-strong: rgba(37, 99, 235, 0.2);
+  --library-border: rgba(37, 99, 235, 0.14);
+  --library-dashed: rgba(37, 99, 235, 0.24);
+  --library-chip: rgba(37, 99, 235, 0.07);
+  --text: #334155;
+  --text-strong: #0f172a;
+  --sidebar-text: #1e293b;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+  --brand: #16745f;
+  --brand-strong: #0c5f4b;
+  --brand-soft: rgba(22, 116, 95, 0.1);
+  --info: #3b82f6;
+  --info-soft: rgba(59, 130, 246, 0.12);
+  --warning: #b45309;
+  --warning-soft: rgba(180, 83, 9, 0.12);
+  --danger: #b42318;
+  --danger-soft: rgba(180, 35, 24, 0.1);
+  --success: #087a54;
+  --success-soft: rgba(8, 122, 84, 0.11);
+  --sidebar-hover: rgba(37, 99, 235, 0.07);
+  --sidebar-active: rgba(22, 116, 95, 0.12);
+  --soft-shadow: 0 1px 2px rgba(37, 99, 235, 0.05), 0 14px 34px rgba(30, 41, 59, 0.08);
+  --composer-shadow: 0 1px 2px rgba(37, 99, 235, 0.06), 0 22px 54px rgba(30, 41, 59, 0.12);
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  color: var(--text);
+  background: var(--app-bg);
+  font-family:
+    Aptos, "Segoe UI", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Microsoft YaHei", "PingFang SC", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --app-bg: #0a1118;
+    --workspace: #0c141d;
+    --sidebar-bg: #0d161f;
+    --panel: rgba(17, 24, 33, 0.82);
+    --panel-soft: rgba(21, 29, 39, 0.78);
+    --topbar: rgba(13, 20, 28, 0.88);
+    --surface: rgba(20, 27, 36, 0.78);
+    --surface-muted: rgba(15, 23, 32, 0.72);
+    --card: rgba(21, 29, 39, 0.8);
+    --composer: rgba(22, 31, 42, 0.85);
+    --assistant-bubble: rgba(21, 29, 39, 0.82);
+    --user-bubble: linear-gradient(135deg, #0c4a6e, #075985);
+    --control: rgba(30, 41, 54, 0.72);
+    --hover: rgba(110, 168, 255, 0.08);
+    --active: rgba(47, 168, 125, 0.15);
+    --input: rgba(17, 25, 35, 0.85);
+    --border: rgba(110, 168, 255, 0.12);
+    --border-strong: rgba(110, 168, 255, 0.2);
+    --library-border: rgba(110, 168, 255, 0.14);
+    --library-dashed: rgba(110, 168, 255, 0.24);
+    --library-chip: rgba(110, 168, 255, 0.07);
+    --text: #c8d1da;
+    --text-strong: #f7fafc;
+    --sidebar-text: #e6edf3;
+    --text-muted: #97a6b5;
+    --text-faint: #667486;
+    --brand: #2fa87d;
+    --brand-strong: #6ad0aa;
+    --brand-soft: rgba(47, 168, 125, 0.15);
+    --info: #6ea8ff;
+    --info-soft: rgba(110, 168, 255, 0.14);
+    --warning: #f2b15f;
+    --warning-soft: rgba(242, 177, 95, 0.14);
+    --danger: #ff8a80;
+    --danger-soft: rgba(255, 138, 128, 0.14);
+    --success: #5fd3a5;
+    --success-soft: rgba(95, 211, 165, 0.14);
+    --sidebar-hover: rgba(110, 168, 255, 0.08);
     --sidebar-active: rgba(47, 168, 125, 0.17);
     --soft-shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 18px 38px rgba(0, 0, 0, 0.25);
     --composer-shadow: 0 1px 2px rgba(0, 0, 0, 0.36), 0 24px 58px rgba(0, 0, 0, 0.36);
