@@ -1945,7 +1945,6 @@ button {
   border-radius: 18px;
   color: var(--text-strong);
   background: var(--assistant-bubble);
-  box-shadow: var(--soft-shadow);
 }
 
 .message.user .bubble {
@@ -2198,7 +2197,6 @@ button {
   border: 1px solid var(--border-strong);
   border-radius: 16px;
   background: var(--composer);
-  box-shadow: var(--soft-shadow);
 }
 
 .command-menu button {
@@ -2241,7 +2239,6 @@ button {
   border: 1px solid var(--border-strong);
   border-radius: 24px;
   background: var(--composer);
-  box-shadow: var(--composer-shadow);
 }
 
 .composer textarea {
@@ -3227,9 +3224,15 @@ button {
 }
 
 .bubble {
+  width: fit-content;
+  max-width: 100%;
   padding: 14px 16px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+  color: var(--text-strong);
   background: var(--assistant-bubble);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
   box-shadow: none;
 }
 
@@ -3239,11 +3242,6 @@ button {
   border-color: transparent;
 }
 
-@media (prefers-color-scheme: dark) {
-  .message.user .bubble {
-    color: #0d1117;
-  }
-}
 
 .answer-body p,
 .bubble p {
@@ -3313,8 +3311,12 @@ button {
 
 .command-menu,
 .composer {
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-xl);
   background: var(--composer);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--composer-shadow);
 }
 
 .composer {
@@ -3360,12 +3362,9 @@ button {
 .upload-dropzone {
   border-radius: var(--radius-lg);
   background: var(--surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   box-shadow: none;
-}
-
-.inspector-card {
-  gap: 12px;
-  padding: 14px;
 }
 
 .inspector-heading {
@@ -3554,6 +3553,7 @@ button {
 
 .upload-dropzone {
   min-height: 320px;
+  border-style: dashed;
   background:
     linear-gradient(var(--surface), var(--surface)) padding-box,
     repeating-linear-gradient(90deg, var(--border), var(--border) 8px, transparent 8px, transparent 16px) border-box;
@@ -3646,7 +3646,11 @@ button {
 
 .search-input-wrapper {
   padding: 12px 14px;
-  box-shadow: var(--soft-shadow);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: none;
 }
 
 .search-result-card {
@@ -3740,6 +3744,9 @@ button {
 
   .bubble {
     width: auto;
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    box-shadow: none;
   }
 
   .composer {
@@ -3886,10 +3893,6 @@ button {
   display: flex;
   flex-direction: column;
   align-items: center;
-}
-
-.composer {
-  box-shadow: var(--composer-shadow);
 }
 
 .composer textarea::placeholder,
