@@ -5,10 +5,7 @@
   min-height: 100vh;
   overflow: hidden;
   color: var(--text);
-  background:
-    radial-gradient(circle at 18% 8%, rgba(54, 116, 181, 0.12), transparent 30%),
-    radial-gradient(circle at 72% 18%, rgba(28, 141, 101, 0.1), transparent 28%),
-    var(--app-bg);
+  background: var(--app-bg);
 }
 
 .app-shell.inspector-collapsed {
@@ -36,6 +33,7 @@
   border-color: var(--border);
   background: var(--panel);
   backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
 }
 
 .sidebar {
@@ -1776,6 +1774,7 @@ button {
   border-bottom: 1px solid var(--border);
   background: var(--topbar);
   backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .model-picker {
@@ -2961,22 +2960,19 @@ button {
 /* Modern workbench refresh: token-driven surfaces, denser navigation, quieter elevation. */
 .app-shell {
   grid-template-columns: 276px minmax(0, 1fr) 340px;
-  background: linear-gradient(180deg, var(--app-bg), var(--workspace));
 }
 
 .app-shell.inspector-collapsed {
   grid-template-columns: 276px minmax(0, 1fr) 0;
 }
 
-.app-shell.library-mode {
-  grid-template-columns: 276px minmax(0, 1fr);
-  background: var(--workspace);
-}
-
 .sidebar,
 .inspector {
-  background: var(--panel);
-  backdrop-filter: none;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.58), transparent 220px),
+    var(--sidebar-bg);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
 }
 
 .sidebar {
@@ -3110,6 +3106,7 @@ button {
   padding: 0 24px;
   background: var(--topbar);
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
 .model-picker {
@@ -3753,9 +3750,9 @@ button {
 /* Modern product UI refresh */
 .app-shell {
   background:
-    linear-gradient(135deg, rgba(22, 116, 95, 0.08), transparent 34%),
-    linear-gradient(315deg, rgba(37, 99, 235, 0.07), transparent 32%),
-    var(--app-bg);
+    linear-gradient(135deg, rgba(22, 116, 95, 0.06), transparent 34%),
+    linear-gradient(315deg, rgba(59, 130, 246, 0.05), transparent 32%),
+    linear-gradient(135deg, #e8f4fc, #f0f9ff);
 }
 
 .app-shell.library-mode,
@@ -3763,8 +3760,8 @@ button {
 .mcp-page,
 .search-page {
   background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.46), transparent 260px),
-    var(--workspace);
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent 260px),
+    linear-gradient(180deg, #f5fbff, #e6f3fa);
 }
 
 .sidebar {
@@ -3815,6 +3812,9 @@ button {
 }
 
 .topbar {
+  background: var(--topbar);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   border-bottom: 1px solid var(--border);
 }
 
@@ -3974,12 +3974,26 @@ button {
 
 @media (prefers-color-scheme: dark) {
   .app-shell,
-  .app-shell.library-mode,
-  .library-page,
-  .mcp-page,
-  .search-page,
-  .sidebar {
-    background: var(--workspace);
+  .app-shell.library-mode {
+    background:
+      linear-gradient(135deg, rgba(22, 116, 95, 0.06), transparent 34%),
+      linear-gradient(315deg, rgba(59, 130, 246, 0.05), transparent 32%),
+      linear-gradient(135deg, #0a1118, #0c141d);
+  }
+
+  .app-shell.library-mode {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 260px),
+      linear-gradient(180deg, #0c141d, #091018);
+  }
+
+  .sidebar,
+  .inspector {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 220px),
+      var(--sidebar-bg);
+    backdrop-filter: blur(18px);
+    -webkit-backdrop-filter: blur(18px);
   }
 
   .library-summary div,
@@ -4022,15 +4036,27 @@ button {
   isolation: isolate;
 }
 
-.workspace,
+.workspace {
+  background: transparent;
+  overflow: hidden;
+}
+
 .library-page,
 .mcp-page,
 .search-page {
-  background: transparent;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent 260px),
+    linear-gradient(180deg, #f5fbff, #e6f3fa);
 }
 
-.workspace {
-  overflow: hidden;
+@media (prefers-color-scheme: dark) {
+  .library-page,
+  .mcp-page,
+  .search-page {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent 260px),
+      linear-gradient(180deg, #0c141d, #091018);
+  }
 }
 
 .library-page,
