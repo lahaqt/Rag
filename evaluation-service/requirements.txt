@@ -1,0 +1,11 @@
+fastapi>=0.115.0
+httpx>=0.27.0
+pydantic>=2.7.0
+python-dotenv>=1.0.1
+uvicorn[standard]>=0.30.0
+
+# Optional RAGAS stack. Install with:
+# pip install -e ".[ragas]"
+# datasets>=2.19.0,<4
+# langchain-openai>=0.2,<0.3
+# ragas>=0.2.15,<0.3

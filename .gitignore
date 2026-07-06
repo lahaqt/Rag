@@ -19,6 +19,11 @@ dist-ssr/
 knowledge-service/data/
 knowledge-service/tmp/
 *.pid
+evaluation-service/.venv/
+evaluation-service/runs/
+evaluation-service/.pytest_cache/
+evaluation-service/**/__pycache__/
+evaluation-service/src/*.egg-info/
 
 # Environment and local configuration
 .env
