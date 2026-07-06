@@ -46,3 +46,4 @@ rag-home.png
 /.claude
 /%SystemDrive%
 *.md
+.worktrees/
