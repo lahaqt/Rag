@@ -83,6 +83,37 @@ sequenceDiagram
 - `knowledge-service` 只负责知识库、文档处理、索引和检索，不承担会话管理或最终回答生成。
 - 前端不直连数据库、Redis、对象存储或 pgvector，所有能力都通过 API Gateway / Ingress 暴露。
 
+## Multi-Agent 探索链路
+
+`/api/chat/multi-agent` 和 `/api/chat/multi-agent/stream` 是独立的 multi-agent 探索入口，用于验证复杂任务下的多角色协作、专家路由和图编排能力。它不替代普通 `/api/chat` 生产主链路，也不会改变普通问答的默认执行路径。
+
+multi-agent 编排由 Spring AI Alibaba `StateGraph` 接管，核心流程是：
+
+```txt
+prepare_request
+  -> plan_agents
+  -> run_specialist_agents
+  -> finish_task
+```
+
+各节点职责：
+
+- `prepare_request`：读取用户请求、会话上下文和分析结果，整理图运行所需的初始状态。
+- `plan_agents`：根据 `requiredCapabilities`、问题类型和 supervisor 决策，规划需要参与的 specialist agent。
+- `run_specialist_agents`：按计划执行 Knowledge、WebSearch、MCP、FollowUp 等 specialist agent，并收集中间观察结果。
+- `finish_task`：汇总 specialist 输出，生成最终 multi-agent 响应、引用和执行轨迹。
+
+当前 specialist agent 的边界：
+
+| Agent | 能力边界 | 典型场景 |
+| --- | --- | --- |
+| Knowledge Agent | 调用 `knowledge-service` 做知识库检索 | 业务资料、上传文档、内部知识问答 |
+| WebSearch Agent | 调用 `web_search` 工具获取实时信息 | 新闻、价格、天气、当前状态类问题 |
+| MCP Tool Agent | 调用已启用的 MCP 工具 | 外部系统查询、企业工具调用、协议化工具任务 |
+| FollowUp Agent | 处理澄清和追问 | 信息不足、意图不完整、需要用户补充条件 |
+
+A2A 外部协议入口由 Spring AI Alibaba A2A Starter 提供。项目侧只保留适配 `MultiAgentOrchestrator` 的 `AgentExecutor`，任务查询与取消使用 A2A JSON-RPC 方法 `tasks/get` 和 `tasks/cancel`。项目不维护自写 A2A Controller、REST task facade 或自建 A2A runtime 回退实现。
+
 ## 文档入库与检索链路
 
 文档上传后会进入异步索引流程：
@@ -360,56 +391,6 @@ error
 | --- | --- | --- |
 | OpenTelemetry Trace | HTTP、下游调用、耗时、异常、跨服务传播 | 排查基础设施链路和性能问题 |
 | AgentTrace | 意图路由、工具选择、ReAct 观察、检索结果、答案生成、反思重试 | 解释 Agent 为什么这样回答 |
-
-## 测试与验证
-
-后端测试：
-
-```bash
-cd knowledge-service
-mvn test
-```
-
-```bash
-cd query-analysis-service
-mvn test
-```
-
-```bash
-cd agent-service
-mvn test
-```
-
-前端检查：
-
-```bash
-cd frontend
-npm run lint
-npm run build
-npm run test
-```
-
-上线前建议补充以下验证：
-
-- API Gateway 路由和 TLS 证书。
-- `/api/chat/stream` SSE 流式响应。
-- 文档上传、解析、异步索引和向量入库。
-- hybrid retrieval 的召回结果、引用来源和排序稳定性。
-- LLM、Embedding、Web Search、MCP 服务的超时、重试和降级策略。
-- OpenTelemetry Trace、`AgentTrace`、日志和告警链路。
-
-## 适合上传的补充材料
-
-建议除根目录 `README.md` 外，再补充以下材料，方便展示、评审和云端落地：
-
-- `MODULES.md`：模块边界、接口、依赖关系和运行命令的详细说明。
-- `docs/system-architecture.md`：系统架构、请求链路、文档入库链路和检索链路。
-- `docs/technical-decisions.md`：记录四模块拆分、pgvector + BM25、Redis Stream、对象存储、MCP、Trace 等技术选择原因。
-- `docs/deployment.md`：云端部署拓扑、环境变量、Secret、网关、SSE、数据库和对象存储配置。
-- `docs/demo-flow.md`：从创建知识库、上传文档、索引完成、发起问答、查看引用和 Trace 的演示步骤。
-- `docs/images/architecture.png`：系统架构截图或导出的架构图。
-- `docs/images/frontend-screenshot.png`：前端聊天与知识库界面截图。
-- `.env.example` 或 `application-example.yml`：只放占位符，不放真实密钥。
 
 ## 项目亮点
 
