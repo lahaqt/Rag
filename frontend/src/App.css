@@ -4490,33 +4490,10 @@ button {
 
 /* 11. live-card — 动态渐变描边 ------------------------------- */
 .inspector-card.live-card {
-  position: relative;
-  border: 1px solid transparent;
-  background-clip: padding-box;
-}
-
-.inspector-card.live-card::before {
-  position: absolute;
-  inset: -1px;
-  z-index: -1;
-  border-radius: inherit;
-  content: "";
-  background: conic-gradient(
-    from 0deg,
-    var(--brand),
-    var(--info),
-    var(--brand),
-    var(--info),
-    var(--brand)
-  );
-  opacity: 0.55;
-  animation: border-rotate 6s linear infinite;
-}
-
-@keyframes border-rotate {
-  to {
-    transform: rotate(360deg);
-  }
+  border: 1px solid rgba(28, 125, 95, 0.18);
+  background:
+    linear-gradient(180deg, rgba(28, 125, 95, 0.06), rgba(255, 255, 255, 0.76)),
+    var(--surface);
 }
 
 /* 12. 引用 / 反馈按钮 — 复制成功态 --------------------------- */
