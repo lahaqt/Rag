@@ -65,7 +65,7 @@ rag:
     embedding:
       provider: siliconflow
       base-url: https://api.siliconflow.cn/v1
-      api-key: sk-jppgrqnxysqtgludkgmvbgrtdkneefylvddrvgpqychwubkq
+      api-key: ${SILICONFLOW_API_KEY:}
       model: Qwen/Qwen3-Embedding-8B
       dimensions: 1024
     store:

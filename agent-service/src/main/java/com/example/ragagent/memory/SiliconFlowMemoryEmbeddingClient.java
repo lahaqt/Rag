@@ -2,8 +2,14 @@ package com.example.ragagent.memory;
 
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.observability.TracePropagationInterceptor;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
@@ -12,6 +18,8 @@ import org.springframework.web.client.RestClient;
 @Component
 @ConditionalOnProperty(prefix = "rag.memory.semantic-embedding", name = "provider", havingValue = "siliconflow")
 public class SiliconFlowMemoryEmbeddingClient implements MemoryEmbeddingClient {
+    private static final Logger log = LoggerFactory.getLogger(SiliconFlowMemoryEmbeddingClient.class);
+
     private final RestClient restClient;
     private final String apiKey;
     private final String model;
@@ -31,6 +39,8 @@ public class SiliconFlowMemoryEmbeddingClient implements MemoryEmbeddingClient {
         this.apiKey = embedding.apiKey();
         this.model = embedding.model();
         this.dimensions = embedding.dimensions();
+        log.info("Semantic memory embedding configured provider=siliconflow baseUrl={} model={} dimensions={} apiKeyPresent={} apiKeyFingerprint={}",
+                baseUrl, model, dimensions, !apiKey.isBlank(), fingerprint(apiKey));
     }
 
     @Override
@@ -73,6 +83,18 @@ public class SiliconFlowMemoryEmbeddingClient implements MemoryEmbeddingClient {
             vector[index] = values.get(index).floatValue();
         }
         return vector;
+    }
+
+    private String fingerprint(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(value.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest, 0, 4);
+        } catch (NoSuchAlgorithmException exception) {
+            return "unavailable";
+        }
     }
 
     private record SiliconFlowEmbeddingRequest(

@@ -65,6 +65,10 @@ public class ChatOrchestrator {
     }
 
     public ChatResponse answer(ChatRequest request, ChatStreamSink streamSink) {
+        return answer(request, streamSink, TraceContextSnapshot.empty());
+    }
+
+    public ChatResponse answer(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot fallbackTraceContext) {
         long requestStarted = System.nanoTime();
         MemoryContext memory = conversationMemoryService.load(request);
         ChatRequest analysisRequest = withHistory(request, memory.conversationId(), memory.analysisMemory().messages());
@@ -108,7 +112,7 @@ public class ChatOrchestrator {
         fullTrace.add(completeStep);
         streamSink.trace(completeStep);
         response = response.withAgentTrace(fullTrace);
-        response = withCurrentTrace(response);
+        response = withCurrentTrace(response, fallbackTraceContext);
         if (tracePersistenceService != null) {
             tracePersistenceService.record(executionRequest, response);
         }
@@ -131,12 +135,18 @@ public class ChatOrchestrator {
         return response;
     }
 
-    private ChatResponse withCurrentTrace(ChatResponse response) {
+    private ChatResponse withCurrentTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {
         if (traceContextProvider == null) {
-            return response;
+            return withFallbackTrace(response, fallbackTraceContext);
         }
         TraceContextSnapshot context = traceContextProvider.current();
-        return context.available() ? response.withTrace(context.traceId(), context.spanId()) : response;
+        return context.available() ? response.withTrace(context.traceId(), context.spanId()) : withFallbackTrace(response, fallbackTraceContext);
+    }
+
+    private ChatResponse withFallbackTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {
+        return fallbackTraceContext != null && fallbackTraceContext.available()
+                ? response.withTrace(fallbackTraceContext.traceId(), fallbackTraceContext.spanId())
+                : response;
     }
 
     private ChatRequest withHistory(ChatRequest request, String conversationId, List<com.example.ragagent.dto.ChatMessage> history) {
