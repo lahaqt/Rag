@@ -132,7 +132,11 @@ public class MultiAgentOrchestrator {
     }
 
     public ChatResponse answer(ChatRequest rawRequest, ChatStreamSink streamSink) {
-        MultiAgentRun run = run(rawRequest, streamSink);
+        return answer(rawRequest, streamSink, TraceContextSnapshot.empty());
+    }
+
+    public ChatResponse answer(ChatRequest rawRequest, ChatStreamSink streamSink, TraceContextSnapshot fallbackTraceContext) {
+        MultiAgentRun run = run(rawRequest, streamSink, fallbackTraceContext);
         ChatResponse response = run.response();
         log.info(
                 "Multi-agent answer conversation={} intent={} route={} specialist={} tool={} llmUsed={} finishReason={} traceSteps={}",
@@ -195,10 +199,14 @@ public class MultiAgentOrchestrator {
     }
 
     private MultiAgentRun run(ChatRequest rawRequest) {
-        return run(rawRequest, ChatStreamSink.noop());
+        return run(rawRequest, ChatStreamSink.noop(), TraceContextSnapshot.empty());
     }
 
     private MultiAgentRun run(ChatRequest rawRequest, ChatStreamSink streamSink) {
+        return run(rawRequest, streamSink, TraceContextSnapshot.empty());
+    }
+
+    private MultiAgentRun run(ChatRequest rawRequest, ChatStreamSink streamSink, TraceContextSnapshot fallbackTraceContext) {
         ChatRequest normalizedRequest = normalize(rawRequest);
         MemoryContext memory = conversationMemoryService.load(normalizedRequest);
         ChatRequest analysisRequest = withHistory(normalizedRequest, memory.conversationId(), memory.analysisMemory().messages());
@@ -262,7 +270,7 @@ public class MultiAgentOrchestrator {
         ));
         addTrace(trace, streamSink, answerCriticAgent.review(trace.size() + 1, request, analysis, agentResult, draft));
 
-        ChatResponse response = withCurrentTrace(response(request, analysis, agentResult, draft, trace));
+        ChatResponse response = withCurrentTrace(response(request, analysis, agentResult, draft, trace), fallbackTraceContext);
         if (tracePersistenceService != null) {
             tracePersistenceService.record(request, response);
         }
@@ -274,12 +282,18 @@ public class MultiAgentOrchestrator {
         return new MultiAgentRun(request, analysis, agentResult, draft, trace, response);
     }
 
-    private ChatResponse withCurrentTrace(ChatResponse response) {
+    private ChatResponse withCurrentTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {
         if (traceContextProvider == null) {
-            return response;
+            return withFallbackTrace(response, fallbackTraceContext);
         }
         TraceContextSnapshot context = traceContextProvider.current();
-        return context.available() ? response.withTrace(context.traceId(), context.spanId()) : response;
+        return context.available() ? response.withTrace(context.traceId(), context.spanId()) : withFallbackTrace(response, fallbackTraceContext);
+    }
+
+    private ChatResponse withFallbackTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {
+        return fallbackTraceContext != null && fallbackTraceContext.available()
+                ? response.withTrace(fallbackTraceContext.traceId(), fallbackTraceContext.spanId())
+                : response;
     }
 
     private ChatRequest withHistory(ChatRequest request, String conversationId, List<com.example.ragagent.dto.ChatMessage> history) {

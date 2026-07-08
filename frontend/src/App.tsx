@@ -308,18 +308,18 @@ const USER_ID = 'local-user'
 const DEFAULT_CONVERSATION_TITLE = 'New conversation'
 const MAX_CONVERSATION_TITLE_LENGTH = 44
 const TITLE_LEADING_FILLERS = [
-  '\u8bf7\u5e2e\u6211',
-  '\u8bf7\u4f60\u5e2e\u6211',
-  '\u5e2e\u6211',
-  '\u5e2e\u5fd9',
-  '\u8bf7\u95ee',
-  '\u8bf7',
-  '\u80fd\u4e0d\u80fd',
-  '\u53ef\u4ee5\u5e2e\u6211',
-  '\u53ef\u4ee5',
-  '\u5982\u4f55',
-  '\u600e\u4e48',
-  '\u600e\u6837',
+  '请帮我',
+  '请你帮我',
+  '帮我',
+  '帮忙',
+  '请问',
+  '请',
+  '能不能',
+  '可以帮我',
+  '可以',
+  '如何',
+  '怎么',
+  '怎样',
   'please help me',
   'help me',
   'please',
@@ -330,7 +330,7 @@ const TITLE_LEADING_FILLERS = [
 ]
 
 function stripTitleTrailingPunctuation(value: string) {
-  return value.trim().replace(/[\s\uFF0C\u3002\uFF01\uFF1F\u3001\uFF1B\uFF1A,.!?;:]+$/g, '')
+  return value.trim().replace(/[\s，。！？、；：,.!?;:]+$/g, '')
 }
 
 function conversationTitleFromQuery(value: string) {
@@ -352,7 +352,7 @@ function conversationTitleFromQuery(value: string) {
   }
 
   title = stripTitleTrailingPunctuation(title)
-  const firstSegment = stripTitleTrailingPunctuation(title.split(/[\u3002\uFF01\uFF1F!?;\uFF1B\n]|[\uFF0C,\u3001\uFF1A:]/)[0]?.trim() ?? '')
+  const firstSegment = stripTitleTrailingPunctuation(title.split(/[。！？!?；;\n]|[，,、：:]/)[0]?.trim() ?? '')
   if (firstSegment.length >= 8 || title.length > MAX_CONVERSATION_TITLE_LENGTH) {
     title = firstSegment
   }
@@ -384,7 +384,6 @@ function endsInsideAsciiToken(value: string, endExclusive: number) {
 function isAsciiTokenChar(value: string) {
   return /^[A-Za-z0-9_.-]$/.test(value)
 }
-
 
 const initialConversations: Conversation[] = [
   {
@@ -1160,6 +1159,27 @@ function App() {
     return merged
   }
 
+  function feedbackQuestionFor(message: Message) {
+    const explicitQuestion = message.feedbackQuestion?.trim()
+    if (explicitQuestion) {
+      return explicitQuestion
+    }
+
+    const conversationMessages = messagesByConversation[activeId] ?? messages
+    const messageIndex = conversationMessages.findIndex((item) => item.id === message.id)
+    for (let index = messageIndex - 1; index >= 0; index -= 1) {
+      const candidate = conversationMessages[index]
+      if (candidate.role === 'user' && candidate.content.trim()) {
+        return candidate.content
+      }
+    }
+    return ''
+  }
+
+  function feedbackKnowledgeBaseFor(message: Message) {
+    return message.feedbackKnowledgeBaseId || activeKnowledgeBaseId || activeConversation.knowledgeBaseId || ''
+  }
+
   async function submitMessageFeedback(message: Message, rating: FeedbackRating) {
     if (shouldSkipFeedback(message, rating)) {
       return
@@ -1184,9 +1204,9 @@ function App() {
           traceId: message.traceId ?? '',
           rating,
           comment: '',
-          question: message.feedbackQuestion ?? '',
+          question: feedbackQuestionFor(message),
           answer: message.content,
-          knowledgeBaseId: message.feedbackKnowledgeBaseId ?? activeKnowledgeBaseId,
+          knowledgeBaseId: feedbackKnowledgeBaseFor(message),
           sourcesJson: JSON.stringify(message.citations?.length ? message.citations : message.sources ?? []),
         }),
       })
@@ -1436,6 +1456,8 @@ function App() {
         query,
         hitCount: 0,
       },
+      feedbackQuestion: query,
+      feedbackKnowledgeBaseId: activeKnowledgeBaseId,
     }
     setMessagesByConversation((current) => ({
       ...current,

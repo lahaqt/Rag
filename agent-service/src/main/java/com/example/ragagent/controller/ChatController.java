@@ -2,6 +2,8 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
+import com.example.ragagent.observability.TraceContextProvider;
+import com.example.ragagent.observability.TraceContextSnapshot;
 import com.example.ragagent.service.ChatStreamSink;
 import com.example.ragagent.service.ChatOrchestrator;
 import com.example.ragagent.service.MultiAgentOrchestrator;
@@ -10,6 +12,7 @@ import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -23,15 +26,27 @@ public class ChatController {
     private final ChatOrchestrator chatOrchestrator;
     private final MultiAgentOrchestrator multiAgentOrchestrator;
     private final ExecutorService chatExecutor;
+    private final TraceContextProvider traceContextProvider;
 
     public ChatController(
             ChatOrchestrator chatOrchestrator,
             MultiAgentOrchestrator multiAgentOrchestrator,
             ExecutorService chatExecutor
     ) {
+        this(chatOrchestrator, multiAgentOrchestrator, chatExecutor, null);
+    }
+
+    @Autowired
+    public ChatController(
+            ChatOrchestrator chatOrchestrator,
+            MultiAgentOrchestrator multiAgentOrchestrator,
+            ExecutorService chatExecutor,
+            TraceContextProvider traceContextProvider
+    ) {
         this.chatOrchestrator = chatOrchestrator;
         this.multiAgentOrchestrator = multiAgentOrchestrator;
         this.chatExecutor = chatExecutor;
+        this.traceContextProvider = traceContextProvider;
     }
 
     @PostMapping
@@ -47,10 +62,11 @@ public class ChatController {
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@Valid @RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(0L);
+        TraceContextSnapshot traceContext = currentTraceContext();
         chatExecutor.execute(() -> {
             try {
                 SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-                ChatResponse response = chatOrchestrator.answer(request, streamSink);
+                ChatResponse response = answer(request, streamSink, traceContext);
                 sendResponse(emitter, response, streamSink);
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
@@ -62,16 +78,36 @@ public class ChatController {
     @PostMapping(path = "/multi-agent/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter multiAgentStream(@Valid @RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(0L);
+        TraceContextSnapshot traceContext = currentTraceContext();
         chatExecutor.execute(() -> {
             try {
                 SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-                ChatResponse response = multiAgentOrchestrator.answer(request, streamSink);
+                ChatResponse response = answerMultiAgent(request, streamSink, traceContext);
                 sendResponse(emitter, response, streamSink);
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
             }
         });
         return emitter;
+    }
+
+    private ChatResponse answer(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot traceContext) {
+        return traceContext != null && traceContext.available()
+                ? chatOrchestrator.answer(request, streamSink, traceContext)
+                : chatOrchestrator.answer(request, streamSink);
+    }
+
+    private ChatResponse answerMultiAgent(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot traceContext) {
+        return traceContext != null && traceContext.available()
+                ? multiAgentOrchestrator.answer(request, streamSink, traceContext)
+                : multiAgentOrchestrator.answer(request, streamSink);
+    }
+
+    private TraceContextSnapshot currentTraceContext() {
+        if (traceContextProvider == null) {
+            return TraceContextSnapshot.empty();
+        }
+        return traceContextProvider.current();
     }
 
     private void sendResponse(SseEmitter emitter, ChatResponse response, SseChatStreamSink streamSink) throws IOException {

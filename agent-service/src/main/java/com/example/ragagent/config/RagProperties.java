@@ -307,6 +307,7 @@ public record RagProperties(
             );
         }
 
+        @ConstructorBinding
         public Memory {
             provider = (provider == null || provider.isBlank()) ? "in-memory" : provider;
             enabled = enabled == null || enabled;
