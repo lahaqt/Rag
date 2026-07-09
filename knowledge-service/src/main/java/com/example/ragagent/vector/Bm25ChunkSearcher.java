@@ -11,10 +11,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
 @Component
-public class Bm25ChunkSearcher {
+@ConditionalOnProperty(prefix = "rag.lexical", name = "provider", havingValue = "memory")
+public class Bm25ChunkSearcher implements LexicalSearchStore {
     private static final double K1 = 1.5;
     private static final double B = 0.75;
 
@@ -24,6 +26,17 @@ public class Bm25ChunkSearcher {
         this.metadataStore = metadataStore;
     }
 
+    @Override
+    public void upsertDocument(com.example.ragagent.model.KnowledgeDocument document) {
+        // Metadata-backed implementation reads stored chunks at query time.
+    }
+
+    @Override
+    public void deleteDocument(String knowledgeBaseId, String documentId) {
+        // Metadata-backed implementation observes deletes through KnowledgeMetadataStore.
+    }
+
+    @Override
     public List<VectorSearchMatch> search(String knowledgeBaseId, String query, int topK) {
         List<String> queryTokens = tokenize(query);
         if (queryTokens.isEmpty()) {

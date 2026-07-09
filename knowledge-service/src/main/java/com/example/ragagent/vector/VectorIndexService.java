@@ -22,18 +22,18 @@ public class VectorIndexService implements VectorIndexPort {
 
     private final EmbeddingClient embeddingClient;
     private final VectorStore vectorStore;
-    private final Bm25ChunkSearcher bm25ChunkSearcher;
+    private final LexicalSearchStore lexicalSearchStore;
     private final QueryExpander queryExpander;
 
     public VectorIndexService(
             EmbeddingClient embeddingClient,
             VectorStore vectorStore,
-            Bm25ChunkSearcher bm25ChunkSearcher,
+            LexicalSearchStore lexicalSearchStore,
             QueryExpander queryExpander
     ) {
         this.embeddingClient = embeddingClient;
         this.vectorStore = vectorStore;
-        this.bm25ChunkSearcher = bm25ChunkSearcher;
+        this.lexicalSearchStore = lexicalSearchStore;
         this.queryExpander = queryExpander;
     }
 
@@ -42,6 +42,7 @@ public class VectorIndexService implements VectorIndexPort {
         if (document.getStatus() != DocumentStatus.PARSED) {
             return;
         }
+        lexicalSearchStore.upsertDocument(document);
         List<DocumentChunk> chunks = document.getChunks();
         List<float[]> embeddings = embeddingClient.embed(chunks.stream().map(DocumentChunk::getContent).toList());
         Instant indexedAt = Instant.now();
@@ -65,6 +66,7 @@ public class VectorIndexService implements VectorIndexPort {
 
     @Override
     public void deleteDocument(String knowledgeBaseId, String documentId) {
+        lexicalSearchStore.deleteDocument(knowledgeBaseId, documentId);
         vectorStore.deleteDocument(knowledgeBaseId, documentId);
     }
 
@@ -144,7 +146,7 @@ public class VectorIndexService implements VectorIndexPort {
     private List<List<VectorSearchMatch>> bm25Search(String knowledgeBaseId, List<String> queries, int topK) {
         List<List<VectorSearchMatch>> results = new ArrayList<>();
         for (String expandedQuery : queries) {
-            results.add(bm25ChunkSearcher.search(knowledgeBaseId, expandedQuery, topK));
+            results.add(lexicalSearchStore.search(knowledgeBaseId, expandedQuery, topK));
         }
         return results;
     }
