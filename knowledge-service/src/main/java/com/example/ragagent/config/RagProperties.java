@@ -12,6 +12,7 @@ public record RagProperties(
         Chunking chunking,
         Cors cors,
         Vector vector,
+        Lexical lexical,
         Metadata metadata,
         ObjectStorage objectStorage,
         Queue queue
@@ -40,6 +41,9 @@ public record RagProperties(
                     new Embedding("hash", "", "", "hash", 384),
                     new Store("pgvector", "rag_chunks", "")
             );
+        }
+        if (lexical == null) {
+            lexical = new Lexical("elasticsearch", "http://localhost:29200", "", "", "rag_chunks_lexical");
         }
         if (metadata == null) {
             metadata = new Metadata("postgres");
@@ -142,6 +146,26 @@ public record RagProperties(
             }
             if (connectionUrl == null) {
                 connectionUrl = "";
+            }
+        }
+    }
+
+    public record Lexical(String provider, String endpoint, String username, String password, String indexName) {
+        public Lexical {
+            if (provider == null || provider.isBlank()) {
+                provider = "elasticsearch";
+            }
+            if (endpoint == null || endpoint.isBlank()) {
+                endpoint = "http://localhost:29200";
+            }
+            if (username == null) {
+                username = "";
+            }
+            if (password == null) {
+                password = "";
+            }
+            if (indexName == null || indexName.isBlank()) {
+                indexName = "rag_chunks_lexical";
             }
         }
     }

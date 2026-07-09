@@ -72,6 +72,12 @@ rag:
       provider: pgvector
       collection: rag_chunks_qwen3_1024
       connection-url: jdbc:postgresql://localhost:25432/rag
+  lexical:
+    provider: elasticsearch
+    endpoint: http://localhost:29200
+    username: ${ELASTICSEARCH_USERNAME:}
+    password: ${ELASTICSEARCH_PASSWORD:}
+    index-name: rag_chunks_lexical
   cors:
     allowed-origins:
       - http://127.0.0.1:5173
