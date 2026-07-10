@@ -12,7 +12,6 @@ import com.example.ragagent.dto.ChatAttachment;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.service.ChatOrchestrator;
-import com.example.ragagent.service.MultiAgentOrchestrator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.concurrent.Executors;
@@ -26,7 +25,6 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 class ChatControllerAttachmentsTest {
     private final ChatOrchestrator chatOrchestrator = mock(ChatOrchestrator.class);
-    private final MultiAgentOrchestrator multiAgentOrchestrator = mock(MultiAgentOrchestrator.class);
     private final java.util.concurrent.ExecutorService executor = Executors.newSingleThreadExecutor();
     private final ObjectMapper objectMapper = new ObjectMapper();
     private MockMvc mockMvc;
@@ -34,7 +32,7 @@ class ChatControllerAttachmentsTest {
     @BeforeEach
     void setUp() {
         mockMvc = MockMvcBuilders.standaloneSetup(
-                        new ChatController(chatOrchestrator, multiAgentOrchestrator, executor)
+                        new ChatController(chatOrchestrator, executor)
                 )
                 .setControllerAdvice(new ApiExceptionHandler())
                 .build();
