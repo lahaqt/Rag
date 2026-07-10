@@ -51,6 +51,13 @@ class SpringAiAlibabaAgentRuntimeTests {
         assertThat(response.agentTrace())
                 .extracting(step -> step.phase())
                 .contains("spring_ai_alibaba_graph", "spring_ai_alibaba_routing", "spring_ai_alibaba_agent");
+        assertThat(response.agentTrace())
+                .filteredOn(step -> "complete".equals(step.action()))
+                .singleElement()
+                .satisfies(step -> {
+                    assertThat(step.attributes()).containsEntry("durationScope", "graph_total");
+                    assertThat(step.observation()).contains("durationScope=graph_execution");
+                });
         verify(ragRetrievalTool).execute(any(), any(), any());
     }
 

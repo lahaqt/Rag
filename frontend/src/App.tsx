@@ -2225,6 +2225,9 @@ function App() {
   }
 
   function traceLabel(step: AgentTraceStep) {
+    if (step.attributes?.durationScope === 'graph_total') {
+      return [step.phase, '图总耗时', step.toolName || step.route].filter(Boolean).join(' / ')
+    }
     return [step.phase, step.action, step.toolName || step.route].filter(Boolean).join(' / ')
   }
 
@@ -2232,6 +2235,9 @@ function App() {
     const items = []
     if (step.status) {
       items.push(step.status)
+    }
+    if (step.attributes?.durationScope === 'graph_total') {
+      items.push('图执行总计')
     }
     if (typeof step.durationMs === 'number' && step.durationMs >= 0) {
       items.push(`${step.durationMs} ms`)

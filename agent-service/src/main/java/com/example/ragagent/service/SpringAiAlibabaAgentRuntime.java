@@ -628,16 +628,23 @@ public class SpringAiAlibabaAgentRuntime {
 
     private Map<String, Object> finalizeResponse(OverAllState state) {
         ExecutionContext context = context(state);
-        context.addTrace(AgentTraceStep.timed(
+        long graphDurationMs = durationMs(context.requestStarted);
+        context.addTrace(new AgentTraceStep(
                 context.nextStep(),
                 "request",
                 context.analysis.route(),
                 context.decision.toolName(),
                 "complete",
                 "graph=" + (context.multiAgent ? multiAgentGraphName() : ordinaryGraphName())
-                        + "; finishReason=" + context.draft.finishReason(),
+                        + "; finishReason=" + context.draft.finishReason()
+                        + "; durationScope=graph_execution"
+                        + "; excludes=sse_queue,post_process,response_transfer",
                 "ok",
-                durationMs(context.requestStarted)
+                graphDurationMs,
+                "",
+                "",
+                "",
+                Map.of("durationScope", "graph_total")
         ));
         ChatResponse response = response(context);
         response = withCurrentTrace(response, context.fallbackTraceContext);
