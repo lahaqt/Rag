@@ -738,8 +738,6 @@ function App() {
   const [draft, setDraft] = useState('')
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-  const [conversationQuery, setConversationQuery] = useState('')
-  const [conversationKnowledgeFilter, setConversationKnowledgeFilter] = useState('')
   const [showArchivedConversations, setShowArchivedConversations] = useState(false)
   const [conversationLoading, setConversationLoading] = useState(false)
   const [conversationError, setConversationError] = useState('')
@@ -866,12 +864,6 @@ function App() {
           userId: USER_ID,
           archived: String(showArchivedConversations),
         })
-        if (conversationKnowledgeFilter) {
-          params.set('knowledgeBaseId', conversationKnowledgeFilter)
-        }
-        if (conversationQuery.trim()) {
-          params.set('query', conversationQuery.trim())
-        }
         const response = await fetch(`/api/conversations?${params}`)
         if (!response.ok) {
           throw new Error(`GET /api/conversations ${response.status}`)
@@ -903,7 +895,7 @@ function App() {
     return () => {
       ignore = true
     }
-  }, [showArchivedConversations, conversationKnowledgeFilter, conversationQuery])
+  }, [showArchivedConversations])
 
   useEffect(() => {
     if (!activeId || activeId.startsWith('conversation-seed-')) {
@@ -995,23 +987,15 @@ function App() {
     () => searchConversations(searchQuery, conversationList, messagesByConversation),
     [searchQuery, conversationList, messagesByConversation],
   )
+  const filteredSearchResults = useMemo(
+    () => searchResults.filter(({ conversation }) => Boolean(conversation.archived) === showArchivedConversations),
+    [searchResults, showArchivedConversations],
+  )
   const visibleConversations = useMemo(() => {
     return [...conversationList]
       .filter((item) => Boolean(item.archived) === showArchivedConversations)
-      .filter((item) => !conversationKnowledgeFilter || item.knowledgeBaseId === conversationKnowledgeFilter)
-      .filter((item) => {
-        const keyword = conversationQuery.trim().toLowerCase()
-        if (!keyword) {
-          return true
-        }
-        const messagesText = (messagesByConversation[item.id] ?? [])
-          .map((message) => message.content)
-          .join(' ')
-          .toLowerCase()
-        return [item.title, item.summary, messagesText].join(' ').toLowerCase().includes(keyword)
-      })
       .sort((left, right) => Number(Boolean(right.pinned)) - Number(Boolean(left.pinned)))
-  }, [conversationList, showArchivedConversations, conversationKnowledgeFilter, conversationQuery, messagesByConversation])
+  }, [conversationList, showArchivedConversations])
   const activeKnowledgeBase = knowledgeBases.find((item) => item.id === activeKnowledgeBaseId)
   const uploadKnowledgeBaseId = activeKnowledgeBaseId || knowledgeBases[0]?.id || ''
   const totalDocumentCount = knowledgeBases.reduce((total, item) => total + item.documentCount, 0)
@@ -2333,37 +2317,6 @@ function App() {
         </nav>
 
         <section className="recent-section">
-          <div className="conversation-sidebar-tools">
-            <label className="sidebar-search">
-              <Search size={15} />
-              <input
-                aria-label="搜索会话"
-                onChange={(event) => setConversationQuery(event.target.value)}
-                placeholder="搜索会话"
-                value={conversationQuery}
-              />
-            </label>
-            <select
-              aria-label="按知识库过滤会话"
-              onChange={(event) => setConversationKnowledgeFilter(event.target.value)}
-              value={conversationKnowledgeFilter}
-            >
-              <option value="">全部知识库</option>
-              {knowledgeBases.map((knowledgeBase) => (
-                <option key={knowledgeBase.id} value={knowledgeBase.id}>
-                  {knowledgeBase.name}
-                </option>
-              ))}
-            </select>
-            <button
-              className={showArchivedConversations ? 'archive-toggle active' : 'archive-toggle'}
-              onClick={() => setShowArchivedConversations((value) => !value)}
-              type="button"
-            >
-              <Archive size={14} />
-              {showArchivedConversations ? '查看活跃' : '查看归档'}
-            </button>
-          </div>
           {conversationError && <p className="conversation-error">{conversationError}</p>}
           <h2>最新</h2>
           <nav className="recent-list" aria-label="最近对话">
@@ -2420,6 +2373,22 @@ function App() {
             <header className="library-header">
               <h1>知识库</h1>
               <div className="library-actions">
+                <select
+                  aria-label="选择知识库"
+                  className="library-knowledge-select"
+                  onChange={(event) => setActiveKnowledgeBaseId(event.target.value)}
+                  value={activeKnowledgeBaseId}
+                >
+                  {knowledgeBases.length === 0 ? (
+                    <option value="">暂无知识库</option>
+                  ) : (
+                    knowledgeBases.map((knowledgeBase) => (
+                      <option key={knowledgeBase.id} value={knowledgeBase.id}>
+                        {knowledgeBase.name}
+                      </option>
+                    ))
+                  )}
+                </select>
                 <label className="library-search">
                   <Search size={15} />
                   <input
@@ -2667,19 +2636,27 @@ function App() {
                 value={searchQuery}
               />
             </div>
+            <button
+              className={showArchivedConversations ? 'search-archive-toggle active' : 'search-archive-toggle'}
+              onClick={() => setShowArchivedConversations((value) => !value)}
+              type="button"
+            >
+              <Archive size={15} />
+              {showArchivedConversations ? '查看活跃' : '查看归档'}
+            </button>
 
             {searchQuery.trim() === '' ? (
               <div className="search-empty">
                 <Search size={40} />
                 <p>输入关键词搜索历史会话</p>
               </div>
-            ) : searchResults.length === 0 ? (
+            ) : filteredSearchResults.length === 0 ? (
               <div className="search-empty">
                 <p>未找到相关对话</p>
               </div>
             ) : (
               <div className="search-results">
-                {searchResults.map(({ conversation, matchedMessages }) => (
+                {filteredSearchResults.map(({ conversation, matchedMessages }) => (
                   <article className="search-result-card" key={conversation.id}>
                     <button
                       className="search-result-header"
