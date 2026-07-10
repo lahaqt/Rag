@@ -1,7 +1,7 @@
 package com.example.ragagent.a2a;
 
 import com.example.ragagent.dto.ChatRequest;
-import com.example.ragagent.service.MultiAgentOrchestrator;
+import com.example.ragagent.service.ChatOrchestrator;
 import io.a2a.server.agentexecution.AgentExecutor;
 import io.a2a.server.agentexecution.RequestContext;
 import io.a2a.server.events.EventQueue;
@@ -12,10 +12,10 @@ import io.a2a.spec.UnsupportedOperationError;
 import java.util.List;
 
 public class RagA2aAgentExecutor implements AgentExecutor {
-    private final MultiAgentOrchestrator multiAgentOrchestrator;
+    private final ChatOrchestrator chatOrchestrator;
 
-    public RagA2aAgentExecutor(MultiAgentOrchestrator multiAgentOrchestrator) {
-        this.multiAgentOrchestrator = multiAgentOrchestrator;
+    public RagA2aAgentExecutor(ChatOrchestrator chatOrchestrator) {
+        this.chatOrchestrator = chatOrchestrator;
     }
 
     @Override
@@ -27,7 +27,7 @@ public class RagA2aAgentExecutor implements AgentExecutor {
                 throw new UnsupportedOperationError(-32602, "A2A message text part must not be blank", null);
             }
 
-            A2aTask task = multiAgentOrchestrator.answerTask(new ChatRequest(
+            A2aTask task = chatOrchestrator.answerTask(new ChatRequest(
                     query,
                     A2aSdkConverter.stringMetadata(message, "knowledgeBaseId"),
                     context.getContextId(),

@@ -15,7 +15,7 @@
     <artifactId>rag-agent-service</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>rag-agent-service</name>
-    <description>Production chat orchestration service for RAG query analysis, retrieval, prompt assembly, and answer generation.</description>
+    <description>Spring AI Alibaba graph runtime for RAG query analysis, capability routing, retrieval, and answer generation.</description>
 
     <properties>
         <java.version>17</java.version>
@@ -95,19 +95,6 @@
             <scope>test</scope>
         </dependency>
     </dependencies>
-
-    <profiles>
-        <profile>
-            <id>spring-ai-alibaba-multiagent</id>
-            <dependencies>
-                <dependency>
-                    <groupId>com.alibaba.cloud.ai</groupId>
-                    <artifactId>spring-ai-alibaba-agent-framework</artifactId>
-                    <version>${spring-ai-alibaba.version}</version>
-                </dependency>
-            </dependencies>
-        </profile>
-    </profiles>
 
     <build>
         <plugins>

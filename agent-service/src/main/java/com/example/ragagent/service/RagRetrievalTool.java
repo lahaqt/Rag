@@ -18,7 +18,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 
 @Component
-public class RagRetrievalTool implements AgentTool {
+public class RagRetrievalTool {
     private final StorageRetrievalClient storageRetrievalClient;
     private final RagProperties properties;
 
@@ -27,17 +27,13 @@ public class RagRetrievalTool implements AgentTool {
         this.properties = properties;
     }
 
-    @Override
-    public String name() {
-        return "rag_retrieval";
-    }
-
-    @Override
-    public AgentToolResult execute(AgentToolRequest request) {
-        ChatRequest chatRequest = request.chatRequest();
-        QueryAnalysisResponse analysis = request.analysis();
+    public AgentToolResult execute(
+            ChatRequest chatRequest,
+            QueryAnalysisResponse analysis,
+            ToolDecision decision
+    ) {
         List<RetrievalHit> hits = retrieve(chatRequest, analysis);
-        return AgentToolResult.retrieval(request.decision().query(), hits);
+        return AgentToolResult.retrieval(decision.query(), hits);
     }
 
     private List<RetrievalHit> retrieve(ChatRequest request, QueryAnalysisResponse analysis) {

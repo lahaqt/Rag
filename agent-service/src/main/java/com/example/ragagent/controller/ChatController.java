@@ -6,7 +6,6 @@ import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
 import com.example.ragagent.service.ChatStreamSink;
 import com.example.ragagent.service.ChatOrchestrator;
-import com.example.ragagent.service.MultiAgentOrchestrator;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -24,27 +23,23 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RequestMapping("/api/chat")
 public class ChatController {
     private final ChatOrchestrator chatOrchestrator;
-    private final MultiAgentOrchestrator multiAgentOrchestrator;
     private final ExecutorService chatExecutor;
     private final TraceContextProvider traceContextProvider;
 
     public ChatController(
             ChatOrchestrator chatOrchestrator,
-            MultiAgentOrchestrator multiAgentOrchestrator,
             ExecutorService chatExecutor
     ) {
-        this(chatOrchestrator, multiAgentOrchestrator, chatExecutor, null);
+        this(chatOrchestrator, chatExecutor, null);
     }
 
     @Autowired
     public ChatController(
             ChatOrchestrator chatOrchestrator,
-            MultiAgentOrchestrator multiAgentOrchestrator,
             ExecutorService chatExecutor,
             TraceContextProvider traceContextProvider
     ) {
         this.chatOrchestrator = chatOrchestrator;
-        this.multiAgentOrchestrator = multiAgentOrchestrator;
         this.chatExecutor = chatExecutor;
         this.traceContextProvider = traceContextProvider;
     }
@@ -56,7 +51,7 @@ public class ChatController {
 
     @PostMapping("/multi-agent")
     public ChatResponse multiAgentChat(@Valid @RequestBody ChatRequest request) {
-        return multiAgentOrchestrator.answer(request);
+        return chatOrchestrator.answerMultiAgent(request);
     }
 
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -99,8 +94,8 @@ public class ChatController {
 
     private ChatResponse answerMultiAgent(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot traceContext) {
         return traceContext != null && traceContext.available()
-                ? multiAgentOrchestrator.answer(request, streamSink, traceContext)
-                : multiAgentOrchestrator.answer(request, streamSink);
+                ? chatOrchestrator.answerMultiAgent(request, streamSink, traceContext)
+                : chatOrchestrator.answerMultiAgent(request, streamSink);
     }
 
     private TraceContextSnapshot currentTraceContext() {

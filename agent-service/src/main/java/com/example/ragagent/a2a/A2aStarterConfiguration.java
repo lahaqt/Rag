@@ -4,7 +4,7 @@ import com.alibaba.cloud.ai.a2a.autoconfigure.A2aServerProperties;
 import com.alibaba.cloud.ai.a2a.core.server.A2aServerExecutorProvider;
 import com.alibaba.cloud.ai.a2a.core.server.DefaultA2aServerExecutorProvider;
 import com.alibaba.cloud.ai.a2a.core.server.JsonRpcA2aRequestHandler;
-import com.example.ragagent.service.MultiAgentOrchestrator;
+import com.example.ragagent.service.ChatOrchestrator;
 import io.a2a.server.agentexecution.AgentExecutor;
 import io.a2a.server.events.InMemoryQueueManager;
 import io.a2a.server.events.QueueManager;
@@ -32,8 +32,8 @@ public class A2aStarterConfiguration {
 
     @Bean
     @ConditionalOnMissingBean
-    AgentExecutor agentExecutor(MultiAgentOrchestrator multiAgentOrchestrator) {
-        return new RagA2aAgentExecutor(multiAgentOrchestrator);
+    AgentExecutor agentExecutor(ChatOrchestrator chatOrchestrator) {
+        return new RagA2aAgentExecutor(chatOrchestrator);
     }
 
     @Bean
