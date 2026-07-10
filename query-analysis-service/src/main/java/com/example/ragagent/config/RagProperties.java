@@ -17,8 +17,8 @@ public record RagProperties(
                     "volcengine-ark",
                     "ark-code-latest",
                     "",
-                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding/v3"),
-                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding")
+                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3"),
+                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan")
             );
         }
     }
@@ -51,10 +51,10 @@ public record RagProperties(
                 apiKey = "";
             }
             if (openaiCompatible == null) {
-                openaiCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding/v3");
+                openaiCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
             }
             if (anthropicCompatible == null) {
-                anthropicCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding");
+                anthropicCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan");
             }
         }
     }

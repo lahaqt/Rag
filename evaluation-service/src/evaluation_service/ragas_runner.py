@@ -61,7 +61,7 @@ def _build_evaluator_llm(chat_openai_class):
         or os.getenv("OPENAI_API_BASE")
         or os.getenv("OPENAI_BASE_URL")
         or os.getenv("ARK_BASE_URL")
-        or "https://ark.cn-beijing.volces.com/api/coding/v3"
+        or "https://ark.cn-beijing.volces.com/api/plan/v3"
     )
     model = os.getenv("RAGAS_EVALUATOR_MODEL") or os.getenv("ARK_EVALUATOR_MODEL") or os.getenv("ARK_MODEL") or "ark-code-latest"
     timeout = float(os.getenv("RAGAS_EVALUATOR_TIMEOUT_SECONDS", "60"))

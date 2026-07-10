@@ -90,9 +90,9 @@ rag:
     temperature: 0.2
     max-tokens: 2400
     openai-compatible:
-      base-url: https://ark.cn-beijing.volces.com/api/coding/v3
+      base-url: https://ark.cn-beijing.volces.com/api/plan/v3
     anthropic-compatible:
-      base-url: https://ark.cn-beijing.volces.com/api/coding
+      base-url: https://ark.cn-beijing.volces.com/api/plan
   cors:
     allowed-origins:
       - http://127.0.0.1:5173

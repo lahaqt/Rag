@@ -61,28 +61,24 @@ public class LlmChatClient {
     }
 
     private String completeOpenAiCompatible(String prompt, double temperature, int maxTokens) {
-        ChatCompletionResponse response = openAiRestClient.post()
-                .uri("/chat/completions")
+        ResponsesApiResponse response = openAiRestClient.post()
+                .uri("/responses")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + llm.apiKey())
-                .body(new ChatCompletionRequest(
+                .body(new ResponsesApiRequest(
                         llm.model(),
-                        List.of(new ChatMessageRequest("user", prompt)),
+                        List.of(new ResponsesInputMessage("user", prompt)),
                         temperature,
                         maxTokens
                 ))
                 .retrieve()
-                .body(ChatCompletionResponse.class);
+                .body(ResponsesApiResponse.class);
 
-        if (response == null || response.choices() == null || response.choices().isEmpty()) {
+        String content = extractResponsesApiText(response);
+        if (content.isBlank()) {
             throw new IllegalStateException("LLM API returned an empty response.");
         }
-
-        ChatMessageResponse message = response.choices().get(0).message();
-        if (message == null || message.content() == null || message.content().isBlank()) {
-            throw new IllegalStateException("LLM API returned an empty message.");
-        }
-        return message.content().trim();
+        return content.trim();
     }
 
     private String completeAnthropicCompatible(String prompt, int maxTokens) {
@@ -115,24 +111,42 @@ public class LlmChatClient {
         return content.trim();
     }
 
-    private record ChatCompletionRequest(
+    private String extractResponsesApiText(ResponsesApiResponse response) {
+        if (response == null || response.output() == null) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        for (ResponsesOutputItem item : response.output()) {
+            if (item == null || item.content() == null) {
+                continue;
+            }
+            for (ResponsesContentBlock block : item.content()) {
+                if (block != null && block.text() != null && !block.text().isBlank()) {
+                    text.append(block.text());
+                }
+            }
+        }
+        return text.toString();
+    }
+
+    private record ResponsesApiRequest(
             String model,
-            List<ChatMessageRequest> messages,
+            List<ResponsesInputMessage> input,
             double temperature,
-            int max_tokens
+            int max_output_tokens
     ) {
     }
 
-    private record ChatMessageRequest(String role, String content) {
+    private record ResponsesInputMessage(String role, String content) {
     }
 
-    private record ChatCompletionResponse(List<ChatChoice> choices) {
+    private record ResponsesApiResponse(List<ResponsesOutputItem> output) {
     }
 
-    private record ChatChoice(ChatMessageResponse message) {
+    private record ResponsesOutputItem(List<ResponsesContentBlock> content) {
     }
 
-    private record ChatMessageResponse(String role, String content) {
+    private record ResponsesContentBlock(String type, String text) {
     }
 
     private record AnthropicMessageRequest(

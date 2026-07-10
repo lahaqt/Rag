@@ -88,32 +88,28 @@ public class LlmChatClient implements LlmGateway {
     }
 
     private String completeOpenAiCompatible(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
-        ChatCompletionResponse response = openAiRestClient.post()
-                .uri("/chat/completions")
+        ResponsesApiResponse response = openAiRestClient.post()
+                .uri("/responses")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + llm.apiKey())
-                .body(new ChatCompletionRequest(
+                .body(new ResponsesApiRequest(
                         llm.model(),
                         List.of(
-                                new ChatMessageRequest("system", systemPrompt),
-                                new ChatMessageRequest("user", userPrompt)
+                                new ResponsesInputMessage("system", systemPrompt),
+                                new ResponsesInputMessage("user", userPrompt)
                         ),
                         temperature,
                         maxTokens,
                         false
                 ))
                 .retrieve()
-                .body(ChatCompletionResponse.class);
+                .body(ResponsesApiResponse.class);
 
-        if (response == null || response.choices() == null || response.choices().isEmpty()) {
+        String content = extractResponsesApiText(response);
+        if (content.isBlank()) {
             throw new IllegalStateException("LLM API returned an empty response.");
         }
-
-        ChatMessageResponse message = response.choices().get(0).message();
-        if (message == null || message.content() == null || message.content().isBlank()) {
-            throw new IllegalStateException("LLM API returned an empty message.");
-        }
-        return message.content().trim();
+        return content.trim();
     }
 
     private String completeAnthropicCompatible(String systemPrompt, String userPrompt, int maxTokens) {
@@ -156,15 +152,15 @@ public class LlmChatClient implements LlmGateway {
             Consumer<String> onDelta
     ) {
         return openAiRestClient.post()
-                .uri("/chat/completions")
+                .uri("/responses")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .header("Authorization", "Bearer " + llm.apiKey())
-                .body(new ChatCompletionRequest(
+                .body(new ResponsesApiRequest(
                         llm.model(),
                         List.of(
-                                new ChatMessageRequest("system", systemPrompt),
-                                new ChatMessageRequest("user", userPrompt)
+                                new ResponsesInputMessage("system", systemPrompt),
+                                new ResponsesInputMessage("user", userPrompt)
                         ),
                         temperature,
                         maxTokens,
@@ -227,17 +223,21 @@ public class LlmChatClient implements LlmGateway {
                     continue;
                 }
                 JsonNode root = objectMapper.readTree(data);
-                JsonNode choice = root.path("choices").path(0);
-                JsonNode content = choice.path("delta").path("content");
-                if (content.isTextual() && !content.asText().isEmpty()) {
-                    String delta = content.asText();
+                String type = root.path("type").asText();
+                JsonNode deltaNode = "response.output_text.delta".equals(type)
+                        ? root.path("delta")
+                        : root.path("choices").path(0).path("delta").path("content");
+                if (deltaNode.isTextual() && !deltaNode.asText().isEmpty()) {
+                    String delta = deltaNode.asText();
                     answer.append(delta);
                     if (onDelta != null) {
                         onDelta.accept(delta);
                     }
                 }
-                JsonNode finishReason = choice.path("finish_reason");
-                if (finishReason.isTextual() && "length".equals(finishReason.asText())) {
+                JsonNode incompleteReason = root.path("response").path("incomplete_details").path("reason");
+                JsonNode finishReason = root.path("choices").path(0).path("finish_reason");
+                if ((incompleteReason.isTextual() && "max_output_tokens".equals(incompleteReason.asText()))
+                        || (finishReason.isTextual() && "length".equals(finishReason.asText()))) {
                     truncated = true;
                 }
             }
@@ -294,25 +294,43 @@ public class LlmChatClient implements LlmGateway {
         return answer.toString();
     }
 
-    private record ChatCompletionRequest(
+    private String extractResponsesApiText(ResponsesApiResponse response) {
+        if (response == null || response.output() == null) {
+            return "";
+        }
+        StringBuilder text = new StringBuilder();
+        for (ResponsesOutputItem item : response.output()) {
+            if (item == null || item.content() == null) {
+                continue;
+            }
+            for (ResponsesContentBlock block : item.content()) {
+                if (block != null && block.text() != null && !block.text().isBlank()) {
+                    text.append(block.text());
+                }
+            }
+        }
+        return text.toString();
+    }
+
+    private record ResponsesApiRequest(
             String model,
-            List<ChatMessageRequest> messages,
+            List<ResponsesInputMessage> input,
             double temperature,
-            int max_tokens,
+            int max_output_tokens,
             boolean stream
     ) {
     }
 
-    private record ChatMessageRequest(String role, String content) {
+    private record ResponsesInputMessage(String role, String content) {
     }
 
-    private record ChatCompletionResponse(List<ChatChoice> choices) {
+    private record ResponsesApiResponse(List<ResponsesOutputItem> output) {
     }
 
-    private record ChatChoice(ChatMessageResponse message) {
+    private record ResponsesOutputItem(List<ResponsesContentBlock> content) {
     }
 
-    private record ChatMessageResponse(String role, String content) {
+    private record ResponsesContentBlock(String type, String text) {
     }
 
     private record AnthropicMessageRequest(

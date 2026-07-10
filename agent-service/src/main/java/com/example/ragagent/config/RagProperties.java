@@ -38,8 +38,8 @@ public record RagProperties(
                     "",
                     0.2,
                     1200,
-                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding/v3"),
-                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding")
+                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3"),
+                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan")
             );
         }
         if (tools == null) {
@@ -138,10 +138,10 @@ public record RagProperties(
             temperature = temperature == null ? 0.2 : Math.max(0.0, Math.min(temperature, 1.5));
             maxTokens = maxTokens == null ? 2400 : Math.max(128, maxTokens);
             if (openaiCompatible == null) {
-                openaiCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding/v3");
+                openaiCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3");
             }
             if (anthropicCompatible == null) {
-                anthropicCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/coding");
+                anthropicCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan");
             }
         }
     }
