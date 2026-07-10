@@ -13,8 +13,8 @@ spring:
           message-url: /api/chat/multi-agent/a2a
           version: 0.3.0
           card:
-            name: RAG Multi-Agent Orchestrator
-            description: Routes explicit /multi-agent chat requests through the Spring AI Alibaba graph runtime.
+            name: RAG Spring AI Alibaba Agent
+            description: Runs ordinary and multi-agent chat through Spring AI Alibaba graph runtimes.
             url: http://127.0.0.1:28083/api/chat/multi-agent/a2a
         nacos:
           registry:
@@ -63,13 +63,7 @@ rag:
     timeout-seconds: 8
     servers: []
   agent:
-    max-iterations: 4
     max-reflection-retries: 2
-    planner-enabled: true
-  multi-agent:
-    max-concurrency: 4
-    timeout-seconds: 12
-    failure-isolation-enabled: true
   memory:
     provider: in-memory
     enabled: true

@@ -4,14 +4,14 @@
 
 这是一个面向云端部署的 RAG Agent 系统，覆盖知识库管理、查询分析、Agent 编排、工具调用、会话记忆、MCP 管理、可观测性和前端交互。项目目标不是停留在“向量检索 Demo”，而是把文档入库、混合检索、意图路由、工具调度、答案生成、引用追踪和运行观测组织成一条完整的生产型问答链路。
 
-普通问答入口是 `agent-service` 的 `/api/chat` 和 `/api/chat/stream`。请求进入后会先经过 `query-analysis-service` 做意图识别、路由建议和 query rewrite，再由 `agent-service` 决定直接回答、调用工具、检索知识库或进入 ReAct 工具循环，最终通过 LLM 生成带引用和 `agentTrace` 的回答。`/api/chat/multi-agent` 是基于 Spring AI Alibaba `StateGraph` 的 multi-agent 探索链路，不是普通问答的默认生产路径。
+普通问答入口是 `agent-service` 的 `/api/chat` 和 `/api/chat/stream`。请求进入后会先经过 `query-analysis-service` 做意图识别、路由建议和 query rewrite，再由 Spring AI Alibaba `StateGraph` 决定直接回答、调用工具或检索知识库，最终通过 LLM 生成带引用和 `agentTrace` 的回答。`/api/chat/multi-agent` 使用同一运行时的并行 Agent 图，普通与 multi-agent 路径不再维护两套编排实现。
 
 ## 核心能力
 
 - 知识库管理：支持知识库创建、文档上传、解析、chunk、索引、检索和删除。
 - 混合检索：支持 pgvector 向量检索、BM25 稀疏检索、multi-query expansion 和 RRF 排名融合。
 - 查询分析：独立 query 分析服务输出 `requestType`、`route`、`executionMode`、`requiredCapabilities` 和 `clarificationQuestion`。
-- Agent 编排：`agent-service` 负责 Plan-Execute、ReAct 工具循环、工具路由、Prompt 组装、答案生成和 ReflectionCritic。
+- Agent 编排：`agent-service` 使用 Spring AI Alibaba Agent Framework / StateGraph 实现状态、路由、并行能力节点、答案生成和反思条件循环。
 - 工具接入：内置 `rag_retrieval`、`web_search`、`mcp_tool` 等工具能力，并支持 MCP `stdio` / `streamable_http` 服务管理。
 - 会话能力：支持会话历史、短期上下文、滚动摘要、结构化状态、长期语义记忆和用户画像事实。
 - 流式交互：前端和后端支持 SSE 流式回答、Trace 增量、引用返回和错误事件。
@@ -45,7 +45,7 @@ flowchart LR
 | 模块 | 职责 | 部署形态 |
 | --- | --- | --- |
 | `frontend/` | React 19 + TypeScript + Vite 前端，负责聊天、知识库、引用、会话、MCP 管理和流式展示 | 静态站点、对象存储 + CDN、或前端容器 |
-| `agent-service/` | 生产 RAG Agent 入口，负责 `/api/chat`、工具调用、MCP、记忆、Trace、反馈和 multi-agent 探索入口 | 独立后端服务，建议横向扩容 |
+| `agent-service/` | 生产 RAG Agent 入口，使用 Spring AI Alibaba 图统一负责 `/api/chat`、工具调用、MCP、记忆、Trace、反馈和 multi-agent 入口 | 独立后端服务，建议横向扩容 |
 | `query-analysis-service/` | 第一层查询分析网关，负责意图识别、路由建议、执行模式判断、query rewrite 和多检索查询生成 | 独立后端服务，可按 LLM 调用压力扩容 |
 | `knowledge-service/` | 知识库存储与检索底座，负责文档解析、chunk、对象存储、元数据、向量索引、BM25 和 hybrid retrieval | 独立后端服务，连接数据库、Redis 和对象存储 |
 
@@ -83,25 +83,39 @@ sequenceDiagram
 - `knowledge-service` 只负责知识库、文档处理、索引和检索，不承担会话管理或最终回答生成。
 - 前端不直连数据库、Redis、对象存储或 pgvector，所有能力都通过 API Gateway / Ingress 暴露。
 
-## Multi-Agent 探索链路
+## Spring AI Alibaba Agent 图编排
 
-`/api/chat/multi-agent` 和 `/api/chat/multi-agent/stream` 是独立的 multi-agent 探索入口，用于验证复杂任务下的多角色协作、专家路由和图编排能力。它不替代普通 `/api/chat` 生产主链路，也不会改变普通问答的默认执行路径。
+普通 `/api/chat`、流式 `/api/chat/stream` 和显式 multi-agent 入口统一由 `SpringAiAlibabaAgentRuntime` 承载。HTTP 层只保留薄的 `ChatOrchestrator` 门面，Agent 状态、节点执行、条件边和并行分支全部运行在 Spring AI Alibaba `StateGraph` 上。
 
-multi-agent 编排由 Spring AI Alibaba `StateGraph` 接管，核心流程是：
+普通问答图的核心流程是：
 
 ```txt
-prepare_request
-  -> plan_agents
-  -> run_specialist_agents
-  -> finish_task
+prepare_context
+  -> query_analysis
+  -> route_capabilities
+  -> execute_capability
+  -> generate_answer
+  -> reflect_answer -- retry --> generate_answer
+  -> finalize_response
+```
+
+显式 multi-agent 图在 `route_capabilities` 后并行扇出：
+
+```txt
+route_capabilities
+  ├─> knowledge_agent ─┐
+  ├─> web_search_agent ├─> generate_answer -> reflect_answer -> finalize_response
+  └─> mcp_tool_agent ──┘
 ```
 
 各节点职责：
 
-- `prepare_request`：读取用户请求、会话上下文和分析结果，整理图运行所需的初始状态。
-- `plan_agents`：根据 `requiredCapabilities`、问题类型和 supervisor 决策，规划需要参与的 specialist agent。
-- `run_specialist_agents`：按计划执行 Knowledge、WebSearch、MCP、FollowUp 等 specialist agent，并收集中间观察结果。
-- `finish_task`：汇总 specialist 输出，生成最终 multi-agent 响应、引用和执行轨迹。
+- `prepare_context`：加载会话记忆并构造分析视图与回答视图。
+- `query_analysis`：调用 `query-analysis-service`，失败时在图节点内回退。
+- `route_capabilities`：根据 `requiredCapabilities` 和实时/MCP 路由结果选择图分支。
+- `knowledge_agent`、`web_search_agent`、`mcp_tool_agent`：执行对应业务能力并回写观察结果。
+- `generate_answer` 与 `reflect_answer`：生成答案，并通过条件边完成有上限的反思重试。
+- `finalize_response`：组装引用、`agentTrace`、OpenTelemetry 标识并写入会话与 Trace 存储。
 
 当前 specialist agent 的边界：
 
@@ -112,7 +126,7 @@ prepare_request
 | MCP Tool Agent | 调用已启用的 MCP 工具 | 外部系统查询、企业工具调用、协议化工具任务 |
 | FollowUp Agent | 处理澄清和追问 | 信息不足、意图不完整、需要用户补充条件 |
 
-A2A 外部协议入口由 Spring AI Alibaba A2A Starter 提供。项目侧只保留适配 `MultiAgentOrchestrator` 的 `AgentExecutor`，任务查询与取消使用 A2A JSON-RPC 方法 `tasks/get` 和 `tasks/cancel`。项目不维护自写 A2A Controller、REST task facade 或自建 A2A runtime 回退实现。
+A2A 外部协议入口由 Spring AI Alibaba A2A Starter 提供。项目侧的 `AgentExecutor` 直接委托统一图运行时，任务查询与取消使用 A2A JSON-RPC 方法 `tasks/get` 和 `tasks/cancel`。项目不维护自写 A2A Controller、REST task facade 或自建 A2A runtime 回退实现。
 
 ## 文档入库与检索链路
 
@@ -180,7 +194,7 @@ Managed dependencies
 | 方向 | 技术 | 选择原因 |
 | --- | --- | --- |
 | 后端框架 | Java 17 + Spring Boot | 适合拆分服务、REST API、配置管理、测试和企业级工程结构 |
-| Agent 编排 | 自研 Plan-Execute / ReAct + Spring AI Alibaba StateGraph 探索 | 普通 `/api/chat` 保持可控生产链路，multi-agent 能力作为独立探索入口 |
+| Agent 编排 | Spring AI Alibaba Agent Framework / StateGraph | 普通与 multi-agent 链路统一使用图状态、条件边、并行分支和反思循环 |
 | 查询分析 | 独立 `query-analysis-service` | 将意图识别、路由、query rewrite 从 Agent 编排中拆出，便于调试和替换策略 |
 | 文档解析 | Apache Tika | 支持多格式文本抽取，适合作为知识库入库基础能力 |
 | 元数据存储 | PostgreSQL | 文档、chunk、会话、反馈和 Trace 都需要结构化查询与事务一致性 |
@@ -219,11 +233,11 @@ npm run build
 
 - `/api/chat` 和 `/api/chat/stream`。
 - 消费 query analysis 的意图树。
-- 执行 `DIRECT`、`SINGLE_TOOL`、`ITERATIVE_TOOL`、`PLANNED_TASK` 等模式。
-- 通过 `ToolRegistry` 调用 `rag_retrieval`、`web_search`、`mcp_tool`。
+- 将 `DIRECT`、`SINGLE_TOOL`、`ITERATIVE_TOOL`、`PLANNED_TASK` 映射为 Spring AI Alibaba 图节点与分支。
+- 通过图节点调用 `rag_retrieval`、`web_search`、`mcp_tool` 业务能力。
 - 管理会话历史、会话记忆、长期语义记忆和用户画像事实。
 - 持久化 `AgentTrace`、反馈记录和会话消息。
-- 暴露 Spring AI Alibaba multi-agent 探索入口。
+- 暴露统一 Spring AI Alibaba 普通与 multi-agent 运行入口。
 
 服务需要连接 `query-analysis-service`、`knowledge-service`、PostgreSQL、Redis、LLM Provider、MCP 服务和观测后端。
 
@@ -307,7 +321,7 @@ POST /api/chat/multi-agent/stream
 GET  /api/chat/multi-agent/agents
 ```
 
-A2A 外部协议入口由 Spring AI Alibaba A2A Starter 提供，项目侧只保留适配 `MultiAgentOrchestrator` 的 `AgentExecutor`。任务查询与取消使用 A2A JSON-RPC 方法 `tasks/get` 和 `tasks/cancel`，不维护项目自写 A2A Controller 或 REST task facade：
+A2A 外部协议入口由 Spring AI Alibaba A2A Starter 提供，项目侧 `AgentExecutor` 直接调用 `ChatOrchestrator` 背后的统一图运行时。任务查询与取消使用 A2A JSON-RPC 方法 `tasks/get` 和 `tasks/cancel`，不维护项目自写 A2A Controller 或 REST task facade：
 
 ```txt
 POST /api/chat/multi-agent/a2a
@@ -390,14 +404,14 @@ error
 | 类型 | 关注点 | 用途 |
 | --- | --- | --- |
 | OpenTelemetry Trace | HTTP、下游调用、耗时、异常、跨服务传播 | 排查基础设施链路和性能问题 |
-| AgentTrace | 意图路由、工具选择、ReAct 观察、检索结果、答案生成、反思重试 | 解释 Agent 为什么这样回答 |
+| AgentTrace | 图节点、意图路由、能力观察、检索结果、答案生成、反思重试 | 解释 Agent 为什么这样回答 |
 
 ## 项目亮点
 
 - 从检索 Demo 演进为完整 RAG Agent 系统，职责拆分清晰，适合按云端服务边界独立部署。
 - 查询分析独立成服务，便于调试意图识别、路由和 query rewrite。
 - 检索侧同时覆盖语义召回和关键词召回，并通过 RRF 做结果融合。
-- Agent 侧将工具能力抽象到 `ToolRegistry`，MCP、联网搜索和知识库检索可以统一调度。
+- Agent 侧通过 Spring AI Alibaba 图节点统一调度 MCP、联网搜索和知识库检索能力。
 - 会话历史、记忆、Trace、反馈和 MCP 管理都由 `agent-service` 统一承接，前端只负责交互。
 - 可观测性同时覆盖基础设施调用链和 Agent 决策链，便于定位“慢在哪里”和“为什么这样答”。
 
