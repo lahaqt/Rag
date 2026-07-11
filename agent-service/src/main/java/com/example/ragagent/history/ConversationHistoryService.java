@@ -44,6 +44,7 @@ public class ConversationHistoryService {
                 llm_used         BOOLEAN NOT NULL DEFAULT false,
                 finish_reason    VARCHAR(128) NOT NULL DEFAULT '',
                 tool_name        VARCHAR(128) NOT NULL DEFAULT '',
+                trace_id         VARCHAR(64) NOT NULL DEFAULT '',
                 citations_json   TEXT NOT NULL DEFAULT '[]',
                 created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
                 UNIQUE(conversation_id, seq)
@@ -60,6 +61,11 @@ public class ConversationHistoryService {
                 ON chat_messages(conversation_id, seq)
             """;
 
+    private static final String ADD_MESSAGE_TRACE_ID_SQL = """
+            ALTER TABLE chat_messages
+            ADD COLUMN IF NOT EXISTS trace_id VARCHAR(64) NOT NULL DEFAULT ''
+            """;
+
     private static final String INSERT_CONVERSATION_SQL = """
             INSERT INTO chat_conversations (id, user_id, title, summary, knowledge_base_id)
             VALUES (?, ?, ?, '', ?)
@@ -74,7 +80,7 @@ public class ConversationHistoryService {
             """;
 
     private static final String SELECT_MESSAGES_SQL = """
-            SELECT id, conversation_id, seq, role, content, llm_used, finish_reason, tool_name, citations_json, created_at
+            SELECT id, conversation_id, seq, role, content, llm_used, finish_reason, tool_name, trace_id, citations_json, created_at
             FROM chat_messages
             WHERE conversation_id = ?
             ORDER BY seq
@@ -85,8 +91,8 @@ public class ConversationHistoryService {
             """;
 
     private static final String INSERT_MESSAGE_SQL = """
-            INSERT INTO chat_messages (conversation_id, seq, role, content, llm_used, finish_reason, tool_name, citations_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO chat_messages (conversation_id, seq, role, content, llm_used, finish_reason, tool_name, trace_id, citations_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (conversation_id, seq) DO NOTHING
             """;
 
@@ -227,6 +233,7 @@ public class ConversationHistoryService {
                 false,
                 "",
                 "",
+                "",
                 "[]"
         );
         jdbcTemplate.update(
@@ -238,6 +245,7 @@ public class ConversationHistoryService {
                 response.llmUsed(),
                 safe(response.finishReason()),
                 safe(response.toolName()),
+                safe(response.traceId()),
                 serializeCitations(response.citations())
         );
         jdbcTemplate.update(
@@ -258,6 +266,7 @@ public class ConversationHistoryService {
         try {
             jdbcTemplate.execute(CREATE_CONVERSATIONS_SQL);
             jdbcTemplate.execute(CREATE_MESSAGES_SQL);
+            jdbcTemplate.execute(ADD_MESSAGE_TRACE_ID_SQL);
             jdbcTemplate.execute(CREATE_CONVERSATION_INDEX_SQL);
             jdbcTemplate.execute(CREATE_MESSAGE_INDEX_SQL);
         } catch (Exception exception) {
@@ -337,6 +346,7 @@ public class ConversationHistoryService {
                 rs.getBoolean("llm_used"),
                 rs.getString("finish_reason"),
                 rs.getString("tool_name"),
+                rs.getString("trace_id"),
                 rs.getString("citations_json"),
                 instant(rs, "created_at")
         );

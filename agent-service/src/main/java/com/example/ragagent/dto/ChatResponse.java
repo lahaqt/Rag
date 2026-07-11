@@ -79,7 +79,9 @@ public record ChatResponse(
 
     public ChatResponse withTrace(String traceId, String spanId) {
         List<AgentTraceStep> tracedSteps = agentTrace.stream()
-                .map(step -> step.withTrace(traceId, spanId))
+                .map(step -> step.traceId().isBlank() || step.spanId().isBlank()
+                        ? step.withTrace(traceId, spanId)
+                        : step)
                 .toList();
         return new ChatResponse(
                 conversationId,

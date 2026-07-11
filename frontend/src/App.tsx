@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   Copy,
   Database,
+  ExternalLink,
   FileText,
   FolderKanban,
   Grid2X2,
@@ -35,6 +36,7 @@ import {
   Upload,
   UserRound,
   Wrench,
+  X,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, FormEvent } from 'react'
@@ -228,6 +230,30 @@ type AgentTraceStep = {
   attributes?: Record<string, unknown>
 }
 
+type AgentTraceRecord = {
+  id: number
+  traceId: string
+  spanId: string
+  conversationId: string
+  query: string
+  intent: string
+  route: string
+  requestType: string
+  executionMode: string
+  toolName: string
+  finishReason: string
+  llmUsed: boolean
+  agentTrace: AgentTraceStep[]
+  createdAt: string
+}
+
+type TraceReplayState = {
+  traceId: string
+  loading: boolean
+  error: string
+  record?: AgentTraceRecord
+}
+
 type ChatStreamEvent = {
   event: string
   data: unknown
@@ -303,11 +329,13 @@ type ConversationMessageRecord = {
   llmUsed: boolean
   finishReason: string
   toolName: string
+  traceId: string
   citationsJson: string
   createdAt: string
 }
 
 const USER_ID = 'local-user'
+const JAEGER_UI_BASE_URL = (import.meta.env.VITE_JAEGER_UI_BASE_URL ?? 'http://localhost:16686').replace(/\/$/, '')
 const DEFAULT_CONVERSATION_TITLE = 'New conversation'
 const MAX_CONVERSATION_TITLE_LENGTH = 44
 const TITLE_LEADING_FILLERS = [
@@ -672,6 +700,7 @@ function mapMessageRecord(record: ConversationMessageRecord): Message {
     citations: parsedCitations.citations,
     sources: parsedCitations.sources,
     retrievalStatus: statusFromStoredMessage(record, parsedCitations),
+    traceId: record.traceId || undefined,
   }
 }
 
@@ -770,6 +799,8 @@ function App() {
   const [previewLoading, setPreviewLoading] = useState(false)
   const [previewChunks, setPreviewChunks] = useState<{ id: string; content: string }[]>([])
   const [previewError, setPreviewError] = useState('')
+  const [traceReplay, setTraceReplay] = useState<TraceReplayState | null>(null)
+  const [traceReplaySort, setTraceReplaySort] = useState<'sequence' | 'duration'>('sequence')
 
   const activeConversation = useMemo(
     () => conversationList.find((item) => item.id === activeId) ?? conversationList[0] ?? initialConversations[0],
@@ -790,6 +821,13 @@ function App() {
     () => [...messages].reverse().find((message) => message.role === 'assistant' && message.retrievalStatus)?.retrievalStatus,
     [messages],
   )
+
+  const replaySteps = useMemo(() => {
+    const steps = [...(traceReplay?.record?.agentTrace ?? [])]
+    return traceReplaySort === 'duration'
+      ? steps.sort((left, right) => (right.durationMs ?? -1) - (left.durationMs ?? -1))
+      : steps.sort((left, right) => left.step - right.step)
+  }, [traceReplay, traceReplaySort])
 
   useEffect(() => {
     document.documentElement.dataset.theme = themeMode
@@ -2259,6 +2297,32 @@ function App() {
     return items.join(' · ')
   }
 
+  async function openTraceReplay(traceId: string) {
+    if (!traceId) {
+      return
+    }
+    setTraceReplay({ traceId, loading: true, error: '' })
+    setTraceReplaySort('sequence')
+    try {
+      const response = await fetch(`/api/traces/${encodeURIComponent(traceId)}`)
+      if (!response.ok) {
+        throw new Error(`GET /api/traces/${traceId} ${response.status}`)
+      }
+      const records = (await response.json()) as AgentTraceRecord[]
+      const record = records[0]
+      if (!record) {
+        throw new Error('未找到该链路的持久化记录。')
+      }
+      setTraceReplay({ traceId, loading: false, error: '', record })
+    } catch (error) {
+      setTraceReplay({
+        traceId,
+        loading: false,
+        error: error instanceof Error ? error.message : '链路回放加载失败',
+      })
+    }
+  }
+
   function commandLabel(command?: SlashCommandName) {
     if (command === 'multi-agent') {
       return 'Multi-Agent'
@@ -3241,6 +3305,17 @@ function App() {
                           </>
                         )}
                       </button>
+                      {message.traceId && (
+                        <button
+                          disabled={traceReplay?.loading && traceReplay.traceId === message.traceId}
+                          onClick={() => openTraceReplay(message.traceId ?? '')}
+                          title="加载已持久化的 Agent 链路"
+                          type="button"
+                        >
+                          <Activity size={14} />
+                          {traceReplay?.loading && traceReplay.traceId === message.traceId ? '加载回放' : '链路回放'}
+                        </button>
+                      )}
                       <button
                         className={message.feedbackRating === 'up' ? 'active' : ''}
                         disabled={message.feedbackStatus === 'submitting' || !message.content}
@@ -3483,6 +3558,90 @@ function App() {
           </div>
         </section>
         </aside>
+      )}
+      {traceReplay && (
+        <div
+          className="trace-replay-backdrop"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) {
+              setTraceReplay(null)
+            }
+          }}
+          role="presentation"
+        >
+          <section aria-label="Agent 链路回放" aria-modal="true" className="trace-replay-drawer" role="dialog">
+            <header className="trace-replay-header">
+              <div>
+                <span>Agent 链路回放</span>
+                <strong title={traceReplay.traceId}>{traceReplay.traceId}</strong>
+              </div>
+              <button aria-label="关闭链路回放" onClick={() => setTraceReplay(null)} type="button">
+                <X size={18} />
+              </button>
+            </header>
+            {traceReplay.loading && <p className="trace-replay-state">正在加载持久化轨迹…</p>}
+            {traceReplay.error && <p className="trace-replay-state error">{traceReplay.error}</p>}
+            {traceReplay.record && (
+              <>
+                <div className="trace-replay-summary">
+                  <div>
+                    <span>路由</span>
+                    <strong>{traceReplay.record.route || '-'}</strong>
+                  </div>
+                  <div>
+                    <span>工具</span>
+                    <strong>{traceReplay.record.toolName || '直接回答'}</strong>
+                  </div>
+                  <div>
+                    <span>步骤</span>
+                    <strong>{traceReplay.record.agentTrace.length}</strong>
+                  </div>
+                  <div>
+                    <span>异常</span>
+                    <strong>{traceReplay.record.agentTrace.filter((step) => step.error || step.status === 'error').length}</strong>
+                  </div>
+                </div>
+                <div className="trace-replay-controls">
+                  <div>
+                    <button
+                      className={traceReplaySort === 'sequence' ? 'active' : ''}
+                      onClick={() => setTraceReplaySort('sequence')}
+                      type="button"
+                    >
+                      执行顺序
+                    </button>
+                    <button
+                      className={traceReplaySort === 'duration' ? 'active' : ''}
+                      onClick={() => setTraceReplaySort('duration')}
+                      type="button"
+                    >
+                      耗时排序
+                    </button>
+                  </div>
+                  <a href={`${JAEGER_UI_BASE_URL}/trace/${encodeURIComponent(traceReplay.record.traceId)}`} rel="noreferrer" target="_blank">
+                    在 Jaeger 打开
+                    <ExternalLink size={14} />
+                  </a>
+                </div>
+                <p className="trace-replay-query">{traceReplay.record.query}</p>
+                <ol className="trace-replay-timeline">
+                  {replaySteps.map((step) => (
+                    <li className={step.error || step.status === 'error' ? 'failed' : ''} key={`${traceReplay.record?.id}-${step.step}`}>
+                      <span>{step.step + 1}</span>
+                      <div>
+                        <strong>{traceLabel(step)}</strong>
+                        {traceMeta(step) && <small>{traceMeta(step)}</small>}
+                        <p>{step.observation || '无额外观测信息'}</p>
+                        {step.spanId && <code>span {step.spanId}</code>}
+                        {step.error && <p className="trace-error">{step.error}</p>}
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
+          </section>
+        </div>
       )}
     </main>
   )

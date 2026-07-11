@@ -11,6 +11,7 @@ public record ConversationMessageRecord(
         boolean llmUsed,
         String finishReason,
         String toolName,
+        String traceId,
         String citationsJson,
         Instant createdAt
 ) {

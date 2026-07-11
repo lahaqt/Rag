@@ -101,15 +101,16 @@ final class AgentResponseFinalizer {
     }
 
     private ChatResponse withCurrentTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {
+        if (fallbackTraceContext != null && fallbackTraceContext.available()) {
+            return response.withTrace(fallbackTraceContext.traceId(), fallbackTraceContext.spanId());
+        }
         if (traceContextProvider != null) {
             TraceContextSnapshot current = traceContextProvider.current();
             if (current.available()) {
                 return response.withTrace(current.traceId(), current.spanId());
             }
         }
-        return fallbackTraceContext != null && fallbackTraceContext.available()
-                ? response.withTrace(fallbackTraceContext.traceId(), fallbackTraceContext.spanId())
-                : response;
+        return response;
     }
 
     private long durationMs(long startedNanos) {

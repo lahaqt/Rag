@@ -9182,3 +9182,223 @@ summary:focus-visible {
 :root[data-theme='dark'] .search-input-wrapper input {
   color: var(--text-strong);
 }
+
+.trace-replay-backdrop {
+  position: fixed;
+  z-index: 30;
+  inset: 0;
+  display: flex;
+  justify-content: flex-end;
+  background: rgba(12, 22, 18, 0.36);
+  backdrop-filter: blur(2px);
+}
+
+.trace-replay-drawer {
+  width: min(590px, 100vw);
+  height: 100%;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  color: var(--text);
+  background: var(--workspace);
+  box-shadow: -18px 0 48px rgba(11, 29, 20, 0.2);
+}
+
+.trace-replay-header {
+  position: sticky;
+  z-index: 1;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 76px;
+  padding: 14px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--workspace);
+}
+
+.trace-replay-header span,
+.trace-replay-summary span {
+  display: block;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.trace-replay-header strong {
+  display: block;
+  max-width: 460px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-replay-header button,
+.trace-replay-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: var(--surface);
+}
+
+.trace-replay-header button {
+  width: 34px;
+}
+
+.trace-replay-state,
+.trace-replay-query {
+  margin: 16px 20px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  background: var(--surface);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.trace-replay-state.error,
+.trace-replay-timeline .trace-error {
+  color: #b23b3b;
+}
+
+.trace-replay-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin: 16px 20px;
+}
+
+.trace-replay-summary div {
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.trace-replay-summary strong {
+  display: block;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-replay-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 20px;
+}
+
+.trace-replay-controls div {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.trace-replay-controls button {
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.trace-replay-controls button.active {
+  border-color: var(--info);
+  color: #fff;
+  background: var(--info);
+}
+
+.trace-replay-controls a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--info);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.trace-replay-timeline {
+  margin: 0 20px 24px;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-replay-timeline li {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  padding: 14px 0;
+  border-top: 1px solid var(--border);
+}
+
+.trace-replay-timeline li > span {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  color: var(--info);
+  background: var(--info-soft);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.trace-replay-timeline li.failed > span {
+  color: #fff;
+  background: #b23b3b;
+}
+
+.trace-replay-timeline strong,
+.trace-replay-timeline small,
+.trace-replay-timeline p,
+.trace-replay-timeline code {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.trace-replay-timeline strong {
+  color: var(--text-strong);
+  font-size: 13px;
+}
+
+.trace-replay-timeline small {
+  margin-top: 3px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.trace-replay-timeline p {
+  margin: 5px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.trace-replay-timeline code {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+}
+
+@media (max-width: 640px) {
+  .trace-replay-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .trace-replay-controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

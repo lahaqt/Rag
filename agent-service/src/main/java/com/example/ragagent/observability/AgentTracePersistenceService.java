@@ -244,7 +244,7 @@ public class AgentTracePersistenceService {
                 rs.getString("finish_reason"),
                 rs.getBoolean("llm_used"),
                 parseTrace(rs.getString("agent_trace_json")),
-                rs.getObject("created_at", Instant.class)
+                instant(rs, "created_at")
         );
     }
 
@@ -268,7 +268,7 @@ public class AgentTracePersistenceService {
                 rs.getString("run_id"), rs.getString("conversation_id"), rs.getString("query"),
                 rs.getString("graph_name"), rs.getString("status"), rs.getString("trace_id"),
                 rs.getString("finish_reason"), rs.getString("error"),
-                rs.getObject("started_at", Instant.class), rs.getObject("completed_at", Instant.class)
+                instant(rs, "started_at"), instant(rs, "completed_at")
         );
     }
 
@@ -276,8 +276,13 @@ public class AgentTracePersistenceService {
         return new AgentRunStepRecord(
                 rs.getString("run_id"), rs.getInt("step_number"), rs.getString("phase"), rs.getString("action"),
                 rs.getString("tool_name"), rs.getString("status"), rs.getString("observation"), rs.getString("error"),
-                rs.getLong("duration_ms"), rs.getObject("created_at", Instant.class)
+                rs.getLong("duration_ms"), instant(rs, "created_at")
         );
+    }
+
+    private Instant instant(ResultSet rs, String column) throws SQLException {
+        java.sql.Timestamp timestamp = rs.getTimestamp(column);
+        return timestamp == null ? null : timestamp.toInstant();
     }
 
     private void write(Runnable operation, String action, String runId) {

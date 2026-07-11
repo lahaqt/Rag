@@ -23,4 +23,11 @@ public class TraceContextProvider {
         }
         return new TraceContextSnapshot(span.context().traceId(), span.context().spanId());
     }
+
+    public Span currentSpan() {
+        if (tracer == null) {
+            return null;
+        }
+        return tracer.currentSpan();
+    }
 }

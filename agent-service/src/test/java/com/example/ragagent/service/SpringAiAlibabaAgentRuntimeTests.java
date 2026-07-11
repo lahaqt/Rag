@@ -425,6 +425,7 @@ class SpringAiAlibabaAgentRuntimeTests {
                 null,
                 null,
                 null,
+                null,
                 properties
         );
     }

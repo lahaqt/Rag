@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import io.micrometer.tracing.Span;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -58,10 +59,11 @@ public class ChatController {
     public SseEmitter stream(@Valid @RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(0L);
         TraceContextSnapshot traceContext = currentTraceContext();
+        Span parentSpan = currentSpan();
         chatExecutor.execute(() -> {
             try {
                 SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-                ChatResponse response = answer(request, streamSink, traceContext);
+                ChatResponse response = answer(request, streamSink, traceContext, parentSpan);
                 sendResponse(emitter, response, streamSink);
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
@@ -74,10 +76,11 @@ public class ChatController {
     public SseEmitter multiAgentStream(@Valid @RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(0L);
         TraceContextSnapshot traceContext = currentTraceContext();
+        Span parentSpan = currentSpan();
         chatExecutor.execute(() -> {
             try {
                 SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-                ChatResponse response = answerMultiAgent(request, streamSink, traceContext);
+                ChatResponse response = answerMultiAgent(request, streamSink, traceContext, parentSpan);
                 sendResponse(emitter, response, streamSink);
             } catch (Exception exception) {
                 completeWithError(emitter, exception);
@@ -87,14 +90,32 @@ public class ChatController {
     }
 
     private ChatResponse answer(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot traceContext) {
+        return answer(request, streamSink, traceContext, null);
+    }
+
+    private ChatResponse answer(
+            ChatRequest request,
+            ChatStreamSink streamSink,
+            TraceContextSnapshot traceContext,
+            Span parentSpan
+    ) {
         return traceContext != null && traceContext.available()
-                ? chatOrchestrator.answer(request, streamSink, traceContext)
+                ? chatOrchestrator.answer(request, streamSink, traceContext, parentSpan)
                 : chatOrchestrator.answer(request, streamSink);
     }
 
     private ChatResponse answerMultiAgent(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot traceContext) {
+        return answerMultiAgent(request, streamSink, traceContext, null);
+    }
+
+    private ChatResponse answerMultiAgent(
+            ChatRequest request,
+            ChatStreamSink streamSink,
+            TraceContextSnapshot traceContext,
+            Span parentSpan
+    ) {
         return traceContext != null && traceContext.available()
-                ? chatOrchestrator.answerMultiAgent(request, streamSink, traceContext)
+                ? chatOrchestrator.answerMultiAgent(request, streamSink, traceContext, parentSpan)
                 : chatOrchestrator.answerMultiAgent(request, streamSink);
     }
 
@@ -103,6 +124,10 @@ public class ChatController {
             return TraceContextSnapshot.empty();
         }
         return traceContextProvider.current();
+    }
+
+    private Span currentSpan() {
+        return traceContextProvider == null ? null : traceContextProvider.currentSpan();
     }
 
     private void sendResponse(SseEmitter emitter, ChatResponse response, SseChatStreamSink streamSink) throws IOException {
