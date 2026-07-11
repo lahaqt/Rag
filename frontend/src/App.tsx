@@ -15,7 +15,7 @@ import {
   Image as ImageIcon,
   List,
   MessageSquarePlus,
-  MoreHorizontal,
+  Moon,
   PanelRight,
   Paperclip,
   Pin,
@@ -27,6 +27,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  Sun,
   TerminalSquare,
   ThumbsDown,
   ThumbsUp,
@@ -88,6 +89,8 @@ export type Conversation = {
 }
 
 type ViewMode = 'chat' | 'search' | 'knowledge' | 'mcp'
+
+type ThemeMode = 'light' | 'dark'
 
 type SlashCommandName = 'multi-agent' | 'plan' | 'status' | 'feedback'
 
@@ -705,6 +708,12 @@ function App() {
   const [conversationList, setConversationList] = useState<Conversation[]>(initialConversations)
   const [activeId, setActiveId] = useState(initialConversations[0].id)
   const [activeView, setActiveView] = useState<ViewMode>('chat')
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    if (typeof window === 'undefined') {
+      return 'light'
+    }
+    return window.localStorage.getItem('rag-theme') === 'dark' ? 'dark' : 'light'
+  })
   const [knowledgeBases, setKnowledgeBases] = useState<KnowledgeBase[]>([])
   const [activeKnowledgeBaseId, setActiveKnowledgeBaseId] = useState('')
   const [knowledgeDocuments, setKnowledgeDocuments] = useState<KnowledgeDocument[]>([])
@@ -781,6 +790,11 @@ function App() {
     () => [...messages].reverse().find((message) => message.role === 'assistant' && message.retrievalStatus)?.retrievalStatus,
     [messages],
   )
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = themeMode
+    window.localStorage.setItem('rag-theme', themeMode)
+  }, [themeMode])
 
   useEffect(() => {
     if (!scrollToMessageId) {
@@ -3096,31 +3110,37 @@ function App() {
               >
                 <SlidersHorizontal size={18} />
               </button>
-              <button className="icon-button" type="button" title="更多">
-                <MoreHorizontal size={18} />
+              <button
+                aria-label={themeMode === 'dark' ? '切换浅色主题' : '切换暗黑主题'}
+                aria-pressed={themeMode === 'dark'}
+                className="icon-button theme-toggle"
+                onClick={() => setThemeMode((mode) => (mode === 'dark' ? 'light' : 'dark'))}
+                title={themeMode === 'dark' ? '切换浅色主题' : '切换暗黑主题'}
+                type="button"
+              >
+                {themeMode === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
               </button>
             </div>
           </header>
 
         <div className="chat-stage" ref={chatStageRef} onScroll={handleChatStageScroll}>
           <div className="conversation-title">
-            <div>
+            <div className="conversation-heading">
               <h1>{activeConversation.title}</h1>
+              <div className="context-strip" aria-label="当前知识库状态">
+                <span>
+                  <CheckCircle2 size={14} />
+                  {activeKnowledgeBase?.name ?? '知识库就绪'}
+                </span>
+                <span>{activeKnowledgeBase?.documentCount ?? totalDocumentCount} 个文档</span>
+                <span>引用优先</span>
+                <span>{vectorStatus ? `${vectorStatus.vectorCount} vectors` : '向量状态同步中'}</span>
+              </div>
             </div>
             <button className="ghost-button" onClick={() => setActiveView('knowledge')} type="button">
               <FolderKanban size={16} />
               切换知识库
             </button>
-          </div>
-
-          <div className="context-strip" aria-label="当前知识库状态">
-            <span>
-              <CheckCircle2 size={14} />
-              {activeKnowledgeBase?.name ?? '知识库就绪'}
-            </span>
-            <span>{activeKnowledgeBase?.documentCount ?? totalDocumentCount} 个文档</span>
-            <span>引用优先</span>
-            <span>{vectorStatus ? `${vectorStatus.vectorCount} vectors` : '向量状态同步中'}</span>
           </div>
 
           <div className="message-list">
@@ -3221,10 +3241,6 @@ function App() {
                           </>
                         )}
                       </button>
-                      <button type="button">
-                        <BookOpen size={14} />
-                        展开引用
-                      </button>
                       <button
                         className={message.feedbackRating === 'up' ? 'active' : ''}
                         disabled={message.feedbackStatus === 'submitting' || !message.content}
@@ -3266,10 +3282,10 @@ function App() {
                   {!message.citations?.length && message.sources && (
                     <div className="sources">
                       {message.sources.map((source, index) => (
-                        <button key={source} type="button">
+                        <span className="source-chip" key={source}>
                           <span>{index + 1}</span>
                           {source}
-                        </button>
+                        </span>
                       ))}
                     </div>
                   )}
@@ -3456,13 +3472,13 @@ function App() {
                   </details>
                 ))
               : sourcePreview.map((source, index) => (
-                  <button key={source.title} type="button">
+                  <div className="source-preview-static" key={source.title}>
                     <span>{index + 1}</span>
                     <div>
                       <strong>{source.title}</strong>
                       <small>{source.meta}</small>
                     </div>
-                  </button>
+                  </div>
                 ))}
           </div>
         </section>
