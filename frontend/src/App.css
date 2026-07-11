@@ -9183,6 +9183,79 @@ summary:focus-visible {
   color: var(--text-strong);
 }
 
+/* Dark-mode repair for legacy surfaces that still carried light-only fills. */
+:root[data-theme='dark'] .chat-stage {
+  background:
+    radial-gradient(circle at 42% -6%, rgba(74, 154, 121, 0.13), transparent 32%),
+    linear-gradient(180deg, #13201b 0%, #101a16 100%);
+}
+
+:root[data-theme='dark'] .composer-zone {
+  background: linear-gradient(180deg, rgba(16, 26, 22, 0), rgba(16, 26, 22, 0.92) 34%);
+}
+
+:root[data-theme='dark'] .metrics div,
+:root[data-theme='dark'] .retrieval-flow div,
+:root[data-theme='dark'] .retrieval-flow div.done,
+:root[data-theme='dark'] .source-preview button,
+:root[data-theme='dark'] .source-detail summary,
+:root[data-theme='dark'] .citation-details-list details,
+:root[data-theme='dark'] .attachment-card {
+  border-color: rgba(220, 245, 233, 0.10);
+  color: var(--text);
+  background: #203129;
+  box-shadow: none;
+}
+
+:root[data-theme='dark'] .retrieval-flow div.done {
+  color: #a5e8c3;
+  background: rgba(93, 204, 156, 0.16);
+}
+
+:root[data-theme='dark'] .metrics strong,
+:root[data-theme='dark'] .source-preview strong,
+:root[data-theme='dark'] .source-detail strong {
+  color: var(--text-strong);
+}
+
+:root[data-theme='dark'] .source-preview small,
+:root[data-theme='dark'] .source-detail small,
+:root[data-theme='dark'] .retrieval-meta,
+:root[data-theme='dark'] .conversation small,
+:root[data-theme='dark'] .conversation time {
+  color: var(--text-muted);
+}
+
+:root[data-theme='dark'] .avatar {
+  border-color: rgba(220, 245, 233, 0.10);
+  color: var(--text-muted);
+  background: #203129;
+}
+
+:root[data-theme='dark'] .message.assistant .avatar {
+  color: #a5e8c3;
+  background: rgba(93, 204, 156, 0.16);
+}
+
+:root[data-theme='dark'] .message.user .bubble {
+  color: #f0faf4;
+  background: linear-gradient(135deg, #1d5847, #256f58);
+}
+
+:root[data-theme='dark'] .answer-table,
+:root[data-theme='dark'] .answer-table th,
+:root[data-theme='dark'] .answer-table td {
+  border-color: rgba(220, 245, 233, 0.12);
+  color: var(--text);
+}
+
+:root[data-theme='dark'] .conversation.active,
+:root[data-theme='dark'] .sidebar-menu button.active,
+:root[data-theme='dark'] .recent-item.active {
+  color: var(--text-strong);
+  background: rgba(93, 204, 156, 0.15);
+}
+
 .trace-replay-backdrop {
   position: fixed;
   z-index: 30;
