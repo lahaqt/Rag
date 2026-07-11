@@ -3103,7 +3103,17 @@ function App() {
           </header>
 
         <div className="chat-stage" ref={chatStageRef} onScroll={handleChatStageScroll}>
-          <div className="context-strip">
+          <div className="conversation-title">
+            <div>
+              <h1>{activeConversation.title}</h1>
+            </div>
+            <button className="ghost-button" onClick={() => setActiveView('knowledge')} type="button">
+              <FolderKanban size={16} />
+              切换知识库
+            </button>
+          </div>
+
+          <div className="context-strip" aria-label="当前知识库状态">
             <span>
               <CheckCircle2 size={14} />
               {activeKnowledgeBase?.name ?? '知识库就绪'}
@@ -3111,17 +3121,6 @@ function App() {
             <span>{activeKnowledgeBase?.documentCount ?? totalDocumentCount} 个文档</span>
             <span>引用优先</span>
             <span>{vectorStatus ? `${vectorStatus.vectorCount} vectors` : '向量状态同步中'}</span>
-          </div>
-
-          <div className="conversation-title">
-            <div>
-              <span className="eyebrow">企业知识问答 · 引用溯源 · 工具编排</span>
-              <h1>{activeConversation.title}</h1>
-            </div>
-            <button className="ghost-button" onClick={() => setActiveView('knowledge')} type="button">
-              <FolderKanban size={16} />
-              切换知识库
-            </button>
           </div>
 
           <div className="message-list">
