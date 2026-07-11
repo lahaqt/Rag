@@ -64,6 +64,7 @@ rag:
     timeout-seconds: 8
     servers: []
   agent:
+    planner-enabled: true
     capability-priority: [web_search, mcp_tool, rag_retrieval]
     tool-timeout-seconds: 8
     read-only-tool-max-attempts: 2

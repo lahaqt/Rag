@@ -36,7 +36,8 @@ final class AgentExecutionContext {
     volatile QueryAnalysisResponse analysis;
     volatile Set<String> capabilities = Set.of();
     volatile List<String> capabilityPlan = List.of();
-    volatile int capabilityIndex;
+    /** Index of the capability currently being executed; -1 means no capability was selected. */
+    volatile int capabilityIndex = -1;
     volatile int toolAttempts;
     volatile AgentToolResult lastToolResult;
     volatile ToolDecision decision = ToolDecision.none();

@@ -57,6 +57,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final AgentTracePersistenceService tracePersistenceService;
     private final int maxToolIterations;
     private final int maxReflectionRetries;
+    private final boolean plannerEnabled;
     private final long maxExecutionNanos;
     private final long multiAgentMaxExecutionNanos;
     private final List<String> singleCapabilityPriority;
@@ -103,6 +104,8 @@ public class SpringAiAlibabaAgentRuntime {
         this.maxReflectionRetries = properties == null || properties.agent() == null
                 ? 2
                 : properties.agent().maxReflectionRetries();
+        this.plannerEnabled = properties == null || properties.agent() == null
+                || properties.agent().plannerEnabled();
         int maxExecutionSeconds = properties == null || properties.agent() == null
                 ? 45
                 : properties.agent().maxExecutionSeconds();
@@ -128,6 +131,7 @@ public class SpringAiAlibabaAgentRuntime {
                         this::executeKnowledge,
                         this::executeWebSearch,
                         this::executeMcp,
+                        this::multiAgentFanOut,
                         this::generate,
                         this::reflect,
                         this::finalizeResponse
@@ -135,6 +139,7 @@ public class SpringAiAlibabaAgentRuntime {
                 new AgentGraphFactory.Edges(
                         this::ordinaryReplanEdge,
                         this::ordinaryReflectionEdge,
+                        this::multiAgentDispatchEdge,
                         this::multiAgentReflectionEdge
                 )
         );
@@ -266,6 +271,35 @@ public class SpringAiAlibabaAgentRuntime {
         return context(state).retry ? "retry" : "finish";
     }
 
+    private String multiAgentDispatchEdge(OverAllState state) {
+        Set<String> capabilities = context(state).capabilities;
+        boolean knowledge = capabilities.contains("rag_retrieval");
+        boolean web = capabilities.contains("web_search");
+        boolean mcp = capabilities.contains("mcp_tool");
+        if (knowledge && web && mcp) {
+            return "all_capabilities";
+        }
+        if (knowledge && web) {
+            return "knowledge_web";
+        }
+        if (knowledge && mcp) {
+            return "knowledge_mcp";
+        }
+        if (web && mcp) {
+            return "web_mcp";
+        }
+        if (knowledge) {
+            return "knowledge";
+        }
+        if (web) {
+            return "web";
+        }
+        if (mcp) {
+            return "mcp";
+        }
+        return "direct";
+    }
+
     private Map<String, Object> prepareContext(OverAllState state) {
         AgentExecutionContext context = context(state);
         long started = System.nanoTime();
@@ -357,6 +391,7 @@ public class SpringAiAlibabaAgentRuntime {
             List<String> capabilityPlan = orderedSupported(capabilities);
             context.capabilityPlan = capabilityPlan;
             String selected = capabilityPlan.isEmpty() ? "" : capabilityPlan.get(0);
+            context.capabilityIndex = selected.isBlank() ? -1 : 0;
             Set<String> deferred = new LinkedHashSet<>(capabilities);
             deferred.remove(selected);
             capabilities.clear();
@@ -364,9 +399,10 @@ public class SpringAiAlibabaAgentRuntime {
                 capabilities.add(selected);
             }
             context.routingObservation = "selected=" + selected + "; deferred=" + deferred
-                    + "; plan=" + capabilityPlan + "; priority=" + singleCapabilityPriority;
+                    + "; plan=" + capabilityPlan + "; priority=" + singleCapabilityPriority
+                    + "; plannerEnabled=" + plannerEnabled;
         }
-        context.capabilities = Set.copyOf(capabilities);
+        context.capabilities = Set.copyOf(orderedSupported(capabilities));
         context.addTrace(AgentTraceStep.timed(
                 context.nextStep(),
                 "spring_ai_alibaba_routing",
@@ -417,7 +453,7 @@ public class SpringAiAlibabaAgentRuntime {
         AgentExecutionContext context = context(state);
         AgentToolResult result = context.lastToolResult;
         boolean needsAnotherCapability = needsAnotherCapability(result);
-        String nextCapability = needsAnotherCapability && context.toolAttempts < maxToolIterations
+        String nextCapability = plannerEnabled && needsAnotherCapability && context.toolAttempts < maxToolIterations
                 ? context.advanceCapability()
                 : "";
         context.replanCapability = !nextCapability.isBlank();
@@ -463,6 +499,27 @@ public class SpringAiAlibabaAgentRuntime {
         if (context.capabilities.contains("mcp_tool")) {
             runMcp(context);
         }
+        return stateUpdate(context);
+    }
+
+    /**
+     * Represents a selected multi-capability fan-out in the graph. The graph
+     * framework version in use routes a conditional edge to one node, so each
+     * supported capability combination has a small dispatcher node whose
+     * outgoing edges are the actual concurrent specialist branches.
+     */
+    private Map<String, Object> multiAgentFanOut(OverAllState state) {
+        AgentExecutionContext context = context(state);
+        context.addTrace(AgentTraceStep.timed(
+                context.nextStep(),
+                "spring_ai_alibaba_routing",
+                context.analysis.route(),
+                "multi_agent",
+                "dispatch_fan_out",
+                "capabilities=" + context.capabilities,
+                "ok",
+                0
+        ));
         return stateUpdate(context);
     }
 
@@ -570,7 +627,7 @@ public class SpringAiAlibabaAgentRuntime {
         context.retry = !reflection.passed() && context.reflectionAttempts < maxReflectionRetries;
         context.reflectionReplan = false;
         String nextCapability = "";
-        if (context.retry && context.toolAttempts < maxToolIterations) {
+        if (plannerEnabled && context.retry && context.toolAttempts < maxToolIterations) {
             nextCapability = context.advanceCapability();
             if (!nextCapability.isBlank()) {
                 context.capabilities = Set.of(nextCapability);

@@ -6,6 +6,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -95,6 +96,11 @@ class SpringAiAlibabaAgentRuntimeTests {
                 .filteredOn(step -> "spring_ai_alibaba_agent".equals(step.phase()))
                 .extracting(step -> step.toolName())
                 .contains("rag_retrieval", "web_search");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "dispatch_fan_out".equals(step.action())
+                        && step.observation().contains("rag_retrieval")
+                        && step.observation().contains("web_search"));
+        verify(mcpToolGateway, never()).execute(anyString());
     }
 
     @Test
@@ -161,6 +167,44 @@ class SpringAiAlibabaAgentRuntimeTests {
         assertThat(response.toolName()).isEmpty();
         assertThat(response.agentTrace())
                 .anyMatch(step -> "direct".equals(step.action()) && "spring_ai_alibaba_agent".equals(step.phase()));
+        verifyNoInteractions(ragRetrievalTool, webSearchTool, mcpToolGateway);
+    }
+
+    @Test
+    void directMultiAgentRequestSkipsSpecialistBranches() {
+        QueryAnalysisResponse analysis = new QueryAnalysisResponse(
+                "conversation-1",
+                "",
+                "hello",
+                "hello",
+                "hello",
+                "chitchat",
+                0.95,
+                "direct_answer",
+                false,
+                false,
+                0,
+                List.of(),
+                "CHITCHAT",
+                "DIRECT",
+                List.of(),
+                "",
+                Map.of(),
+                "",
+                List.of("test")
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Hello", false, "direct_reply"));
+
+        ChatResponse response = runtime().answerMultiAgent(new ChatRequest(
+                "/multi-agent hello", null, "conversation-1", List.of(), null
+        ));
+
+        assertThat(response.answer()).isEqualTo("Hello");
+        assertThat(response.agentTrace())
+                .noneMatch(step -> "dispatch_fan_out".equals(step.action()))
+                .noneMatch(step -> "spring_ai_alibaba_agent".equals(step.phase()));
         verifyNoInteractions(ragRetrievalTool, webSearchTool, mcpToolGateway);
     }
 
@@ -261,9 +305,33 @@ class SpringAiAlibabaAgentRuntimeTests {
         assertThat(response.toolName()).isEqualTo("web_search");
         assertThat(response.agentTrace())
                 .anyMatch(step -> "next_capability".equals(step.action())
-                        && "spring_ai_alibaba_planner".equals(step.phase()));
+                        && "spring_ai_alibaba_planner".equals(step.phase())
+                        && step.observation().contains("nextTool=web_search"));
         verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
         verify(webSearchTool).search("refund");
+    }
+
+    @Test
+    void plannerDisabledDoesNotExecuteDeferredCapabilities() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis(
+                "PLANNED_TASK",
+                List.of("rag_retrieval", "web_search")
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.failure("rag_retrieval", "refund", "knowledge unavailable", "retrieval_failed"));
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("No retrieval result", false, "retrieval_failed"));
+
+        ChatResponse response = runtime(propertiesWithPlanner(false)).answer(request("refund"));
+
+        assertThat(response.toolName()).isEqualTo("rag_retrieval");
+        assertThat(response.agentTrace())
+                .noneMatch(step -> "next_capability".equals(step.action()));
+        verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
+        verifyNoInteractions(webSearchTool);
     }
 
     @Test
@@ -380,6 +448,14 @@ class SpringAiAlibabaAgentRuntimeTests {
         return new RagProperties(
                 null, null, null, null, null, null, null,
                 new RagProperties.Agent(4, 2, true, List.of("rag_retrieval", "web_search", "mcp_tool"), 8, 2, 0, seconds),
+                null, null
+        );
+    }
+
+    private RagProperties propertiesWithPlanner(boolean plannerEnabled) {
+        return new RagProperties(
+                null, null, null, null, null, null, null,
+                new RagProperties.Agent(4, 2, plannerEnabled, List.of("rag_retrieval", "web_search", "mcp_tool")),
                 null, null
         );
     }

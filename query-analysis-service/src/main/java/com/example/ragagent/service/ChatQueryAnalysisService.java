@@ -17,6 +17,12 @@ import org.springframework.stereotype.Service;
 public class ChatQueryAnalysisService {
     private static final Logger log = LoggerFactory.getLogger(ChatQueryAnalysisService.class);
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+    /**
+     * Deterministic routes above this confidence are safe to execute without a
+     * serial LLM classification call. Lower-confidence and out-of-domain
+     * inputs still use the LLM as a routing arbiter.
+     */
+    private static final double LLM_FALLBACK_CONFIDENCE_THRESHOLD = 0.85;
 
     private final IntentClassifier intentClassifier;
     private final QueryRewriteService queryRewriteService;
@@ -45,16 +51,18 @@ public class ChatQueryAnalysisService {
         String normalizedQuery = normalize(request.query());
         List<ChatMessage> history = request.normalizedHistory();
 
-        Optional<LlmIntentClassification> llmIntent = llmIntentClassifier == null
-                ? Optional.empty()
-                : llmIntentClassifier.classify(history, normalizedQuery);
+        IntentResult ruleIntent = intentClassifier.classify(history, normalizedQuery);
+        boolean useLlmFallback = ruleIntent.confidence() < LLM_FALLBACK_CONFIDENCE_THRESHOLD;
+        Optional<LlmIntentClassification> llmIntent = useLlmFallback && llmIntentClassifier != null
+                ? llmIntentClassifier.classify(history, normalizedQuery)
+                : Optional.empty();
         IntentResult intent = llmIntent
                 .map(classification -> new IntentResult(
                         classification.intent(),
                         classification.confidence(),
                         prepend("llm_json_intent", classification.reasons())
                 ))
-                .orElseGet(() -> intentClassifier.classify(history, normalizedQuery));
+                .orElse(ruleIntent);
         QueryRewriteResult rewrite = queryRewriteService.analyze(history, request.query(), intent.intent());
         IntentTreeDecision intentTree = intentTreeClassifier.classify(
                 normalizedQuery,
@@ -64,6 +72,11 @@ public class ChatQueryAnalysisService {
         );
 
         List<String> reasons = new ArrayList<>();
+        if (!useLlmFallback) {
+            reasons.add("llm_intent_skipped_high_confidence_rule");
+        } else if (llmIntent.isEmpty()) {
+            reasons.add("llm_intent_fallback_unavailable_or_rejected");
+        }
         reasons.addAll(intent.reasons());
         reasons.addAll(rewrite.reasons());
         reasons.addAll(intentTree.reasons());
