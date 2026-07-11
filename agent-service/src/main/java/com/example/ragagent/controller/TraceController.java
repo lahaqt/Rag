@@ -2,6 +2,8 @@ package com.example.ragagent.controller;
 
 import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.AgentTraceRecord;
+import com.example.ragagent.observability.AgentRunRecord;
+import com.example.ragagent.observability.AgentRunStepRecord;
 import java.util.List;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,5 +31,15 @@ public class TraceController {
             @RequestParam(defaultValue = "50") int limit
     ) {
         return tracePersistenceService.listByConversation(conversationId, limit);
+    }
+
+    @GetMapping("/runs/{runId}")
+    public AgentRunRecord findRun(@PathVariable String runId) {
+        return tracePersistenceService.findRun(runId);
+    }
+
+    @GetMapping("/runs/{runId}/steps")
+    public List<AgentRunStepRecord> findRunSteps(@PathVariable String runId) {
+        return tracePersistenceService.findRunSteps(runId);
     }
 }
