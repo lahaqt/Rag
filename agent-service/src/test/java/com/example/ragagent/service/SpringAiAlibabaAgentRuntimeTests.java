@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 class SpringAiAlibabaAgentRuntimeTests {
     private final QueryAnalysisClient queryAnalysisClient = mock(QueryAnalysisClient.class);
@@ -94,6 +95,37 @@ class SpringAiAlibabaAgentRuntimeTests {
                 .filteredOn(step -> "spring_ai_alibaba_agent".equals(step.phase()))
                 .extracting(step -> step.toolName())
                 .contains("rag_retrieval", "web_search");
+    }
+
+    @Test
+    void multiAgentIsolatesFailedSpecialistAndLabelsThePartialResult() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis(
+                "PARALLEL",
+                List.of("mcp_tool", "web_search")
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.webSearch("refund update", "required_capability"));
+        when(mcpToolGateway.decide(anyString()))
+                .thenReturn(Optional.of(ToolDecision.mcpTool("refund update", "required_capability")));
+        when(mcpToolGateway.execute("refund update")).thenThrow(new IllegalStateException("MCP unavailable"));
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.retrieval("refund update", List.of(hit())));
+        when(webSearchTool.search("refund update"))
+                .thenReturn(List.of(new WebSearchResult(1, "Refund update", "https://example.com", "Updated policy")));
+        when(answerGenerator.generateFromMultiAgent(any(), any(), any(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Web evidence answer [1]", false, "multi_agent_test_answer"));
+
+        ChatResponse response = runtime().answerMultiAgent(request("/multi-agent refund update"));
+
+        ArgumentCaptor<AgentToolResult> resultCaptor = ArgumentCaptor.forClass(AgentToolResult.class);
+        verify(answerGenerator).generateFromMultiAgent(any(), any(), resultCaptor.capture(), anyString(), any());
+        assertThat(response.answer()).isEqualTo("Web evidence answer [1]");
+        assertThat(resultCaptor.getValue().success()).isTrue();
+        assertThat(resultCaptor.getValue().observation())
+                .contains("successfulAgents=rag_retrieval,web_search")
+                .contains("failedAgents=mcp_tool");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "mcp_tool".equals(step.toolName()) && "error".equals(step.status()));
     }
 
     @Test
@@ -295,6 +327,19 @@ class SpringAiAlibabaAgentRuntimeTests {
         verifyNoInteractions(ragRetrievalTool);
     }
 
+    @Test
+    void multiAgentUsesItsShorterDedicatedDeadline() {
+        when(queryAnalysisClient.analyze(any())).thenAnswer(ignored -> {
+            Thread.sleep(2100);
+            return knowledgeAnalysis("PARALLEL", List.of("rag_retrieval"));
+        });
+
+        assertThatThrownBy(() -> runtime(propertiesWithMultiAgentDeadline(2)).answerMultiAgent(request("/multi-agent refund")))
+                .hasMessageContaining("Spring AI Alibaba agent graph execution failed");
+
+        verifyNoInteractions(ragRetrievalTool);
+    }
+
     private SpringAiAlibabaAgentRuntime runtime() {
         return runtime(new RagProperties(null, null, null, null, null, null, null, null, null, null));
     }
@@ -336,6 +381,15 @@ class SpringAiAlibabaAgentRuntimeTests {
                 null, null, null, null, null, null, null,
                 new RagProperties.Agent(4, 2, true, List.of("rag_retrieval", "web_search", "mcp_tool"), 8, 2, 0, seconds),
                 null, null
+        );
+    }
+
+    private RagProperties propertiesWithMultiAgentDeadline(int seconds) {
+        return new RagProperties(
+                null, null, null, null, null, null, null,
+                new RagProperties.Agent(4, 2, true, List.of("rag_retrieval", "web_search", "mcp_tool"), 8, 2, 0, 45),
+                new RagProperties.MultiAgent(4, seconds, true),
+                null
         );
     }
 

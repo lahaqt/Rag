@@ -192,6 +192,7 @@ public class PromptBuilder {
         remainingContextCharacters = appendWebResults(prompt, toolResult.webSearchResults(), remainingContextCharacters);
         prompt.append("\nAgent observations:\n");
         prompt.append(trim(nullToEmpty(toolResult.observation()), remainingContextCharacters));
+        prompt.append("\nOnly use observations from successful agents as factual evidence; failed-agent messages are diagnostic only.\n");
         prompt.append("""
 
                 请基于上面的多 Agent 结果回答用户问题。
