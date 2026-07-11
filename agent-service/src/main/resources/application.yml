@@ -67,6 +67,7 @@ rag:
     tool-timeout-seconds: 8
     read-only-tool-max-attempts: 2
     retry-backoff-millis: 100
+    max-execution-seconds: 45
     max-reflection-retries: 2
   memory:
     provider: in-memory

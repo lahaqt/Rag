@@ -1,6 +1,7 @@
 package com.example.ragagent.service;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -52,6 +53,8 @@ class SpringAiAlibabaAgentRuntimeTests {
         assertThat(response.agentTrace())
                 .extracting(step -> step.phase())
                 .contains("spring_ai_alibaba_graph", "spring_ai_alibaba_routing", "spring_ai_alibaba_agent");
+        assertThat(response.agentTrace())
+                .allMatch(step -> step.attributes().containsKey("runId"));
         assertThat(response.agentTrace())
                 .filteredOn(step -> "complete".equals(step.action()))
                 .singleElement()
@@ -255,6 +258,43 @@ class SpringAiAlibabaAgentRuntimeTests {
         verify(webSearchTool, times(2)).search("weather");
     }
 
+    @Test
+    void reflectionFailureReplansToDeferredCapability() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis("PLANNED_TASK", List.of("rag_retrieval", "web_search"));
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any())).thenReturn(AgentToolResult.retrieval("refund", List.of(hit())));
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("", true, "empty_llm_draft"));
+        when(webSearchTool.search("refund"))
+                .thenReturn(List.of(new WebSearchResult(1, "Refund update", "https://example.com", "Updated policy")));
+        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Refund update", false, "web_search_test"));
+
+        ChatResponse response = runtime(propertiesWithPriority(List.of("rag_retrieval", "web_search", "mcp_tool")))
+                .answer(request("refund"));
+
+        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "replan_capability".equals(step.action())
+                        && "spring_ai_alibaba_reflection".equals(step.phase()));
+        verify(webSearchTool).search("refund");
+    }
+
+    @Test
+    void executionDeadlineStopsGraphBeforeTheNextNode() {
+        when(queryAnalysisClient.analyze(any())).thenAnswer(ignored -> {
+            Thread.sleep(2100);
+            return knowledgeAnalysis("SINGLE_TOOL", List.of("rag_retrieval"));
+        });
+
+        assertThatThrownBy(() -> runtime(propertiesWithDeadline(2)).answer(request("refund")))
+                .hasMessageContaining("Spring AI Alibaba agent graph execution failed");
+
+        verifyNoInteractions(ragRetrievalTool);
+    }
+
     private SpringAiAlibabaAgentRuntime runtime() {
         return runtime(new RagProperties(null, null, null, null, null, null, null, null, null, null));
     }
@@ -288,6 +328,14 @@ class SpringAiAlibabaAgentRuntimeTests {
                 new RagProperties.Agent(4, 2, true, priority),
                 null,
                 null
+        );
+    }
+
+    private RagProperties propertiesWithDeadline(int seconds) {
+        return new RagProperties(
+                null, null, null, null, null, null, null,
+                new RagProperties.Agent(4, 2, true, List.of("rag_retrieval", "web_search", "mcp_tool"), 8, 2, 0, seconds),
+                null, null
         );
     }
 

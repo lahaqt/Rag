@@ -67,6 +67,7 @@ public class SpringAiAlibabaAgentRuntime {
     private static final String EDGE_FINISH = "finish";
     private static final String EDGE_EXECUTE_NEXT = "execute_next";
     private static final String EDGE_GENERATE = "generate";
+    private static final String EDGE_REPLAN_CAPABILITY = "replan_capability";
     private static final String MULTI_AGENT_COMMAND = "/multi-agent";
 
     private final QueryAnalysisClient queryAnalysisClient;
@@ -84,6 +85,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final int maxReflectionRetries;
     private final int readOnlyToolMaxAttempts;
     private final int retryBackoffMillis;
+    private final long maxExecutionNanos;
     private final List<String> singleCapabilityPriority;
     private final Map<String, ExecutionContext> activeContexts = new ConcurrentHashMap<>();
     private final CompiledGraph ordinaryGraph;
@@ -126,6 +128,10 @@ public class SpringAiAlibabaAgentRuntime {
         this.retryBackoffMillis = properties == null || properties.agent() == null
                 ? 100
                 : properties.agent().retryBackoffMillis();
+        int maxExecutionSeconds = properties == null || properties.agent() == null
+                ? 45
+                : properties.agent().maxExecutionSeconds();
+        this.maxExecutionNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(maxExecutionSeconds);
         this.singleCapabilityPriority = properties == null || properties.agent() == null
                 ? List.of("web_search", "mcp_tool", "rag_retrieval")
                 : properties.agent().capabilityPriority();
@@ -214,14 +220,25 @@ public class SpringAiAlibabaAgentRuntime {
                 normalize(rawRequest, multiAgent),
                 multiAgent,
                 streamSink == null ? ChatStreamSink.noop() : streamSink,
-                fallbackTraceContext == null ? TraceContextSnapshot.empty() : fallbackTraceContext
+                fallbackTraceContext == null ? TraceContextSnapshot.empty() : fallbackTraceContext,
+                tracePersistenceService
         );
         CompiledGraph graph = multiAgent ? multiAgentGraph : ordinaryGraph;
         activeContexts.put(runId, context);
+        if (tracePersistenceService != null) {
+            tracePersistenceService.startRun(runId, context.rawRequest, multiAgent ? multiAgentGraphName() : ordinaryGraphName());
+        }
         try {
             graph.invoke(Map.of(KEY_RUN_ID, runId))
                     .orElseThrow(() -> new IllegalStateException("Spring AI Alibaba graph returned empty state."));
         } catch (Exception exception) {
+            if (tracePersistenceService != null) {
+                tracePersistenceService.failRun(
+                        runId,
+                        exception,
+                        hasDeadlineExceeded(exception) ? "TIMED_OUT" : "FAILED"
+                );
+            }
             throw new IllegalStateException("Spring AI Alibaba agent graph execution failed.", exception);
         } finally {
             activeContexts.remove(runId);
@@ -250,7 +267,7 @@ public class SpringAiAlibabaAgentRuntime {
             graph.addEdge(NODE_EXECUTE, NODE_REPLAN);
             addOrdinaryReplanEdges(graph);
             graph.addEdge(NODE_GENERATE, NODE_REFLECT);
-            addReflectionEdges(graph);
+            addOrdinaryReflectionEdges(graph);
             graph.addEdge(NODE_FINALIZE, StateGraph.END);
             return graph.compile(compileConfig());
         } catch (Exception exception) {
@@ -304,6 +321,17 @@ public class SpringAiAlibabaAgentRuntime {
                 NODE_REFLECT,
                 AsyncEdgeAction.edge_async(state -> context(state).retry ? EDGE_RETRY : EDGE_FINISH),
                 Map.of(EDGE_RETRY, NODE_GENERATE, EDGE_FINISH, NODE_FINALIZE)
+        );
+    }
+
+    private void addOrdinaryReflectionEdges(StateGraph graph) throws Exception {
+        graph.addConditionalEdges(
+                NODE_REFLECT,
+                AsyncEdgeAction.edge_async(state -> {
+                    ExecutionContext context = context(state);
+                    return context.reflectionReplan ? EDGE_REPLAN_CAPABILITY : context.retry ? EDGE_RETRY : EDGE_FINISH;
+                }),
+                Map.of(EDGE_RETRY, NODE_GENERATE, EDGE_REPLAN_CAPABILITY, NODE_EXECUTE, EDGE_FINISH, NODE_FINALIZE)
         );
     }
 
@@ -631,6 +659,7 @@ public class SpringAiAlibabaAgentRuntime {
         context.toolResult = execution.result();
         context.draft = generateDraft(context, execution.decision(), execution.result());
         context.retry = false;
+        context.reflectionReplan = false;
         context.addTrace(AgentTraceStep.timed(
                 context.nextStep(),
                 "answer",
@@ -712,6 +741,17 @@ public class SpringAiAlibabaAgentRuntime {
         );
         context.reflection = reflection;
         context.retry = !reflection.passed() && context.reflectionAttempts < maxReflectionRetries;
+        context.reflectionReplan = false;
+        String nextCapability = "";
+        if (context.retry && context.toolAttempts < maxToolIterations) {
+            nextCapability = context.advanceCapability();
+            if (!nextCapability.isBlank()) {
+                context.capabilities = Set.of(nextCapability);
+                context.reflectionReplan = true;
+                context.retry = false;
+                context.streamSink.answerReset("reflection_replan_" + nextCapability);
+            }
+        }
         if (context.retry) {
             context.reflectionAttempts++;
             context.reflectionHint = "previous_attempt=" + context.reflectionAttempts
@@ -724,8 +764,9 @@ public class SpringAiAlibabaAgentRuntime {
                 "spring_ai_alibaba_reflection",
                 context.analysis.route(),
                 context.decision.toolName(),
-                context.retry ? "retry" : "finish",
-                reflection.observation() + "; attempts=" + context.reflectionAttempts,
+                context.reflectionReplan ? "replan_capability" : context.retry ? "retry" : "finish",
+                reflection.observation() + "; attempts=" + context.reflectionAttempts
+                        + (context.reflectionReplan ? "; nextTool=" + nextCapability : ""),
                 reflection.passed() ? "ok" : "warn",
                 durationMs(started)
         ));
@@ -755,6 +796,9 @@ public class SpringAiAlibabaAgentRuntime {
         ChatResponse response = response(context);
         response = withCurrentTrace(response, context.fallbackTraceContext);
         context.response = response;
+        if (tracePersistenceService != null) {
+            tracePersistenceService.completeRun(context.runId, response);
+        }
         if (tracePersistenceService != null) {
             tracePersistenceService.record(context.request, response);
         }
@@ -1035,6 +1079,9 @@ public class SpringAiAlibabaAgentRuntime {
         if (context == null) {
             throw new IllegalStateException("Spring AI Alibaba graph context is unavailable for runId=" + runId);
         }
+        if (System.nanoTime() - context.requestStarted > maxExecutionNanos) {
+            throw new AgentExecutionDeadlineExceededException("agent execution deadline exceeded for runId=" + runId);
+        }
         return context;
     }
 
@@ -1057,12 +1104,30 @@ public class SpringAiAlibabaAgentRuntime {
     private record CombinedExecution(ToolDecision decision, AgentToolResult result) {
     }
 
+    private boolean hasDeadlineExceeded(Throwable exception) {
+        Throwable current = exception;
+        while (current != null) {
+            if (current instanceof AgentExecutionDeadlineExceededException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
+    }
+
+    private static final class AgentExecutionDeadlineExceededException extends RuntimeException {
+        private AgentExecutionDeadlineExceededException(String message) {
+            super(message);
+        }
+    }
+
     private static final class ExecutionContext {
         private final String runId;
         private final ChatRequest rawRequest;
         private final boolean multiAgent;
         private final ChatStreamSink streamSink;
         private final TraceContextSnapshot fallbackTraceContext;
+        private final AgentTracePersistenceService runPersistenceService;
         private final long requestStarted = System.nanoTime();
         private final AtomicInteger step = new AtomicInteger();
         private final List<AgentTraceStep> trace = new CopyOnWriteArrayList<>();
@@ -1084,6 +1149,7 @@ public class SpringAiAlibabaAgentRuntime {
         private volatile int reflectionAttempts;
         private volatile boolean retry;
         private volatile boolean replanCapability;
+        private volatile boolean reflectionReplan;
         private volatile String routingObservation = "";
         private volatile ChatResponse response;
 
@@ -1092,13 +1158,15 @@ public class SpringAiAlibabaAgentRuntime {
                 ChatRequest rawRequest,
                 boolean multiAgent,
                 ChatStreamSink streamSink,
-                TraceContextSnapshot fallbackTraceContext
+                TraceContextSnapshot fallbackTraceContext,
+                AgentTracePersistenceService runPersistenceService
         ) {
             this.runId = runId;
             this.rawRequest = rawRequest;
             this.multiAgent = multiAgent;
             this.streamSink = streamSink;
             this.fallbackTraceContext = fallbackTraceContext;
+            this.runPersistenceService = runPersistenceService;
         }
 
         private int nextStep() {
@@ -1106,8 +1174,12 @@ public class SpringAiAlibabaAgentRuntime {
         }
 
         private void addTrace(AgentTraceStep traceStep) {
-            trace.add(traceStep);
-            streamSink.trace(traceStep);
+            AgentTraceStep correlatedStep = traceStep.withAttribute("runId", runId);
+            trace.add(correlatedStep);
+            streamSink.trace(correlatedStep);
+            if (runPersistenceService != null) {
+                runPersistenceService.recordRunStep(runId, correlatedStep);
+            }
         }
 
         private String advanceCapability() {

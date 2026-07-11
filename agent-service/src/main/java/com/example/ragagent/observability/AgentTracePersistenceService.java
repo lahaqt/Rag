@@ -36,13 +36,44 @@ public class AgentTracePersistenceService {
                 finish_reason     VARCHAR(128) NOT NULL DEFAULT '',
                 llm_used          BOOLEAN NOT NULL DEFAULT false,
                 agent_trace_json  TEXT NOT NULL DEFAULT '[]',
-                created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+                created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
             )
             """;
 
     private static final String CREATE_TRACE_INDEX_SQL = """
             CREATE INDEX IF NOT EXISTS idx_agent_trace_records_trace_id
                 ON agent_trace_records(trace_id, created_at DESC)
+            """;
+
+    private static final String CREATE_RUN_TABLE_SQL = """
+            CREATE TABLE IF NOT EXISTS agent_runs (
+                run_id            VARCHAR(128) PRIMARY KEY,
+                conversation_id   VARCHAR(128) NOT NULL DEFAULT '',
+                query             TEXT NOT NULL DEFAULT '',
+                graph_name        VARCHAR(64) NOT NULL DEFAULT '',
+                status            VARCHAR(32) NOT NULL,
+                trace_id          VARCHAR(64) NOT NULL DEFAULT '',
+                finish_reason     VARCHAR(128) NOT NULL DEFAULT '',
+                error             TEXT NOT NULL DEFAULT '',
+                started_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                completed_at      TIMESTAMP WITH TIME ZONE
+            )
+            """;
+
+    private static final String CREATE_RUN_STEP_TABLE_SQL = """
+            CREATE TABLE IF NOT EXISTS agent_run_steps (
+                run_id            VARCHAR(128) NOT NULL,
+                step_number       INTEGER NOT NULL,
+                phase             VARCHAR(128) NOT NULL DEFAULT '',
+                action            VARCHAR(128) NOT NULL DEFAULT '',
+                tool_name         VARCHAR(128) NOT NULL DEFAULT '',
+                status            VARCHAR(32) NOT NULL DEFAULT '',
+                observation       TEXT NOT NULL DEFAULT '',
+                error             TEXT NOT NULL DEFAULT '',
+                duration_ms       BIGINT NOT NULL DEFAULT -1,
+                created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                PRIMARY KEY (run_id, step_number)
+            )
             """;
 
     private static final String CREATE_CONVERSATION_INDEX_SQL = """
@@ -92,6 +123,56 @@ public class AgentTracePersistenceService {
         }
     }
 
+    public void startRun(String runId, ChatRequest request, String graphName) {
+        write(() -> jdbcTemplate.update(
+                "INSERT INTO agent_runs (run_id, conversation_id, query, graph_name, status) VALUES (?, ?, ?, ?, 'RUNNING')",
+                runId, safe(request.conversationId()), safe(request.query()), safe(graphName)
+        ), "start", runId);
+    }
+
+    public void recordRunStep(String runId, AgentTraceStep step) {
+        write(() -> jdbcTemplate.update(
+                """
+                        INSERT INTO agent_run_steps (
+                            run_id, step_number, phase, action, tool_name, status, observation, error, duration_ms
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                runId, step.step(), step.phase(), step.action(), step.toolName(), step.status(),
+                step.observation(), step.error(), step.durationMs()
+        ), "step", runId);
+    }
+
+    public void completeRun(String runId, ChatResponse response) {
+        write(() -> jdbcTemplate.update(
+                "UPDATE agent_runs SET status = 'COMPLETED', trace_id = ?, finish_reason = ?, completed_at = now() WHERE run_id = ?",
+                safe(response.traceId()), safe(response.finishReason()), runId
+        ), "complete", runId);
+    }
+
+    public void failRun(String runId, Exception exception) {
+        failRun(runId, exception, "FAILED");
+    }
+
+    public void failRun(String runId, Exception exception, String status) {
+        write(() -> jdbcTemplate.update(
+                "UPDATE agent_runs SET status = ?, error = ?, completed_at = now() WHERE run_id = ?",
+                safe(status), safe(exception == null ? "agent graph failed" : exception.getMessage()), runId
+        ), "fail", runId);
+    }
+
+    public AgentRunRecord findRun(String runId) {
+        List<AgentRunRecord> records = jdbcTemplate.query(
+                "SELECT * FROM agent_runs WHERE run_id = ?", this::mapRun, runId
+        );
+        return records.isEmpty() ? null : records.get(0);
+    }
+
+    public List<AgentRunStepRecord> findRunSteps(String runId) {
+        return jdbcTemplate.query(
+                "SELECT * FROM agent_run_steps WHERE run_id = ? ORDER BY step_number ASC", this::mapRunStep, runId
+        );
+    }
+
     public List<AgentTraceRecord> findByTraceId(String traceId) {
         if (traceId == null || traceId.isBlank()) {
             return List.of();
@@ -129,8 +210,20 @@ public class AgentTracePersistenceService {
     private void initializeSchema() {
         try {
             jdbcTemplate.execute(CREATE_TABLE_SQL);
+            jdbcTemplate.execute(CREATE_RUN_TABLE_SQL);
+            jdbcTemplate.execute(CREATE_RUN_STEP_TABLE_SQL);
             jdbcTemplate.execute(CREATE_TRACE_INDEX_SQL);
             jdbcTemplate.execute(CREATE_CONVERSATION_INDEX_SQL);
+            int recovered = jdbcTemplate.update(
+                    """
+                            UPDATE agent_runs
+                            SET status = 'FAILED', error = 'agent-service restarted before run completion', completed_at = now()
+                            WHERE status = 'RUNNING'
+                            """
+            );
+            if (recovered > 0) {
+                log.warn("Marked {} interrupted agent runs as failed during startup recovery.", recovered);
+            }
         } catch (Exception exception) {
             log.warn("Agent trace schema initialization failed. error={}", exception.getMessage());
         }
@@ -168,5 +261,30 @@ public class AgentTracePersistenceService {
 
     private String safe(String value) {
         return value == null ? "" : value;
+    }
+
+    private AgentRunRecord mapRun(ResultSet rs, int rowNum) throws SQLException {
+        return new AgentRunRecord(
+                rs.getString("run_id"), rs.getString("conversation_id"), rs.getString("query"),
+                rs.getString("graph_name"), rs.getString("status"), rs.getString("trace_id"),
+                rs.getString("finish_reason"), rs.getString("error"),
+                rs.getObject("started_at", Instant.class), rs.getObject("completed_at", Instant.class)
+        );
+    }
+
+    private AgentRunStepRecord mapRunStep(ResultSet rs, int rowNum) throws SQLException {
+        return new AgentRunStepRecord(
+                rs.getString("run_id"), rs.getInt("step_number"), rs.getString("phase"), rs.getString("action"),
+                rs.getString("tool_name"), rs.getString("status"), rs.getString("observation"), rs.getString("error"),
+                rs.getLong("duration_ms"), rs.getObject("created_at", Instant.class)
+        );
+    }
+
+    private void write(Runnable operation, String action, String runId) {
+        try {
+            operation.run();
+        } catch (Exception exception) {
+            log.warn("Agent run persistence {} failed. runId={} error={}", action, runId, exception.getMessage());
+        }
     }
 }

@@ -1,6 +1,7 @@
 package com.example.ragagent.dto;
 
 import java.util.Map;
+import java.util.LinkedHashMap;
 
 public record AgentTraceStep(
         int step,
@@ -95,6 +96,15 @@ public record AgentTraceStep(
                 traceId,
                 spanId,
                 attributes
+        );
+    }
+
+    public AgentTraceStep withAttribute(String key, Object value) {
+        Map<String, Object> merged = new LinkedHashMap<>(attributes);
+        merged.put(key, value);
+        return new AgentTraceStep(
+                step, phase, route, toolName, action, observation, status, durationMs,
+                error, traceId, spanId, merged
         );
     }
 
