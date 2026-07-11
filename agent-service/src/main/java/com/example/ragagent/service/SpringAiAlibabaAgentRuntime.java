@@ -38,6 +38,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -55,6 +56,7 @@ public class SpringAiAlibabaAgentRuntime {
     private static final String NODE_ANALYZE = "query_analysis";
     private static final String NODE_ROUTE = "route_capabilities";
     private static final String NODE_EXECUTE = "execute_capability";
+    private static final String NODE_REPLAN = "replan_capability";
     private static final String NODE_KNOWLEDGE = "knowledge_agent";
     private static final String NODE_WEB = "web_search_agent";
     private static final String NODE_MCP = "mcp_tool_agent";
@@ -63,6 +65,8 @@ public class SpringAiAlibabaAgentRuntime {
     private static final String NODE_FINALIZE = "finalize_response";
     private static final String EDGE_RETRY = "retry";
     private static final String EDGE_FINISH = "finish";
+    private static final String EDGE_EXECUTE_NEXT = "execute_next";
+    private static final String EDGE_GENERATE = "generate";
     private static final String MULTI_AGENT_COMMAND = "/multi-agent";
 
     private final QueryAnalysisClient queryAnalysisClient;
@@ -76,7 +80,11 @@ public class SpringAiAlibabaAgentRuntime {
     private final ConversationHistoryService conversationHistoryService;
     private final TraceContextProvider traceContextProvider;
     private final AgentTracePersistenceService tracePersistenceService;
+    private final int maxToolIterations;
     private final int maxReflectionRetries;
+    private final int readOnlyToolMaxAttempts;
+    private final int retryBackoffMillis;
+    private final List<String> singleCapabilityPriority;
     private final Map<String, ExecutionContext> activeContexts = new ConcurrentHashMap<>();
     private final CompiledGraph ordinaryGraph;
     private final CompiledGraph multiAgentGraph;
@@ -106,9 +114,21 @@ public class SpringAiAlibabaAgentRuntime {
         this.conversationHistoryService = conversationHistoryService;
         this.traceContextProvider = traceContextProvider;
         this.tracePersistenceService = tracePersistenceService;
+        this.maxToolIterations = properties == null || properties.agent() == null
+                ? 4
+                : properties.agent().maxIterations();
         this.maxReflectionRetries = properties == null || properties.agent() == null
                 ? 2
                 : properties.agent().maxReflectionRetries();
+        this.readOnlyToolMaxAttempts = properties == null || properties.agent() == null
+                ? 2
+                : properties.agent().readOnlyToolMaxAttempts();
+        this.retryBackoffMillis = properties == null || properties.agent() == null
+                ? 100
+                : properties.agent().retryBackoffMillis();
+        this.singleCapabilityPriority = properties == null || properties.agent() == null
+                ? List.of("web_search", "mcp_tool", "rag_retrieval")
+                : properties.agent().capabilityPriority();
         this.ordinaryGraph = compileOrdinaryGraph();
         this.multiAgentGraph = compileMultiAgentGraph();
     }
@@ -219,6 +239,7 @@ public class SpringAiAlibabaAgentRuntime {
             graph.addNode(NODE_ANALYZE, AsyncNodeAction.node_async(this::analyze));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(this::route));
             graph.addNode(NODE_EXECUTE, AsyncNodeAction.node_async(this::executeOrdinaryCapability));
+            graph.addNode(NODE_REPLAN, AsyncNodeAction.node_async(this::replanOrdinaryCapability));
             graph.addNode(NODE_GENERATE, AsyncNodeAction.node_async(this::generate));
             graph.addNode(NODE_REFLECT, AsyncNodeAction.node_async(this::reflect));
             graph.addNode(NODE_FINALIZE, AsyncNodeAction.node_async(this::finalizeResponse));
@@ -226,7 +247,8 @@ public class SpringAiAlibabaAgentRuntime {
             graph.addEdge(NODE_PREPARE, NODE_ANALYZE);
             graph.addEdge(NODE_ANALYZE, NODE_ROUTE);
             graph.addEdge(NODE_ROUTE, NODE_EXECUTE);
-            graph.addEdge(NODE_EXECUTE, NODE_GENERATE);
+            graph.addEdge(NODE_EXECUTE, NODE_REPLAN);
+            addOrdinaryReplanEdges(graph);
             graph.addEdge(NODE_GENERATE, NODE_REFLECT);
             addReflectionEdges(graph);
             graph.addEdge(NODE_FINALIZE, StateGraph.END);
@@ -272,7 +294,7 @@ public class SpringAiAlibabaAgentRuntime {
 
     private CompileConfig compileConfig() {
         return CompileConfig.builder()
-                .recursionLimit(Math.max(16, 8 + maxReflectionRetries * 4))
+                .recursionLimit(Math.max(24, 10 + maxToolIterations * 3 + maxReflectionRetries * 4))
                 .releaseThread(false)
                 .build();
     }
@@ -372,12 +394,18 @@ public class SpringAiAlibabaAgentRuntime {
             });
         }
 
-        if (!context.multiAgent && capabilities.size() > 1) {
-            String selected = firstSupported(capabilities);
+        if (!context.multiAgent) {
+            List<String> capabilityPlan = orderedSupported(capabilities);
+            context.capabilityPlan = capabilityPlan;
+            String selected = capabilityPlan.isEmpty() ? "" : capabilityPlan.get(0);
+            Set<String> deferred = new LinkedHashSet<>(capabilities);
+            deferred.remove(selected);
             capabilities.clear();
             if (!selected.isBlank()) {
                 capabilities.add(selected);
             }
+            context.routingObservation = "selected=" + selected + "; deferred=" + deferred
+                    + "; plan=" + capabilityPlan + "; priority=" + singleCapabilityPriority;
         }
         context.capabilities = Set.copyOf(capabilities);
         context.addTrace(AgentTraceStep.timed(
@@ -386,7 +414,8 @@ public class SpringAiAlibabaAgentRuntime {
                 analysis.route(),
                 context.multiAgent && capabilities.size() > 1 ? "multi_agent" : firstSupported(capabilities),
                 context.multiAgent ? "fan_out" : "select_capability",
-                "capabilities=" + capabilities,
+                "capabilities=" + capabilities
+                        + (context.routingObservation.isBlank() ? "" : "; " + context.routingObservation),
                 "ok",
                 durationMs(started)
         ));
@@ -396,10 +425,23 @@ public class SpringAiAlibabaAgentRuntime {
     private Map<String, Object> executeOrdinaryCapability(OverAllState state) {
         ExecutionContext context = context(state);
         String capability = firstSupported(context.capabilities);
+        context.replanCapability = false;
         switch (capability) {
-            case "web_search" -> runWebSearch(context);
-            case "mcp_tool" -> runMcp(context);
-            case "rag_retrieval" -> runKnowledge(context);
+            case "web_search" -> {
+                context.toolAttempts++;
+                runWebSearch(context);
+                context.lastToolResult = context.results.get("web_search");
+            }
+            case "mcp_tool" -> {
+                context.toolAttempts++;
+                runMcp(context);
+                context.lastToolResult = context.results.get("mcp_tool");
+            }
+            case "rag_retrieval" -> {
+                context.toolAttempts++;
+                runKnowledge(context);
+                context.lastToolResult = context.results.get("rag_retrieval");
+            }
             default -> context.addTrace(new AgentTraceStep(
                     context.nextStep(),
                     "spring_ai_alibaba_agent",
@@ -409,6 +451,35 @@ public class SpringAiAlibabaAgentRuntime {
                     "no_tool_required"
             ));
         }
+        return stateUpdate(context);
+    }
+
+    private Map<String, Object> replanOrdinaryCapability(OverAllState state) {
+        ExecutionContext context = context(state);
+        AgentToolResult result = context.lastToolResult;
+        boolean needsAnotherCapability = needsAnotherCapability(result);
+        String nextCapability = needsAnotherCapability && context.toolAttempts < maxToolIterations
+                ? context.advanceCapability()
+                : "";
+        context.replanCapability = !nextCapability.isBlank();
+        if (context.replanCapability) {
+            context.capabilities = Set.of(nextCapability);
+        }
+        String action = context.replanCapability ? "next_capability" : "generate";
+        String observation = "attempts=" + context.toolAttempts
+                + "; lastTool=" + (result == null ? "" : result.toolName())
+                + "; reason=" + replanReason(result, needsAnotherCapability)
+                + (context.replanCapability ? "; nextTool=" + nextCapability : "");
+        context.addTrace(AgentTraceStep.timed(
+                context.nextStep(),
+                "spring_ai_alibaba_planner",
+                context.analysis.route(),
+                result == null ? "" : result.toolName(),
+                action,
+                observation,
+                "ok",
+                0
+        ));
         return stateUpdate(context);
     }
 
@@ -451,16 +522,11 @@ public class SpringAiAlibabaAgentRuntime {
                     "knowledge_base_required"
             );
         } else {
-            try {
-                result = ragRetrievalTool.execute(context.request, context.analysis, decision);
-            } catch (Exception exception) {
-                result = AgentToolResult.failure(
-                        "rag_retrieval",
-                        decision.query(),
-                        safe(exception.getMessage()),
-                        "rag_retrieval_failed"
-                );
-            }
+            result = executeReadOnlyWithRetry(
+                    "rag_retrieval",
+                    decision.query(),
+                    () -> ragRetrievalTool.execute(context.request, context.analysis, decision)
+            );
         }
         context.results.put("rag_retrieval", result);
         context.addTrace(capabilityTrace(context, result, "knowledge_agent", started));
@@ -472,18 +538,11 @@ public class SpringAiAlibabaAgentRuntime {
                 "web_search",
                 ignored -> ToolDecision.webSearch(context.request.query().trim(), "graph_web_search_agent")
         );
-        AgentToolResult result;
-        try {
-            List<WebSearchResult> results = webSearchTool.search(decision.query());
-            result = AgentToolResult.webSearch(decision.query(), results);
-        } catch (Exception exception) {
-            result = AgentToolResult.failure(
-                    "web_search",
-                    decision.query(),
-                    safe(exception.getMessage()),
-                    "web_search_failed"
-            );
-        }
+        AgentToolResult result = executeReadOnlyWithRetry(
+                "web_search",
+                decision.query(),
+                () -> AgentToolResult.webSearch(decision.query(), webSearchTool.search(decision.query()))
+        );
         context.results.put("web_search", result);
         context.addTrace(capabilityTrace(context, result, "web_search_agent", started));
     }
@@ -497,6 +556,53 @@ public class SpringAiAlibabaAgentRuntime {
         AgentToolResult result = mcpToolGateway.execute(decision.query());
         context.results.put("mcp_tool", result);
         context.addTrace(capabilityTrace(context, result, "mcp_tool_agent", started));
+    }
+
+    private AgentToolResult executeReadOnlyWithRetry(
+            String toolName,
+            String query,
+            Supplier<AgentToolResult> operation
+    ) {
+        AgentToolResult result = null;
+        for (int attempt = 1; attempt <= readOnlyToolMaxAttempts; attempt++) {
+            try {
+                result = operation.get();
+            } catch (Exception exception) {
+                result = AgentToolResult.failure(toolName, query, safe(exception.getMessage()), toolName + "_failed");
+            }
+            if (result.success() || attempt == readOnlyToolMaxAttempts) {
+                return withAttemptCount(result, attempt);
+            }
+            if (!backoffBeforeRetry()) {
+                return withAttemptCount(result, attempt);
+            }
+        }
+        return AgentToolResult.failure(toolName, query, "tool_retry_exhausted", toolName + "_failed");
+    }
+
+    private AgentToolResult withAttemptCount(AgentToolResult result, int attempts) {
+        return new AgentToolResult(
+                result.toolName(),
+                result.query(),
+                result.success(),
+                safe(result.observation()) + "; attempts=" + attempts,
+                result.finishReason(),
+                result.retrievalHits(),
+                result.webSearchResults()
+        );
+    }
+
+    private boolean backoffBeforeRetry() {
+        if (retryBackoffMillis <= 0) {
+            return true;
+        }
+        try {
+            Thread.sleep(retryBackoffMillis);
+            return true;
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     private AgentTraceStep capabilityTrace(
@@ -709,6 +815,14 @@ public class SpringAiAlibabaAgentRuntime {
     }
 
     private CombinedExecution combine(ExecutionContext context) {
+        if (!context.multiAgent && context.lastToolResult != null) {
+            AgentToolResult result = context.lastToolResult;
+            ToolDecision decision = context.decisions.getOrDefault(
+                    result.toolName(),
+                    new ToolDecision(true, result.toolName(), result.query(), "ordinary_graph_capability_result")
+            );
+            return new CombinedExecution(decision, result);
+        }
         List<AgentToolResult> results = List.copyOf(context.results.values());
         if (results.isEmpty()) {
             return new CombinedExecution(ToolDecision.none(), null);
@@ -757,26 +871,84 @@ public class SpringAiAlibabaAgentRuntime {
     }
 
     private QueryAnalysisResponse fallbackAnalysis(ChatRequest request, boolean multiAgent) {
+        var mcpDecision = mcpToolGateway.decide(request.query());
+        if (mcpDecision.isPresent()) {
+            return fallbackToolAnalysis(request, "mcp_tool", mcpDecision.get().reason(), multiAgent);
+        }
+        ToolDecision realtimeDecision = toolRouter.realtimeDecision(request.query());
+        if (realtimeDecision.useTool()) {
+            return fallbackToolAnalysis(request, "web_search", realtimeDecision.reason(), multiAgent);
+        }
+        if (!isBlank(request.knowledgeBaseId())) {
+            return fallbackKnowledgeAnalysis(request, multiAgent);
+        }
         return new QueryAnalysisResponse(
                 request.conversationId(),
                 request.knowledgeBaseId(),
                 request.query(),
                 request.query().trim(),
                 request.query().trim(),
-                "knowledge",
+                "follow_up",
                 0.50,
-                "knowledge_retrieval",
+                "ask_follow_up",
                 false,
                 false,
                 request.normalizedHistory().size(),
-                List.of(request.query().trim()),
+                List.of(),
                 "USER_QUESTION",
+                "DIRECT",
+                List.of(),
+                "Query analysis is unavailable. Please specify a knowledge base or the information you need.",
+                Map.of(),
+                "",
+                List.of("spring_ai_alibaba_graph_fallback", "no_safe_capability")
+        );
+    }
+
+    private void addOrdinaryReplanEdges(StateGraph graph) throws Exception {
+        graph.addConditionalEdges(
+                NODE_REPLAN,
+                AsyncEdgeAction.edge_async(state -> context(state).replanCapability ? EDGE_EXECUTE_NEXT : EDGE_GENERATE),
+                Map.of(EDGE_EXECUTE_NEXT, NODE_EXECUTE, EDGE_GENERATE, NODE_GENERATE)
+        );
+    }
+
+    private QueryAnalysisResponse fallbackToolAnalysis(
+            ChatRequest request,
+            String capability,
+            String reason,
+            boolean multiAgent
+    ) {
+        return new QueryAnalysisResponse(
+                request.conversationId(),
+                request.knowledgeBaseId(),
+                request.query(),
+                request.query().trim(),
+                request.query().trim(),
+                "tool",
+                0.50,
+                capability.equals("web_search") ? "web_search" : "tool_invocation",
+                false,
+                false,
+                request.normalizedHistory().size(),
+                List.of(),
+                "TOOL_REQUEST",
                 multiAgent ? "PARALLEL" : "SINGLE_TOOL",
-                List.of("rag_retrieval"),
+                List.of(capability),
                 "",
                 Map.of(),
                 "",
-                List.of("spring_ai_alibaba_graph_fallback")
+                List.of("spring_ai_alibaba_graph_fallback", reason)
+        );
+    }
+
+    private QueryAnalysisResponse fallbackKnowledgeAnalysis(ChatRequest request, boolean multiAgent) {
+        return new QueryAnalysisResponse(
+                request.conversationId(), request.knowledgeBaseId(), request.query(), request.query().trim(), request.query().trim(),
+                "knowledge", 0.50, "knowledge_retrieval", false, false, request.normalizedHistory().size(),
+                List.of(request.query().trim()), "USER_QUESTION", multiAgent ? "PARALLEL" : "SINGLE_TOOL",
+                List.of("rag_retrieval"), "", Map.of(), "",
+                List.of("spring_ai_alibaba_graph_fallback", "knowledge_base_selected")
         );
     }
 
@@ -814,12 +986,42 @@ public class SpringAiAlibabaAgentRuntime {
     }
 
     private String firstSupported(Set<String> capabilities) {
-        for (String candidate : List.of("web_search", "mcp_tool", "rag_retrieval")) {
+        List<String> ordered = orderedSupported(capabilities);
+        return ordered.isEmpty() ? "" : ordered.get(0);
+    }
+
+    private List<String> orderedSupported(Set<String> capabilities) {
+        List<String> ordered = new ArrayList<>();
+        for (String candidate : singleCapabilityPriority) {
             if (capabilities.contains(candidate)) {
-                return candidate;
+                ordered.add(candidate);
             }
         }
-        return "";
+        return List.copyOf(ordered);
+    }
+
+    private boolean needsAnotherCapability(AgentToolResult result) {
+        if (result == null) {
+            return false;
+        }
+        if (!result.success()) {
+            return true;
+        }
+        return ("rag_retrieval".equals(result.toolName()) && result.retrievalHits().isEmpty())
+                || ("web_search".equals(result.toolName()) && result.webSearchResults().isEmpty());
+    }
+
+    private String replanReason(AgentToolResult result, boolean needsAnotherCapability) {
+        if (result == null) {
+            return "no_tool_required";
+        }
+        if (!needsAnotherCapability) {
+            return "observation_sufficient";
+        }
+        if (!result.success()) {
+            return "tool_failed:" + safe(result.finishReason());
+        }
+        return "insufficient_observation:" + safe(result.finishReason());
     }
 
     private String primaryQuery(ChatRequest request, QueryAnalysisResponse analysis) {
@@ -870,6 +1072,10 @@ public class SpringAiAlibabaAgentRuntime {
         private volatile ChatRequest request;
         private volatile QueryAnalysisResponse analysis;
         private volatile Set<String> capabilities = Set.of();
+        private volatile List<String> capabilityPlan = List.of();
+        private volatile int capabilityIndex;
+        private volatile int toolAttempts;
+        private volatile AgentToolResult lastToolResult;
         private volatile ToolDecision decision = ToolDecision.none();
         private volatile AgentToolResult toolResult;
         private volatile AnswerDraft draft;
@@ -877,6 +1083,8 @@ public class SpringAiAlibabaAgentRuntime {
         private volatile String reflectionHint = "";
         private volatile int reflectionAttempts;
         private volatile boolean retry;
+        private volatile boolean replanCapability;
+        private volatile String routingObservation = "";
         private volatile ChatResponse response;
 
         private ExecutionContext(
@@ -900,6 +1108,15 @@ public class SpringAiAlibabaAgentRuntime {
         private void addTrace(AgentTraceStep traceStep) {
             trace.add(traceStep);
             streamSink.trace(traceStep);
+        }
+
+        private String advanceCapability() {
+            int nextIndex = capabilityIndex + 1;
+            if (nextIndex >= capabilityPlan.size()) {
+                return "";
+            }
+            capabilityIndex = nextIndex;
+            return capabilityPlan.get(nextIndex);
         }
     }
 }

@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
@@ -168,7 +169,97 @@ class SpringAiAlibabaAgentRuntimeTests {
                 .hasSize(2);
     }
 
+    @Test
+    void analysisFailureKeepsRealtimeRequestOnWebSearch() {
+        when(queryAnalysisClient.analyze(any())).thenThrow(new IllegalStateException("query analysis unavailable"));
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(toolRouter.realtimeDecision(anyString()))
+                .thenReturn(ToolDecision.webSearch("Shanghai weather", "contains_realtime_keyword:weather"));
+        when(webSearchTool.search("Shanghai weather"))
+                .thenReturn(List.of(new WebSearchResult(1, "Weather", "https://example.com/weather", "Sunny")));
+        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Sunny", false, "web_search_test"));
+
+        ChatResponse response = runtime().answer(request("Shanghai weather"));
+
+        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.requiredCapabilities()).containsExactly("web_search");
+        verify(webSearchTool).search("Shanghai weather");
+        verifyNoInteractions(ragRetrievalTool);
+    }
+
+    @Test
+    void analysisFailureWithoutKnowledgeBaseRequestsClarificationInsteadOfRag() {
+        when(queryAnalysisClient.analyze(any())).thenThrow(new IllegalStateException("query analysis unavailable"));
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(toolRouter.realtimeDecision(anyString())).thenReturn(ToolDecision.none());
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Please specify a knowledge base.", false, "follow_up_required"));
+
+        ChatResponse response = runtime().answer(new ChatRequest("help", null, "conversation-1", List.of(), null));
+
+        assertThat(response.intent()).isEqualTo("follow_up");
+        assertThat(response.toolName()).isEmpty();
+        verifyNoInteractions(ragRetrievalTool, webSearchTool);
+    }
+
+    @Test
+    void failedPrimaryCapabilityReplansToNextConfiguredCapability() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis(
+                "PLANNED_TASK",
+                List.of("rag_retrieval", "web_search")
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.failure("rag_retrieval", "refund", "knowledge unavailable", "retrieval_failed"));
+        when(webSearchTool.search("refund"))
+                .thenReturn(List.of(new WebSearchResult(1, "Refund update", "https://example.com", "Updated refund policy")));
+        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Refund update", false, "web_search_test"));
+
+        ChatResponse response = runtime(propertiesWithPriority(List.of("rag_retrieval", "web_search", "mcp_tool")))
+                .answer(request("refund"));
+
+        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "next_capability".equals(step.action())
+                        && "spring_ai_alibaba_planner".equals(step.phase()));
+        verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
+        verify(webSearchTool).search("refund");
+    }
+
+    @Test
+    void readOnlyWebSearchRetriesAfterTransientFailure() {
+        QueryAnalysisResponse analysis = new QueryAnalysisResponse(
+                "conversation-1", "", "weather", "weather", "weather", "tool", 0.90,
+                "tool_invocation", false, false, 0, List.of(), "TOOL_REQUEST", "SINGLE_TOOL",
+                List.of("web_search"), "", Map.of(), "", List.of("test")
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.webSearch("weather", "required"));
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(webSearchTool.search("weather"))
+                .thenThrow(new IllegalStateException("temporary network failure"))
+                .thenReturn(List.of(new WebSearchResult(1, "Weather", "https://example.com", "Sunny")));
+        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Sunny", false, "web_search_test"));
+
+        ChatResponse response = runtime().answer(new ChatRequest("weather", null, "conversation-1", List.of(), null));
+
+        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> step.observation().contains("attempts=2"));
+        verify(webSearchTool, times(2)).search("weather");
+    }
+
     private SpringAiAlibabaAgentRuntime runtime() {
+        return runtime(new RagProperties(null, null, null, null, null, null, null, null, null, null));
+    }
+
+    private SpringAiAlibabaAgentRuntime runtime(RagProperties properties) {
         return new SpringAiAlibabaAgentRuntime(
                 queryAnalysisClient,
                 toolRouter,
@@ -181,7 +272,22 @@ class SpringAiAlibabaAgentRuntimeTests {
                 null,
                 null,
                 null,
-                new RagProperties(null, null, null, null, null, null, null, null, null, null)
+                properties
+        );
+    }
+
+    private RagProperties propertiesWithPriority(List<String> priority) {
+        return new RagProperties(
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                new RagProperties.Agent(4, 2, true, priority),
+                null,
+                null
         );
     }
 

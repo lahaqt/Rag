@@ -49,7 +49,7 @@ public record RagProperties(
             mcp = new Mcp(false, 8, List.of());
         }
         if (agent == null) {
-            agent = new Agent(4, 2, true);
+            agent = new Agent(4, 2, true, List.of("web_search", "mcp_tool", "rag_retrieval"), 8, 2, 100);
         }
         if (multiAgent == null) {
             multiAgent = new MultiAgent(4, 12, true);
@@ -174,13 +174,43 @@ public record RagProperties(
         }
     }
 
-    public record Agent(Integer maxIterations, Integer maxReflectionRetries, Boolean plannerEnabled) {
+    public record Agent(
+            Integer maxIterations,
+            Integer maxReflectionRetries,
+            Boolean plannerEnabled,
+            List<String> capabilityPriority,
+            Integer toolTimeoutSeconds,
+            Integer readOnlyToolMaxAttempts,
+            Integer retryBackoffMillis
+    ) {
         public Agent {
             maxIterations = maxIterations == null ? 4 : Math.max(1, Math.min(maxIterations, 8));
             maxReflectionRetries = maxReflectionRetries == null
                     ? 2
                     : Math.max(0, Math.min(maxReflectionRetries, 4));
             plannerEnabled = plannerEnabled == null || plannerEnabled;
+            List<String> normalizedPriority = capabilityPriority == null ? List.of() : capabilityPriority.stream()
+                    .filter(value -> value != null && !value.isBlank())
+                    .map(String::trim)
+                    .distinct()
+                    .toList();
+            capabilityPriority = normalizedPriority.isEmpty()
+                    ? List.of("web_search", "mcp_tool", "rag_retrieval")
+                    : normalizedPriority;
+            toolTimeoutSeconds = toolTimeoutSeconds == null ? 8 : Math.max(2, Math.min(toolTimeoutSeconds, 60));
+            readOnlyToolMaxAttempts = readOnlyToolMaxAttempts == null
+                    ? 2
+                    : Math.max(1, Math.min(readOnlyToolMaxAttempts, 4));
+            retryBackoffMillis = retryBackoffMillis == null ? 100 : Math.max(0, Math.min(retryBackoffMillis, 2000));
+        }
+
+        public Agent(
+                Integer maxIterations,
+                Integer maxReflectionRetries,
+                Boolean plannerEnabled,
+                List<String> capabilityPriority
+        ) {
+            this(maxIterations, maxReflectionRetries, plannerEnabled, capabilityPriority, 8, 2, 100);
         }
     }
 

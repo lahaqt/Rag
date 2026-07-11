@@ -18,17 +18,26 @@ public class ToolRouter {
 
     public ToolDecision decide(ChatRequest request, QueryAnalysisResponse analysis) {
         String query = request.query() == null ? "" : request.query().trim();
-        String normalized = query.toLowerCase();
-        for (String keyword : WEB_SEARCH_KEYWORDS) {
-            if (normalized.contains(keyword.toLowerCase())) {
-                return ToolDecision.webSearch(enrichQuery(query), "contains_realtime_keyword:" + keyword);
-            }
+        ToolDecision realtimeDecision = realtimeDecision(query);
+        if (realtimeDecision.useTool()) {
+            return realtimeDecision;
         }
 
         if ("tool".equals(analysis.intent()) || "tool_invocation".equals(analysis.route())) {
             return ToolDecision.webSearch(enrichQuery(query), "query_analysis_routed_to_tool");
         }
 
+        return ToolDecision.none();
+    }
+
+    /** Local, dependency-free realtime fallback used when query analysis is unavailable. */
+    public ToolDecision realtimeDecision(String query) {
+        String normalized = query == null ? "" : query.trim().toLowerCase();
+        for (String keyword : WEB_SEARCH_KEYWORDS) {
+            if (normalized.contains(keyword.toLowerCase())) {
+                return ToolDecision.webSearch(enrichQuery(query == null ? "" : query.trim()), "contains_realtime_keyword:" + keyword);
+            }
+        }
         return ToolDecision.none();
     }
 

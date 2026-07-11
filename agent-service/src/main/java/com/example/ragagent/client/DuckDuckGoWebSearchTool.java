@@ -5,14 +5,17 @@ import com.example.ragagent.dto.WebSearchResult;
 import com.example.ragagent.observability.TracePropagationInterceptor;
 import com.example.ragagent.service.WebSearchTool;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.net.URLEncoder;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 import org.springframework.web.util.HtmlUtils;
@@ -70,6 +73,7 @@ public class DuckDuckGoWebSearchTool implements WebSearchTool {
                 .baseUrl(this.properties.baseUrl())
                 .defaultHeader("User-Agent", "Mozilla/5.0 RAG-Agent/1.0")
                 .defaultHeader("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.6")
+                .requestFactory(requestFactory(properties.agent().toolTimeoutSeconds()))
                 .requestInterceptor(tracePropagationInterceptor)
                 .build();
     }
@@ -106,6 +110,15 @@ public class DuckDuckGoWebSearchTool implements WebSearchTool {
         }
 
         throw new IllegalStateException("Unsupported web search provider: " + properties.provider());
+    }
+
+    private JdkClientHttpRequestFactory requestFactory(int timeoutSeconds) {
+        Duration timeout = Duration.ofSeconds(timeoutSeconds);
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(
+                HttpClient.newBuilder().connectTimeout(timeout).build()
+        );
+        factory.setReadTimeout(timeout);
+        return factory;
     }
 
     private List<WebSearchResult> parseBingRssResults(String rss, int maxResults) {

@@ -5,7 +5,10 @@ import com.example.ragagent.dto.VectorSearchRequest;
 import com.example.ragagent.dto.VectorSearchResponse;
 import com.example.ragagent.observability.TracePropagationInterceptor;
 import com.example.ragagent.service.StorageRetrievalClient;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -20,6 +23,7 @@ public class HttpStorageRetrievalClient implements StorageRetrievalClient {
     ) {
         this.restClient = restClientBuilder.clone()
                 .baseUrl(properties.downstream().storageBaseUrl())
+                .requestFactory(requestFactory(properties.agent().toolTimeoutSeconds()))
                 .requestInterceptor(tracePropagationInterceptor)
                 .build();
     }
@@ -32,5 +36,14 @@ public class HttpStorageRetrievalClient implements StorageRetrievalClient {
                 .body(request)
                 .retrieve()
                 .body(VectorSearchResponse.class);
+    }
+
+    private JdkClientHttpRequestFactory requestFactory(int timeoutSeconds) {
+        Duration timeout = Duration.ofSeconds(timeoutSeconds);
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(
+                HttpClient.newBuilder().connectTimeout(timeout).build()
+        );
+        factory.setReadTimeout(timeout);
+        return factory;
     }
 }
