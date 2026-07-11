@@ -1,0 +1,52 @@
+openapi: 3.0.3
+info:
+  title: RAG Knowledge Retrieval API
+  version: v1
+paths:
+  /api/vector/search:
+    post:
+      operationId: searchKnowledgeBase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VectorSearchRequest'
+      responses:
+        '200':
+          description: Ranked retrieval matches.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VectorSearchResponse'
+components:
+  schemas:
+    VectorSearchRequest:
+      type: object
+      required: [knowledgeBaseId, query]
+      properties:
+        knowledgeBaseId: { type: string, minLength: 1 }
+        query: { type: string, minLength: 1 }
+        topK: { type: integer, minimum: 1, maximum: 20 }
+        similarityThreshold: { type: number, format: double, minimum: 0, maximum: 1 }
+        retrievalMode: { type: string, enum: [vector, bm25, hybrid] }
+        queryExpansionEnabled: { type: boolean }
+        queryExpansionCount: { type: integer, minimum: 1, maximum: 5 }
+    VectorSearchResponse:
+      type: object
+      required: [matches]
+      properties:
+        matches:
+          type: array
+          items: { $ref: '#/components/schemas/VectorSearchMatch' }
+    VectorSearchMatch:
+      type: object
+      required: [knowledgeBaseId, documentId, chunkId, chunkIndex, documentName, content, score]
+      properties:
+        knowledgeBaseId: { type: string }
+        documentId: { type: string }
+        chunkId: { type: string }
+        chunkIndex: { type: integer }
+        documentName: { type: string }
+        content: { type: string }
+        score: { type: number, format: double }

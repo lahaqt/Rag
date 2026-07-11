@@ -1,0 +1,65 @@
+openapi: 3.0.3
+info:
+  title: RAG Query Analysis API
+  version: v1
+paths:
+  /api/chat/analyze:
+    post:
+      operationId: analyzeChatQuery
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QueryAnalysisRequest'
+      responses:
+        '200':
+          description: Semantic analysis and retrieval constraints.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QueryAnalysisResponse'
+components:
+  schemas:
+    QueryAnalysisRequest:
+      type: object
+      required: [query]
+      properties:
+        query: { type: string, minLength: 1 }
+        knowledgeBaseId: { type: string, nullable: true }
+        sessionId: { type: string, nullable: true }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/ChatMessage' }
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string }
+        content: { type: string }
+    QueryAnalysisResponse:
+      type: object
+      required:
+        [originalQuery, normalizedQuery, rewrittenQuery, intent, confidence, route,
+         needsRewrite, rewritten, historyLength, retrievalQueries, requestType,
+         executionMode, requiredCapabilities, clarificationQuestion, slots, systemCommand, reasons]
+      properties:
+        sessionId: { type: string, nullable: true }
+        knowledgeBaseId: { type: string, nullable: true }
+        originalQuery: { type: string }
+        normalizedQuery: { type: string }
+        rewrittenQuery: { type: string }
+        intent: { type: string }
+        confidence: { type: number, format: double }
+        route: { type: string }
+        needsRewrite: { type: boolean }
+        rewritten: { type: boolean }
+        historyLength: { type: integer }
+        retrievalQueries: { type: array, items: { type: string } }
+        requestType: { type: string }
+        executionMode: { type: string }
+        requiredCapabilities: { type: array, items: { type: string } }
+        clarificationQuestion: { type: string }
+        slots: { type: object, additionalProperties: { type: string } }
+        systemCommand: { type: string }
+        reasons: { type: array, items: { type: string } }

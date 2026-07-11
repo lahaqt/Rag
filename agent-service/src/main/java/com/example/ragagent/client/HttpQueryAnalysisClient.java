@@ -6,7 +6,10 @@ import com.example.ragagent.dto.QueryAnalysisRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.observability.TracePropagationInterceptor;
 import com.example.ragagent.service.QueryAnalysisClient;
+import java.net.http.HttpClient;
+import java.time.Duration;
 import org.springframework.http.MediaType;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -21,6 +24,7 @@ public class HttpQueryAnalysisClient implements QueryAnalysisClient {
     ) {
         this.restClient = restClientBuilder.clone()
                 .baseUrl(properties.downstream().queryRewriteBaseUrl())
+                .requestFactory(requestFactory(properties.downstream().queryAnalysisTimeoutSeconds()))
                 .requestInterceptor(tracePropagationInterceptor)
                 .build();
     }
@@ -40,5 +44,14 @@ public class HttpQueryAnalysisClient implements QueryAnalysisClient {
                 .body(body)
                 .retrieve()
                 .body(QueryAnalysisResponse.class);
+    }
+
+    private JdkClientHttpRequestFactory requestFactory(int timeoutSeconds) {
+        Duration timeout = Duration.ofSeconds(timeoutSeconds);
+        JdkClientHttpRequestFactory factory = new JdkClientHttpRequestFactory(
+                HttpClient.newBuilder().connectTimeout(timeout).build()
+        );
+        factory.setReadTimeout(timeout);
+        return factory;
     }
 }

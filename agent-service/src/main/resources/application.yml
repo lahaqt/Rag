@@ -44,6 +44,7 @@ management:
 rag:
   downstream:
     query-rewrite-base-url: http://127.0.0.1:28082
+    query-analysis-timeout-seconds: 8
     storage-base-url: http://127.0.0.1:28081
   retrieval:
     top-k: 6
@@ -69,6 +70,10 @@ rag:
     retry-backoff-millis: 100
     max-execution-seconds: 45
     max-reflection-retries: 2
+  multi-agent:
+    max-concurrency: 4
+    timeout-seconds: 12
+    failure-isolation-enabled: true
   memory:
     provider: in-memory
     enabled: true

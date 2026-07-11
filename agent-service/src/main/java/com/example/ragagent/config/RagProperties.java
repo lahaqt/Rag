@@ -23,7 +23,7 @@ public record RagProperties(
             cors = new Cors(List.of("http://127.0.0.1:5173", "http://localhost:5173"));
         }
         if (downstream == null) {
-            downstream = new Downstream("http://127.0.0.1:28082", "http://127.0.0.1:28081");
+            downstream = new Downstream("http://127.0.0.1:28082", "http://127.0.0.1:28081", 8);
         }
         if (retrieval == null) {
             retrieval = new Retrieval(6, 0.0, "hybrid", true, 4);
@@ -83,7 +83,11 @@ public record RagProperties(
         }
     }
 
-    public record Downstream(String queryRewriteBaseUrl, String storageBaseUrl) {
+    public record Downstream(
+            String queryRewriteBaseUrl,
+            String storageBaseUrl,
+            Integer queryAnalysisTimeoutSeconds
+    ) {
         public Downstream {
             if (queryRewriteBaseUrl == null || queryRewriteBaseUrl.isBlank()) {
                 queryRewriteBaseUrl = "http://127.0.0.1:28082";
@@ -91,6 +95,13 @@ public record RagProperties(
             if (storageBaseUrl == null || storageBaseUrl.isBlank()) {
                 storageBaseUrl = "http://127.0.0.1:28081";
             }
+            queryAnalysisTimeoutSeconds = queryAnalysisTimeoutSeconds == null
+                    ? 8
+                    : Math.max(1, Math.min(queryAnalysisTimeoutSeconds, 60));
+        }
+
+        public Downstream(String queryRewriteBaseUrl, String storageBaseUrl) {
+            this(queryRewriteBaseUrl, storageBaseUrl, 8);
         }
     }
 
