@@ -28,9 +28,9 @@ public class ConversationHistoryService {
                 pinned            BOOLEAN NOT NULL DEFAULT false,
                 archived          BOOLEAN NOT NULL DEFAULT false,
                 deleted           BOOLEAN NOT NULL DEFAULT false,
-                created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-                updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
-                last_message_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                updated_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                last_message_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
             )
             """;
 
@@ -46,7 +46,7 @@ public class ConversationHistoryService {
                 tool_name        VARCHAR(128) NOT NULL DEFAULT '',
                 trace_id         VARCHAR(64) NOT NULL DEFAULT '',
                 citations_json   TEXT NOT NULL DEFAULT '[]',
-                created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+                created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
                 UNIQUE(conversation_id, seq)
             )
             """;

@@ -46,17 +46,34 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
-/docs
-/documents/
+
+# Documentation and tests are source assets. Keep broad local material ignored,
+# while allowing the maintained entry points and API-contract docs below.
+*.md
+!README.md
+!MODULES.md
+!agent-service/README.md
+!query-analysis-service/README.md
+!knowledge-service/README.md
+!frontend/README.md
+!evaluation-service/README.md
 docs/
+!docs/
+!docs/contracts/
+!docs/contracts/README.md
+!docs/architecture.md
 documents/
+knowledge-service/docs/
 test/
 tests/
+!agent-service/src/test/
+!agent-service/src/test/resources/
+!agent-service/src/test/resources/application.yml
+agent-service/src/test/java/
 /.playwright-mcp
 rag-home.png
 /.claude
 /%SystemDrive%
-*.md
 .worktrees/
 /.superpowers
 /.codex-run

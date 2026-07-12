@@ -11,7 +11,14 @@ import com.alibaba.cloud.ai.graph.action.EdgeAction;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
 import java.util.Map;
 
-/** Builds the ordinary and multi-agent graphs independently of node behavior. */
+/**
+ * Builds graph topology independently of request behavior.
+ *
+ * <p>The factory contains names, edges and recursion limits only. Node actions
+ * are supplied by {@link SpringAiAlibabaAgentRuntime}, which keeps routing,
+ * retrieval, prompt composition and persistence testable without duplicating
+ * two graph implementations.</p>
+ */
 final class AgentGraphFactory {
     private static final String NODE_PREPARE = "prepare_context";
     private static final String NODE_ANALYZE = "query_analysis";

@@ -1,0 +1,27 @@
+# Keep the context-load test hermetic: production PostgreSQL/Redis endpoints
+# must not determine whether the application can compile and test locally.
+spring:
+  datasource:
+    url: jdbc:h2:mem:rag-agent-test;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+    hikari:
+      initialization-fail-timeout: 1
+  data:
+    redis:
+      repositories:
+        enabled: false
+
+management:
+  otlp:
+    tracing:
+      endpoint: http://127.0.0.1:9/v1/traces
+
+rag:
+  mcp:
+    enabled: false
+  memory:
+    provider: in-memory
+    semantic-embedding:
+      enabled: false

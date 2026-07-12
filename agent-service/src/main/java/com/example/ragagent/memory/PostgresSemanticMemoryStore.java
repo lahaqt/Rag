@@ -36,8 +36,8 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                 content         TEXT NOT NULL,
                 metadata        JSONB NOT NULL DEFAULT '{}',
                 confidence      DOUBLE PRECISION NOT NULL DEFAULT 0,
-                created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-                updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+                created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
             )
             """;
 

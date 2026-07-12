@@ -15,6 +15,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+/**
+ * Owns dense, lexical and hybrid retrieval over one knowledge-base boundary.
+ *
+ * <p>Indexing writes both lexical and vector representations for the same
+ * document. Hybrid search then expands the query, runs each independent
+ * retriever, and fuses rankings with RRF rather than comparing incompatible
+ * dense and BM25 scores directly.</p>
+ */
 @Service
 public class VectorIndexService implements VectorIndexPort {
     private static final int RRF_K = 60;

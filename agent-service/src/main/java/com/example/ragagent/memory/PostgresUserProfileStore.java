@@ -18,8 +18,8 @@ public class PostgresUserProfileStore implements UserProfileStore {
             CREATE TABLE IF NOT EXISTS user_profiles (
                 user_id    VARCHAR(128) PRIMARY KEY,
                 facts      JSONB NOT NULL DEFAULT '{}',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
             )
             """;
 

@@ -27,9 +27,9 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
                 message_count    INT           NOT NULL DEFAULT 0,
                 dialog_state     JSONB         NOT NULL DEFAULT '{}',
                 knowledge_base_id VARCHAR(64),
-                created_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
-                updated_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
-                expires_at       TIMESTAMPTZ   NOT NULL
+                created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                updated_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                expires_at       TIMESTAMP WITH TIME ZONE NOT NULL
             )
             """;
 
@@ -40,7 +40,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
                 seq              INT           NOT NULL,
                 role             VARCHAR(32)   NOT NULL,
                 content          TEXT          NOT NULL,
-                created_at       TIMESTAMPTZ   NOT NULL DEFAULT now(),
+                created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
                 UNIQUE(conversation_id, seq)
             )
             """;

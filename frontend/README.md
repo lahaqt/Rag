@@ -1,6 +1,6 @@
 ﻿# RAG Agent Frontend
 
-基于 React、TypeScript、Vite 的知识问答前端界面，当前实现了参考 ChatGPT / Kimi 风格的 RAG Agent 工作台。
+基于 React、TypeScript、Vite 的 RAG Agent 工作台。它是展示和交互层，不直接访问数据库、Redis、对象存储或模型 Provider。
 
 ## 技术栈
 
@@ -25,10 +25,13 @@ http://127.0.0.1:5173
 
 ## 后端代理
 
-前端通过 Vite 代理访问知识库后端，和根目录 `MODULES.md` 当前端口保持一致：
+前端通过 Vite 代理访问后端；聊天相关请求必须进入 `agent-service`，知识库管理请求进入 `knowledge-service`：
 
 ```txt
 /api/chat/* -> http://127.0.0.1:28083
+/api/mcp/* -> http://127.0.0.1:28083
+/api/conversations/* -> http://127.0.0.1:28083
+/api/feedback/* -> http://127.0.0.1:28083
 /api/*      -> http://127.0.0.1:28081
 ```
 
@@ -53,4 +56,8 @@ GET /api/knowledge-bases
 GET /api/vector/status
 ```
 
-聊天请求已接入 `agent-service` 的 `POST /api/chat`，知识库管理请求继续接入 `knowledge-service`。
+聊天请求已接入 `agent-service` 的 `POST /api/chat`，知识库管理请求继续接入 `knowledge-service`。服务职责与端口见根目录 [MODULES.md](../MODULES.md)。
+
+## 维护约定
+
+`src/App.tsx` 当前仍是页面组合入口。新增功能应优先把纯解析/格式化逻辑放在独立 TypeScript 模块并补充 Vitest 测试；当某个页面域（chat、knowledge、mcp 或 trace）继续增长时，再以该领域为单位抽取组件和 API client，避免无边界地继续扩大 `App.tsx`。

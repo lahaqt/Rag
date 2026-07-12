@@ -5,10 +5,10 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.14</version>
-        <relativePath/>
+        <groupId>com.example</groupId>
+        <artifactId>rag-platform</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
     </parent>
 
     <groupId>com.example</groupId>
@@ -18,10 +18,7 @@
     <description>Knowledge service for RAG metadata, document files, parsing, indexes, and retrieval APIs.</description>
 
     <properties>
-        <java.version>17</java.version>
         <tika.version>3.2.3</tika.version>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     </properties>
 
     <dependencies>

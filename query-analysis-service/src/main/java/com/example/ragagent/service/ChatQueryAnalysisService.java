@@ -13,6 +13,14 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+/**
+ * Converts an incoming question into a declarative routing contract.
+ *
+ * <p>This service never performs retrieval or tool execution. It uses the fast
+ * deterministic classifier first and asks the optional LLM classifier only for
+ * ambiguous input, so an unavailable model degrades to a predictable local
+ * result instead of blocking the Agent request path.</p>
+ */
 @Service
 public class ChatQueryAnalysisService {
     private static final Logger log = LoggerFactory.getLogger(ChatQueryAnalysisService.class);

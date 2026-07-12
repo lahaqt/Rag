@@ -6,7 +6,15 @@ import java.util.function.Supplier;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-/** Executes capability adapters and owns retry behavior for read-only tools. */
+/**
+ * Executes capability adapters and owns the policy that is safe to share by
+ * ordinary and multi-agent graphs.
+ *
+ * <p>Only read-only retrieval and Web Search calls are retried. MCP calls may
+ * have external side effects, so they are executed once. Multi-agent work also
+ * observes a shared semaphore and deadline, preventing graph fan-out from
+ * exceeding the configured downstream capacity.</p>
+ */
 final class AgentCapabilityExecutor {
     private final RagRetrievalTool ragRetrievalTool;
     private final WebSearchTool webSearchTool;

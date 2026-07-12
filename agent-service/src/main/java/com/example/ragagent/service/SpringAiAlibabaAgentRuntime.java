@@ -38,8 +38,19 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 /**
- * Unified agent runtime. Both the ordinary chat path and the explicit
- * multi-agent path execute as Spring AI Alibaba graphs.
+ * Stable application-facing facade for the Spring AI Alibaba graphs.
+ *
+ * <p>The runtime owns only one request execution at a time: it prepares memory,
+ * obtains a declarative analysis from {@code query-analysis-service}, selects
+ * capabilities under local policy, generates and optionally reflects on the
+ * answer, then delegates persistence to collaborators. The graph topology is
+ * deliberately kept in {@link AgentGraphFactory}; capability adapters and HTTP
+ * callers should not need to know the graph's node names or conditional edges.</p>
+ *
+ * <p>Ordinary chat uses a single capability plan. The explicit multi-agent path
+ * uses the same lifecycle but can fan out to independent read-oriented
+ * capabilities. This distinction is intentionally made at graph selection time
+ * rather than by maintaining a second orchestration implementation.</p>
  */
 @Service
 public class SpringAiAlibabaAgentRuntime {
@@ -241,6 +252,12 @@ public class SpringAiAlibabaAgentRuntime {
         return "rag-multi-agent";
     }
 
+    /**
+     * Binds a short-lived execution context to a graph invocation. The graph
+     * state carries only {@code runId}; request-scoped mutable data remains in
+     * {@link AgentExecutionContext} so graph nodes cannot accidentally serialize
+     * model output, memory or tool observations into the shared graph state.
+     */
     private ChatResponse answer(
             ChatRequest rawRequest,
             ChatStreamSink streamSink,

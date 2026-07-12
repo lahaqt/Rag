@@ -23,6 +23,14 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 import org.springframework.web.multipart.MultipartFile;
 
+/**
+ * Application service for the document lifecycle of a knowledge base.
+ *
+ * <p>The service coordinates metadata, original-file storage, parsing and
+ * chunking. It publishes indexing work after the parsed document is persisted;
+ * embedding and vector writes therefore stay outside the upload request's
+ * critical path and can be retried by the configured task transport.</p>
+ */
 @Service
 public class KnowledgeBaseService {
     private final TikaDocumentParser parser;
