@@ -10,24 +10,24 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-/** Extracts the evidence sentence that best supports the generated answer. */
+/** Extracts the evidence sentence that best supports one cited answer claim. */
 final class CitationExcerptExtractor {
     private static final Pattern HEADING = Pattern.compile("(?m)^\\s{0,3}#{1,6}\\s+.*$");
     private static final Pattern LIST_MARKER = Pattern.compile("(?m)^\\s*[-*+]\\s+");
     private static final Pattern TOKEN = Pattern.compile("[\\p{IsHan}]{2,}|[A-Za-z][A-Za-z0-9_-]{2,}");
     private static final int MAX_EXCERPT_LENGTH = 260;
 
-    String extract(RetrievalHit hit, String originalQuery, String rewrittenQuery, String answer) {
+    String extract(RetrievalHit hit, String originalQuery, String rewrittenQuery, String claim) {
         List<String> sentences = sentences(hit.content());
         if (sentences.isEmpty()) {
             return "";
         }
         Set<String> primaryTerms = terms(originalQuery + " " + rewrittenQuery);
-        Set<String> answerTerms = terms(answer);
+        Set<String> claimTerms = terms(claim);
         List<ScoredSentence> scored = new ArrayList<>();
         for (int index = 0; index < sentences.size(); index++) {
             String sentence = sentences.get(index);
-            scored.add(new ScoredSentence(index, sentence, score(sentence, primaryTerms, 1.0) + score(sentence, answerTerms, 0.35)));
+            scored.add(new ScoredSentence(index, sentence, score(sentence, primaryTerms, 1.0) + score(sentence, claimTerms, 0.65)));
         }
         ScoredSentence best = scored.stream()
                 .max(Comparator.comparingDouble(ScoredSentence::score))

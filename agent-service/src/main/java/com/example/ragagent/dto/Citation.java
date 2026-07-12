@@ -9,6 +9,7 @@ public record Citation(
         String documentName,
         double score,
         String excerpt,
-        String content
+        String content,
+        String claim
 ) {
 }

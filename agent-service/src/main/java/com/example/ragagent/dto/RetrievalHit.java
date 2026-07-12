@@ -11,10 +11,14 @@ public record RetrievalHit(
         double score
 ) {
     public Citation toCitation() {
-        return toCitation(excerpt(content, 220));
+        return toCitation(excerpt(content, 220), "");
     }
 
     public Citation toCitation(String excerpt) {
+        return toCitation(excerpt, "");
+    }
+
+    public Citation toCitation(String excerpt, String claim) {
         return new Citation(
                 index,
                 knowledgeBaseId,
@@ -24,7 +28,8 @@ public record RetrievalHit(
                 documentName,
                 score,
                 excerpt == null ? "" : excerpt,
-                content
+                content,
+                claim == null ? "" : claim
         );
     }
 

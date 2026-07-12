@@ -2592,6 +2592,18 @@ button {
   text-wrap: pretty;
 }
 
+.citation-reference-content {
+  min-width: 0;
+}
+
+.citation-claim {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .citation-details-list details {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

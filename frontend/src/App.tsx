@@ -3100,7 +3100,10 @@ function App() {
                           {message.citations.map((citation) => (
                             <li key={`reference-${citationKey(citation)}`}>
                               <span>[{citation.index}]</span>
-                              <strong>{citationReferenceExcerpt(citation)}</strong>
+                              <div className="citation-reference-content">
+                                <strong>{citationReferenceExcerpt(citation)}</strong>
+                                {citation.claim && <small className="citation-claim">{'\u5bf9\u5e94\u7b54\u6848\uff1a'}{citation.claim}</small>}
+                              </div>
                             </li>
                           ))}
                         </ol>

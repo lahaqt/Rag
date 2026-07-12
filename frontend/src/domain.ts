@@ -100,6 +100,7 @@ export type ChatCitation = {
   score: number
   excerpt: string
   content?: string
+  claim?: string
 }
 
 export type RetrievalHit = {

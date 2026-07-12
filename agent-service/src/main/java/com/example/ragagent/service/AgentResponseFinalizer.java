@@ -9,8 +9,9 @@ import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Pattern;
@@ -60,10 +61,11 @@ final class AgentResponseFinalizer {
             tracePersistenceService.completeRun(context.runId, response);
             tracePersistenceService.record(context.request, response);
         }
-        conversationMemoryService.recordTurn(context.analysisRequest, context.analysis, response);
         if (conversationHistoryService != null) {
             conversationHistoryService.recordTurn(context.analysisRequest, response);
         }
+        // Persist the canonical turn before updating the derived memory projection.
+        conversationMemoryService.recordTurn(context.analysisRequest, context.analysis, response);
         return response;
     }
 
@@ -75,8 +77,8 @@ final class AgentResponseFinalizer {
                 && Boolean.TRUE.equals(context.request.options().includeRetrievalDebug());
         List<RetrievalHit> debugHits = includeRetrievalDebug ? allHits : List.of();
         List<WebSearchResult> webResults = result == null ? List.of() : result.webSearchResults();
-        String answer = ensureCitationMarkers(context.draft.answer(), allHits);
-        List<RetrievalHit> citedHits = citedHits(allHits, answer);
+        String answer = retainVerifiedCitationMarkers(context.draft.answer(), allHits);
+        Map<Integer, String> citationClaims = citationClaims(answer, allHits);
         String route = "web_search".equals(decision.toolName()) ? "web_search" : context.analysis.route();
         String intent = "web_search".equals(decision.toolName()) ? "tool" : context.analysis.intent();
         List<String> retrievalQueries = "web_search".equals(decision.toolName())
@@ -91,13 +93,20 @@ final class AgentResponseFinalizer {
                 context.analysis.originalQuery(),
                 context.analysis.rewrittenQuery(),
                 retrievalQueries,
-                citedHits.stream()
-                        .map(hit -> hit.toCitation(citationExcerptExtractor.extract(
-                                hit,
-                                context.analysis.originalQuery(),
-                                context.analysis.rewrittenQuery(),
-                                answer
-                        )))
+                allHits.stream()
+                        .filter(hit -> citationClaims.containsKey(hit.index()))
+                        .map(hit -> {
+                            String claim = citationClaims.get(hit.index());
+                            return hit.toCitation(
+                                    citationExcerptExtractor.extract(
+                                            hit,
+                                            context.analysis.originalQuery(),
+                                            context.analysis.rewrittenQuery(),
+                                            claim
+                                    ),
+                                    claim
+                            );
+                        })
                         .toList(),
                 debugHits,
                 context.draft.llmUsed(),
@@ -115,29 +124,68 @@ final class AgentResponseFinalizer {
     }
 
     /**
-     * The graph runtime owns the final answer assembly. Preserve the citation
-     * guarantee even when the model ignores the prompt's citation instruction.
+     * Citations are evidence links, not decorative footer text. Retain only
+     * markers that resolve to the retrieval results used for this response.
      */
-    private String ensureCitationMarkers(String answer, List<RetrievalHit> hits) {
-        if (answer == null || answer.isBlank() || hits.isEmpty() || CITATION_MARKER.matcher(answer).find()) {
+    private String retainVerifiedCitationMarkers(String answer, List<RetrievalHit> hits) {
+        if (answer == null || answer.isBlank()) {
             return answer;
         }
-        String markers = hits.stream()
-                .map(RetrievalHit::index)
-                .distinct()
-                .limit(3)
-                .map(index -> "[" + index + "]")
-                .reduce("", (left, right) -> left.isEmpty() ? right : left + " " + right);
-        return markers.isEmpty() ? answer : answer.stripTrailing() + "\n\n" + markers;
+        Set<Integer> allowedIndexes = hitIndexes(hits);
+        var matcher = CITATION_MARKER.matcher(answer);
+        StringBuffer sanitized = new StringBuffer();
+        while (matcher.find()) {
+            int index = Integer.parseInt(matcher.group(1));
+            matcher.appendReplacement(sanitized, allowedIndexes.contains(index) ? matcher.group() : "");
+        }
+        matcher.appendTail(sanitized);
+        return sanitized.toString().replaceAll("[ \\t]+([,.!?。！？])", "$1");
     }
 
-    private List<RetrievalHit> citedHits(List<RetrievalHit> hits, String answer) {
-        Set<Integer> indexes = new LinkedHashSet<>();
+    private Map<Integer, String> citationClaims(String answer, List<RetrievalHit> hits) {
+        Set<Integer> allowedIndexes = hitIndexes(hits);
+        Map<Integer, String> claims = new LinkedHashMap<>();
         var matcher = CITATION_MARKER.matcher(answer == null ? "" : answer);
         while (matcher.find()) {
-            indexes.add(Integer.parseInt(matcher.group(1)));
+            int index = Integer.parseInt(matcher.group(1));
+            if (allowedIndexes.contains(index)) {
+                claims.putIfAbsent(index, sentenceAround(answer, matcher.start(), matcher.end()));
+            }
         }
-        return hits.stream().filter(hit -> indexes.contains(hit.index())).toList();
+        return claims;
+    }
+
+    private Set<Integer> hitIndexes(List<RetrievalHit> hits) {
+        Set<Integer> indexes = new LinkedHashSet<>();
+        for (RetrievalHit hit : hits) {
+            indexes.add(hit.index());
+        }
+        return indexes;
+    }
+
+    private String sentenceAround(String answer, int markerStart, int markerEnd) {
+        int start = markerStart;
+        while (start > 0 && !isSentenceBoundary(answer.charAt(start - 1))) {
+            start--;
+        }
+        int end = markerEnd;
+        while (end < answer.length() && !isSentenceBoundary(answer.charAt(end))) {
+            end++;
+        }
+        if (end < answer.length()) {
+            end++;
+        }
+        String claim = answer.substring(start, end);
+        return CITATION_MARKER.matcher(claim)
+                .replaceAll("")
+                .replaceAll("\\s+", " ")
+                .replaceAll("\\s+([,.!?。！？])", "$1")
+                .trim();
+    }
+
+    private boolean isSentenceBoundary(char value) {
+        return value == '\n' || value == '。' || value == '！' || value == '？'
+                || value == '.' || value == '!' || value == '?';
     }
 
     private ChatResponse withCurrentTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {

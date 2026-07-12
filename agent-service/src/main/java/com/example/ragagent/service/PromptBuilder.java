@@ -89,7 +89,8 @@ public class PromptBuilder {
         prompt.append("""
 
                 请基于上面的知识库片段回答用户问题。
-                如果答案依赖某个片段，请在对应句子后标注引用编号。
+                每个可核验的事实结论都必须在对应句子后紧邻标注一个或多个片段编号，例如“退款会原路退回。[2]”。
+                只能使用已提供的片段编号；不要在答案末尾集中罗列编号，也不要编造来源、编号或原文。
                 """);
         appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();
@@ -128,7 +129,8 @@ public class PromptBuilder {
         prompt.append("""
 
                 请基于上面的网页搜索结果回答用户问题。
-                如果答案依赖某个网页结果，请在对应句子后标注引用编号。
+                每个可核验的事实结论都必须在对应句子后紧邻标注一个或多个结果编号。
+                只能使用已提供的结果编号；不要在答案末尾集中罗列编号，也不要编造来源、编号或原文。
                 """);
         appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();
@@ -196,7 +198,8 @@ public class PromptBuilder {
         prompt.append("""
 
                 请基于上面的多 Agent 结果回答用户问题。
-                引用知识库或网页证据时使用对应编号；无法从证据确认的内容要明确说明。
+                每个有知识库或网页证据支撑的结论都必须在对应句子后紧邻使用对应编号；不要在答案末尾集中罗列编号。
+                只能使用已提供的编号；无法从证据确认的内容要明确说明。
                 """);
         appendReflectionHint(prompt, reflectionHint);
         return prompt.toString();
