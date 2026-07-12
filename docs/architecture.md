@@ -16,7 +16,7 @@
 
 ## 已识别的后续演进点
 
-- `frontend/src/App.tsx` 与 `App.css` 仍偏大。后续 UI 变更应优先按页面领域（chat、knowledge、mcp、trace）拆出组件、类型和 API client，并为抽出的纯函数补充单测；不要在一次后端结构调整中同时重写 UI。
+- `frontend/src/domain.ts` 现在集中管理跨页面领域模型和 API DTO，但 `App.tsx` 与 `App.css` 仍偏大。后续 UI 变更应优先按页面领域（chat、knowledge、mcp、trace）拆出组件、纯函数和 API client，并为抽出的纯函数补充单测；不要在一次后端结构调整中同时重写 UI。
 - 三个 Java 服务都有少量相似的 Trace 透传实现。由于服务需可从子目录独立启动，当前保留实现副本；若将来引入共享基础库，应同时提供 Spring Boot starter 或 Maven wrapper/Reactor 开发命令，不能以牺牲独立启动为代价。
 - 本地语料、报告、运行日志和构建目录均不是生产模块。它们应保持在顶层支持目录，且不应被服务代码作为隐式运行时依赖。
 - 当前 Spring AI Alibaba A2A Nacos starter 在上下文测试中仍会输出一次 Nacos 注册告警，即使配置声明关闭 registry/discovery；测试不因此失败。部署前应以实际使用的 starter 版本确认关闭属性，或将 Nacos registry starter 置于显式启用的部署 profile，避免纯 JSON-RPC 部署产生无效注册尝试。
