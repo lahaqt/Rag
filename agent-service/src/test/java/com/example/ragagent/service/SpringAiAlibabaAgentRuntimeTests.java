@@ -68,6 +68,41 @@ class SpringAiAlibabaAgentRuntimeTests {
     }
 
     @Test
+    void ordinaryChatAppendsCitationMarkersWhenTheModelOmitsThem() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis("SINGLE_TOOL", List.of("rag_retrieval"));
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.retrieval("refund", List.of(hit())));
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Refund answer", false, "test_answer"));
+
+        ChatResponse response = runtime().answer(request("refund"));
+
+        assertThat(response.answer()).isEqualTo("Refund answer\n\n[1]");
+        assertThat(response.citations()).singleElement()
+                .satisfies(citation -> assertThat(citation.documentName()).isEqualTo("refund.md"));
+    }
+
+    @Test
+    void ordinaryChatOnlyReturnsCitationsReferencedByTheAnswer() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis("SINGLE_TOOL", List.of("rag_retrieval"));
+        RetrievalHit citedHit = new RetrievalHit(2, "kb-1", "doc-2", "chunk-2", 1, "refund.md", "Refund evidence", 0.94);
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.retrieval("refund", List.of(hit(), citedHit)));
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Refund answer [2]", false, "test_answer"));
+
+        ChatResponse response = runtime().answer(request("refund"));
+
+        assertThat(response.citations()).extracting(citation -> citation.index()).containsExactly(2);
+    }
+
+    @Test
     void multiAgentGraphFansOutAndMergesKnowledgeAndWebResults() {
         QueryAnalysisResponse analysis = knowledgeAnalysis(
                 "PARALLEL",

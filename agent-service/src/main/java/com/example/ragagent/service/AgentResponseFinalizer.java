@@ -10,14 +10,19 @@ import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
 import java.util.List;
+import java.util.LinkedHashSet;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Pattern;
 
 /** Converts completed graph state into a durable chat response. */
 final class AgentResponseFinalizer {
+    private static final Pattern CITATION_MARKER = Pattern.compile("\\[(\\d+)]");
     private final ConversationMemoryService conversationMemoryService;
     private final ConversationHistoryService conversationHistoryService;
     private final TraceContextProvider traceContextProvider;
     private final AgentTracePersistenceService tracePersistenceService;
+    private final CitationExcerptExtractor citationExcerptExtractor = new CitationExcerptExtractor();
 
     AgentResponseFinalizer(
             ConversationMemoryService conversationMemoryService,
@@ -70,6 +75,8 @@ final class AgentResponseFinalizer {
                 && Boolean.TRUE.equals(context.request.options().includeRetrievalDebug());
         List<RetrievalHit> debugHits = includeRetrievalDebug ? allHits : List.of();
         List<WebSearchResult> webResults = result == null ? List.of() : result.webSearchResults();
+        String answer = ensureCitationMarkers(context.draft.answer(), allHits);
+        List<RetrievalHit> citedHits = citedHits(allHits, answer);
         String route = "web_search".equals(decision.toolName()) ? "web_search" : context.analysis.route();
         String intent = "web_search".equals(decision.toolName()) ? "tool" : context.analysis.intent();
         List<String> retrievalQueries = "web_search".equals(decision.toolName())
@@ -77,14 +84,21 @@ final class AgentResponseFinalizer {
                 : context.analysis.safeRetrievalQueries();
         return new ChatResponse(
                 context.request.conversationId(),
-                context.draft.answer(),
+                answer,
                 intent,
                 context.analysis.confidence(),
                 route,
                 context.analysis.originalQuery(),
                 context.analysis.rewrittenQuery(),
                 retrievalQueries,
-                allHits.stream().map(RetrievalHit::toCitation).toList(),
+                citedHits.stream()
+                        .map(hit -> hit.toCitation(citationExcerptExtractor.extract(
+                                hit,
+                                context.analysis.originalQuery(),
+                                context.analysis.rewrittenQuery(),
+                                answer
+                        )))
+                        .toList(),
                 debugHits,
                 context.draft.llmUsed(),
                 context.draft.finishReason(),
@@ -98,6 +112,32 @@ final class AgentResponseFinalizer {
                 "",
                 List.copyOf(context.trace)
         );
+    }
+
+    /**
+     * The graph runtime owns the final answer assembly. Preserve the citation
+     * guarantee even when the model ignores the prompt's citation instruction.
+     */
+    private String ensureCitationMarkers(String answer, List<RetrievalHit> hits) {
+        if (answer == null || answer.isBlank() || hits.isEmpty() || CITATION_MARKER.matcher(answer).find()) {
+            return answer;
+        }
+        String markers = hits.stream()
+                .map(RetrievalHit::index)
+                .distinct()
+                .limit(3)
+                .map(index -> "[" + index + "]")
+                .reduce("", (left, right) -> left.isEmpty() ? right : left + " " + right);
+        return markers.isEmpty() ? answer : answer.stripTrailing() + "\n\n" + markers;
+    }
+
+    private List<RetrievalHit> citedHits(List<RetrievalHit> hits, String answer) {
+        Set<Integer> indexes = new LinkedHashSet<>();
+        var matcher = CITATION_MARKER.matcher(answer == null ? "" : answer);
+        while (matcher.find()) {
+            indexes.add(Integer.parseInt(matcher.group(1)));
+        }
+        return hits.stream().filter(hit -> indexes.contains(hit.index())).toList();
     }
 
     private ChatResponse withCurrentTrace(ChatResponse response, TraceContextSnapshot fallbackTraceContext) {

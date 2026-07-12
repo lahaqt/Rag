@@ -2548,6 +2548,50 @@ button {
   gap: 8px;
 }
 
+.reference-list {
+  margin: 14px 0 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--surface) 82%, var(--panel-soft));
+}
+
+.reference-list h4 {
+  margin: 0 0 8px;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.reference-list ol {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reference-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.reference-list li > span {
+  color: var(--info);
+  font-weight: 760;
+}
+
+.reference-list strong {
+  color: var(--text-strong);
+  font-weight: 600;
+  line-height: 1.65;
+  text-wrap: pretty;
+}
+
 .citation-details-list details {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

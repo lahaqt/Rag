@@ -234,6 +234,10 @@ function citationText(citation: ChatCitation) {
   return (citation.content || citation.excerpt || '').trim()
 }
 
+function citationReferenceExcerpt(citation: ChatCitation) {
+  return (citation.excerpt || citationText(citation)).trim()
+}
+
 function citationKey(citation: ChatCitation) {
   return citation.chunkId || `${citation.documentId || citation.documentName}-${citation.chunkIndex}-${citation.index}`
 }
@@ -360,7 +364,6 @@ function cleanAnswerLine(line: string): string {
   result = result.replace(/\*(.+?)\*/g, '$1')
   result = result.replace(/_(.+?)_/g, '$1')
   result = result.replace(/`([^`]+)`/g, '$1')
-  result = result.replace(/\s*\[\d+(?:[,，\s\d]+)?\]\s*/g, ' ')
   result = result.replace(/\s{2,}/g, ' ').trim()
   return result
 }
@@ -3090,18 +3093,31 @@ function App() {
                     </div>
                   )}
                   {message.citations && message.citations.length > 0 && (
-                    <div className="sources citation-details-list">
-                      {message.citations.map((citation) => (
-                        <details key={citationKey(citation)}>
-                          <summary>
-                            <span>{citation.index}</span>
-                            <strong>{citationTitle(citation)}</strong>
-                            <small>{citationMeta(citation)}</small>
-                          </summary>
-                          <p>{citationText(citation)}</p>
-                        </details>
-                      ))}
-                    </div>
+                    <>
+                      <section className="reference-list" aria-label="参考文献">
+                        <h4>参考文献</h4>
+                        <ol>
+                          {message.citations.map((citation) => (
+                            <li key={`reference-${citationKey(citation)}`}>
+                              <span>[{citation.index}]</span>
+                              <strong>{citationReferenceExcerpt(citation)}</strong>
+                            </li>
+                          ))}
+                        </ol>
+                      </section>
+                      <div className="sources citation-details-list" aria-label="引用 Chunk">
+                        {message.citations.map((citation) => (
+                          <details key={citationKey(citation)}>
+                            <summary>
+                              <span>{citation.index}</span>
+                              <strong>{citationTitle(citation)}</strong>
+                              <small>{citationMeta(citation)}</small>
+                            </summary>
+                            <p>{citationText(citation)}</p>
+                          </details>
+                        ))}
+                      </div>
+                    </>
                   )}
                   {!message.citations?.length && message.sources && (
                     <div className="sources">
