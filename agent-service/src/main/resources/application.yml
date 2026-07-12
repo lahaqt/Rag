@@ -46,6 +46,7 @@ rag:
     query-rewrite-base-url: http://127.0.0.1:28082
     query-analysis-timeout-seconds: 8
     storage-base-url: http://127.0.0.1:28081
+    storage-retrieval-timeout-seconds: 20
   retrieval:
     top-k: 6
     similarity-threshold: 0.0

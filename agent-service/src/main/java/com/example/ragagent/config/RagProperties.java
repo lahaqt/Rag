@@ -23,7 +23,7 @@ public record RagProperties(
             cors = new Cors(List.of("http://127.0.0.1:5173", "http://localhost:5173"));
         }
         if (downstream == null) {
-            downstream = new Downstream("http://127.0.0.1:28082", "http://127.0.0.1:28081", 8);
+            downstream = new Downstream("http://127.0.0.1:28082", "http://127.0.0.1:28081", 8, 20);
         }
         if (retrieval == null) {
             retrieval = new Retrieval(6, 0.0, "hybrid", true, 4, null);
@@ -86,7 +86,8 @@ public record RagProperties(
     public record Downstream(
             String queryRewriteBaseUrl,
             String storageBaseUrl,
-            Integer queryAnalysisTimeoutSeconds
+            Integer queryAnalysisTimeoutSeconds,
+            Integer storageRetrievalTimeoutSeconds
     ) {
         public Downstream {
             if (queryRewriteBaseUrl == null || queryRewriteBaseUrl.isBlank()) {
@@ -98,11 +99,11 @@ public record RagProperties(
             queryAnalysisTimeoutSeconds = queryAnalysisTimeoutSeconds == null
                     ? 8
                     : Math.max(1, Math.min(queryAnalysisTimeoutSeconds, 60));
+            storageRetrievalTimeoutSeconds = storageRetrievalTimeoutSeconds == null
+                    ? 20
+                    : Math.max(1, Math.min(storageRetrievalTimeoutSeconds, 60));
         }
 
-        public Downstream(String queryRewriteBaseUrl, String storageBaseUrl) {
-            this(queryRewriteBaseUrl, storageBaseUrl, 8);
-        }
     }
 
     public record Retrieval(
@@ -122,15 +123,6 @@ public record RagProperties(
             reranker = reranker == null ? new Reranker(false, null, null, null, null, null, null) : reranker;
         }
 
-        public Retrieval(
-                Integer topK,
-                Double similarityThreshold,
-                String retrievalMode,
-                Boolean queryExpansionEnabled,
-                Integer queryExpansionCount
-        ) {
-            this(topK, similarityThreshold, retrievalMode, queryExpansionEnabled, queryExpansionCount, null);
-        }
     }
 
     public record Reranker(

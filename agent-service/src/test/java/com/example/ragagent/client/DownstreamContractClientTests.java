@@ -14,16 +14,25 @@ import com.example.ragagent.dto.VectorSearchResponse;
 import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
 import com.example.ragagent.observability.TracePropagationInterceptor;
+import com.example.ragagent.service.AgentToolResult;
+import com.example.ragagent.service.RagRetrievalTool;
+import com.example.ragagent.service.Reranker;
+import com.example.ragagent.service.StorageRetrievalClient;
+import com.example.ragagent.service.ToolDecision;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.bind.Bindable;
+import org.springframework.boot.context.properties.bind.Binder;
+import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import org.springframework.web.client.RestClient;
 
 class DownstreamContractClientTests {
@@ -117,10 +126,50 @@ class DownstreamContractClientTests {
         assertThat(requestBody.get()).contains("\"return_documents\":false");
     }
 
+    @Test
+    void bindsRerankerAndStorageTimeoutConfiguration() {
+        RagProperties properties = new Binder(new MapConfigurationPropertySource(Map.of(
+                "rag.retrieval.reranker.enabled", "true",
+                "rag.retrieval.reranker.api-key", "unit-test-key",
+                "rag.retrieval.reranker.candidate-top-k", "12",
+                "rag.downstream.storage-retrieval-timeout-seconds", "20"
+        ))).bind("rag", Bindable.of(RagProperties.class))
+                .orElseThrow(() -> new IllegalStateException("RAG properties were not bound."));
+
+        assertThat(properties.retrieval().reranker().enabled()).isTrue();
+        assertThat(properties.retrieval().reranker().apiKey()).isEqualTo("unit-test-key");
+        assertThat(properties.retrieval().reranker().candidateTopK()).isEqualTo(12);
+        assertThat(properties.downstream().storageRetrievalTimeoutSeconds()).isEqualTo(20);
+    }
+
+    @Test
+    void keepsTheBestDuplicateScoreAndUsesSuccessfulQueryVariants() {
+        StorageRetrievalClient storageClient = request -> switch (request.query()) {
+            case "variant-that-fails" -> throw new IllegalStateException("temporary downstream failure");
+            case "rewritten refund question" -> response(match("chunk-a", "Refund details", 0.20), match("chunk-b", "Refund details", 0.30));
+            case "refund question" -> response(match("chunk-a", "Refund details", 0.90));
+            default -> response();
+        };
+        Reranker passthroughReranker = (query, candidates, topK) -> candidates;
+        RagRetrievalTool tool = new RagRetrievalTool(storageClient, new RagProperties(
+                null, null, null, null, null, null, null, null, null, null
+        ), passthroughReranker);
+
+        AgentToolResult result = tool.execute(
+                new ChatRequest("refund question", "kb-1", "conversation-1", List.of(), null),
+                retrievalAnalysis(),
+                ToolDecision.ragRetrieval("refund question", "test")
+        );
+
+        assertThat(result.success()).isTrue();
+        assertThat(result.retrievalHits()).extracting(hit -> hit.chunkId()).containsExactly("chunk-a", "chunk-b");
+        assertThat(result.retrievalHits()).extracting(hit -> hit.score()).containsExactly(0.90, 0.30);
+    }
+
     private RagProperties properties() {
         return new RagProperties(
                 null,
-                new RagProperties.Downstream(baseUrl, baseUrl, 2),
+                new RagProperties.Downstream(baseUrl, baseUrl, 2, 20),
                 null, null, null, null, null, null, null, null
         );
     }
@@ -145,6 +194,18 @@ class DownstreamContractClientTests {
 
     private VectorSearchMatch match(String chunkId, String content, double score) {
         return new VectorSearchMatch("kb-1", "doc-1", chunkId, 0, "refund.md", content, score);
+    }
+
+    private VectorSearchResponse response(VectorSearchMatch... matches) {
+        return new VectorSearchResponse(List.of(matches));
+    }
+
+    private QueryAnalysisResponse retrievalAnalysis() {
+        return new QueryAnalysisResponse(
+                "conversation-1", "kb-1", "refund question", "refund question", "rewritten refund question",
+                "knowledge", 1.0, "knowledge_retrieval", true, true, 0,
+                List.of("variant-that-fails"), List.of()
+        );
     }
 
     private TracePropagationInterceptor traceInterceptor() {

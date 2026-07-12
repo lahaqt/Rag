@@ -15,10 +15,13 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 public class RagRetrievalTool {
+    private static final Logger log = LoggerFactory.getLogger(RagRetrievalTool.class);
     private final StorageRetrievalClient storageRetrievalClient;
     private final RagProperties properties;
     private final Reranker reranker;
@@ -48,6 +51,7 @@ public class RagRetrievalTool {
         int candidateTopK = candidateTopK(topK);
         List<String> queries = retrievalQueries(request, analysis);
         Map<String, VectorSearchMatch> uniqueMatches = new LinkedHashMap<>();
+        List<String> failedQueries = new ArrayList<>();
 
         for (String query : queries) {
             VectorSearchRequest searchRequest = new VectorSearchRequest(
@@ -60,10 +64,19 @@ public class RagRetrievalTool {
                     normalizedQueryExpansionCount(options)
             );
 
-            VectorSearchResponse response = storageRetrievalClient.search(searchRequest);
-            for (VectorSearchMatch match : response == null ? List.<VectorSearchMatch>of() : response.safeMatches()) {
-                uniqueMatches.putIfAbsent(matchKey(match), match);
+            try {
+                VectorSearchResponse response = storageRetrievalClient.search(searchRequest);
+                for (VectorSearchMatch match : response == null ? List.<VectorSearchMatch>of() : response.safeMatches()) {
+                    uniqueMatches.merge(matchKey(match), match, this::higherScoredMatch);
+                }
+            } catch (RuntimeException exception) {
+                failedQueries.add(query);
+                log.warn("Knowledge retrieval query variant failed; continuing with remaining variants. knowledgeBaseId={} query={} error={}",
+                        request.knowledgeBaseId(), query, exception.getMessage());
             }
+        }
+        if (uniqueMatches.isEmpty() && !failedQueries.isEmpty()) {
+            throw new IllegalStateException("All knowledge retrieval query variants failed: " + failedQueries.size());
         }
 
         List<VectorSearchMatch> candidates = uniqueMatches.values().stream()
@@ -106,6 +119,10 @@ public class RagRetrievalTool {
 
     private String matchKey(VectorSearchMatch match) {
         return "%s:%s:%s".formatted(match.knowledgeBaseId(), match.documentId(), match.chunkId());
+    }
+
+    private VectorSearchMatch higherScoredMatch(VectorSearchMatch current, VectorSearchMatch candidate) {
+        return candidate.score() > current.score() ? candidate : current;
     }
 
     private int normalizedTopK(ChatOptions options) {

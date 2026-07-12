@@ -23,7 +23,7 @@ public class HttpStorageRetrievalClient implements StorageRetrievalClient {
     ) {
         this.restClient = restClientBuilder.clone()
                 .baseUrl(properties.downstream().storageBaseUrl())
-                .requestFactory(requestFactory(properties.agent().toolTimeoutSeconds()))
+                .requestFactory(requestFactory(properties.downstream().storageRetrievalTimeoutSeconds()))
                 .requestInterceptor(tracePropagationInterceptor)
                 .build();
     }
