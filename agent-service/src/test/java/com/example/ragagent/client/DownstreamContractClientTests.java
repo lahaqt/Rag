@@ -8,6 +8,7 @@ import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.ChatMessage;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
+import com.example.ragagent.dto.VectorSearchMatch;
 import com.example.ragagent.dto.VectorSearchRequest;
 import com.example.ragagent.dto.VectorSearchResponse;
 import com.example.ragagent.observability.TraceContextProvider;
@@ -29,6 +30,7 @@ class DownstreamContractClientTests {
     private HttpServer server;
     private String baseUrl;
     private final AtomicReference<String> requestBody = new AtomicReference<>("");
+    private final AtomicReference<String> authorization = new AtomicReference<>("");
 
     @BeforeEach
     void startServer() throws IOException {
@@ -90,12 +92,59 @@ class DownstreamContractClientTests {
         assertThat(requestBody.get()).contains("\"retrievalMode\":\"hybrid\"");
     }
 
+    @Test
+    void rerankerClientUsesSiliconFlowIndexesAndScores() {
+        server.createContext("/rerank", exchange -> respond(exchange, """
+                {"id":"rerank-test","results":[
+                  {"index":1,"relevance_score":0.97},
+                  {"index":0,"relevance_score":0.42}
+                ]}
+                """));
+        SiliconFlowRerankerClient client = new SiliconFlowRerankerClient(
+                rerankerProperties(), RestClient.builder(), traceInterceptor()
+        );
+
+        List<VectorSearchMatch> results = client.rerank("refund policy", List.of(
+                match("chunk-1", "Less relevant content", 0.9),
+                match("chunk-2", "Refund policy eligibility", 0.8)
+        ), 2);
+
+        assertThat(results).extracting(VectorSearchMatch::chunkId).containsExactly("chunk-2", "chunk-1");
+        assertThat(results).extracting(VectorSearchMatch::score).containsExactly(0.97, 0.42);
+        assertThat(authorization.get()).isEqualTo("Bearer test-key");
+        assertThat(requestBody.get()).contains("\"model\":\"Qwen/Qwen3-Reranker-8B\"");
+        assertThat(requestBody.get()).contains("\"top_n\":2");
+        assertThat(requestBody.get()).contains("\"return_documents\":false");
+    }
+
     private RagProperties properties() {
         return new RagProperties(
                 null,
                 new RagProperties.Downstream(baseUrl, baseUrl, 2),
                 null, null, null, null, null, null, null, null
         );
+    }
+
+    private RagProperties rerankerProperties() {
+        RagProperties.Reranker reranker = new RagProperties.Reranker(
+                true, baseUrl, "test-key", "Qwen/Qwen3-Reranker-8B", 20, "rank accurately", 2
+        );
+        return new RagProperties(
+                null,
+                null,
+                new RagProperties.Retrieval(6, 0.0, "hybrid", true, 4, reranker),
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+        );
+    }
+
+    private VectorSearchMatch match(String chunkId, String content, double score) {
+        return new VectorSearchMatch("kb-1", "doc-1", chunkId, 0, "refund.md", content, score);
     }
 
     private TracePropagationInterceptor traceInterceptor() {
@@ -106,6 +155,7 @@ class DownstreamContractClientTests {
 
     private void respond(HttpExchange exchange, String json) throws IOException {
         requestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+        authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
         byte[] body = json.getBytes(StandardCharsets.UTF_8);
         exchange.getResponseHeaders().add("Content-Type", "application/json");
         exchange.sendResponseHeaders(200, body.length);

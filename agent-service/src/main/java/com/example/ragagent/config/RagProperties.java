@@ -26,7 +26,7 @@ public record RagProperties(
             downstream = new Downstream("http://127.0.0.1:28082", "http://127.0.0.1:28081", 8);
         }
         if (retrieval == null) {
-            retrieval = new Retrieval(6, 0.0, "hybrid", true, 4);
+            retrieval = new Retrieval(6, 0.0, "hybrid", true, 4, null);
         }
         if (prompt == null) {
             prompt = new Prompt(8000);
@@ -110,7 +110,8 @@ public record RagProperties(
             Double similarityThreshold,
             String retrievalMode,
             Boolean queryExpansionEnabled,
-            Integer queryExpansionCount
+            Integer queryExpansionCount,
+            Reranker reranker
     ) {
         public Retrieval {
             topK = topK == null ? 6 : Math.max(1, Math.min(topK, 20));
@@ -118,6 +119,39 @@ public record RagProperties(
             retrievalMode = retrievalMode == null || retrievalMode.isBlank() ? "hybrid" : retrievalMode;
             queryExpansionEnabled = queryExpansionEnabled == null || queryExpansionEnabled;
             queryExpansionCount = queryExpansionCount == null ? 4 : Math.max(1, Math.min(queryExpansionCount, 5));
+            reranker = reranker == null ? new Reranker(false, null, null, null, null, null, null) : reranker;
+        }
+
+        public Retrieval(
+                Integer topK,
+                Double similarityThreshold,
+                String retrievalMode,
+                Boolean queryExpansionEnabled,
+                Integer queryExpansionCount
+        ) {
+            this(topK, similarityThreshold, retrievalMode, queryExpansionEnabled, queryExpansionCount, null);
+        }
+    }
+
+    public record Reranker(
+            Boolean enabled,
+            String baseUrl,
+            String apiKey,
+            String model,
+            Integer candidateTopK,
+            String instruction,
+            Integer timeoutSeconds
+    ) {
+        public Reranker {
+            enabled = enabled != null && enabled;
+            baseUrl = (baseUrl == null || baseUrl.isBlank()) ? "https://api.siliconflow.cn/v1" : baseUrl;
+            apiKey = apiKey == null ? "" : apiKey;
+            model = (model == null || model.isBlank()) ? "Qwen/Qwen3-Reranker-8B" : model;
+            candidateTopK = candidateTopK == null ? 20 : Math.max(1, Math.min(candidateTopK, 50));
+            instruction = (instruction == null || instruction.isBlank())
+                    ? "根据用户问题重排文档，优先选择可直接、准确回答问题的内容。"
+                    : instruction;
+            timeoutSeconds = timeoutSeconds == null ? 8 : Math.max(1, Math.min(timeoutSeconds, 60));
         }
     }
 

@@ -21,10 +21,16 @@ import org.springframework.stereotype.Component;
 public class RagRetrievalTool {
     private final StorageRetrievalClient storageRetrievalClient;
     private final RagProperties properties;
+    private final Reranker reranker;
 
-    public RagRetrievalTool(StorageRetrievalClient storageRetrievalClient, RagProperties properties) {
+    public RagRetrievalTool(
+            StorageRetrievalClient storageRetrievalClient,
+            RagProperties properties,
+            Reranker reranker
+    ) {
         this.storageRetrievalClient = storageRetrievalClient;
         this.properties = properties;
+        this.reranker = reranker;
     }
 
     public AgentToolResult execute(
@@ -39,6 +45,7 @@ public class RagRetrievalTool {
     private List<RetrievalHit> retrieve(ChatRequest request, QueryAnalysisResponse analysis) {
         ChatOptions options = request.options();
         int topK = normalizedTopK(options);
+        int candidateTopK = candidateTopK(topK);
         List<String> queries = retrievalQueries(request, analysis);
         Map<String, VectorSearchMatch> uniqueMatches = new LinkedHashMap<>();
 
@@ -46,7 +53,7 @@ public class RagRetrievalTool {
             VectorSearchRequest searchRequest = new VectorSearchRequest(
                     request.knowledgeBaseId(),
                     query,
-                    topK,
+                    candidateTopK,
                     normalizedSimilarityThreshold(options),
                     normalizedRetrievalMode(options),
                     normalizedQueryExpansionEnabled(options),
@@ -59,8 +66,11 @@ public class RagRetrievalTool {
             }
         }
 
-        List<VectorSearchMatch> matches = uniqueMatches.values().stream()
+        List<VectorSearchMatch> candidates = uniqueMatches.values().stream()
                 .sorted(Comparator.comparingDouble(VectorSearchMatch::score).reversed())
+                .limit(candidateTopK)
+                .toList();
+        List<VectorSearchMatch> matches = reranker.rerank(rerankQuery(request, analysis), candidates, topK).stream()
                 .limit(topK)
                 .toList();
 
@@ -104,6 +114,18 @@ public class RagRetrievalTool {
             return properties.retrieval().topK();
         }
         return Math.max(1, Math.min(value, 20));
+    }
+
+    private int candidateTopK(int topK) {
+        RagProperties.Reranker rerankerConfig = properties.retrieval().reranker();
+        if (!rerankerConfig.enabled() || rerankerConfig.apiKey().isBlank()) {
+            return topK;
+        }
+        return Math.max(topK, rerankerConfig.candidateTopK());
+    }
+
+    private String rerankQuery(ChatRequest request, QueryAnalysisResponse analysis) {
+        return isBlank(analysis.rewrittenQuery()) ? request.query().trim() : analysis.rewrittenQuery().trim();
     }
 
     private double normalizedSimilarityThreshold(ChatOptions options) {

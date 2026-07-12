@@ -52,6 +52,14 @@ rag:
     retrieval-mode: hybrid
     query-expansion-enabled: true
     query-expansion-count: 4
+    reranker:
+      enabled: ${SILICONFLOW_RERANKER_ENABLED:false}
+      base-url: https://api.siliconflow.cn/v1
+      api-key: ${SILICONFLOW_API_KEY:}
+      model: Qwen/Qwen3-Reranker-8B
+      candidate-top-k: 20
+      instruction: 根据用户问题重排文档，优先选择可直接、准确回答问题的内容。
+      timeout-seconds: 8
   prompt:
     max-context-characters: 8000
   tools:
