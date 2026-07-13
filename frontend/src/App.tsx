@@ -39,10 +39,11 @@ import {
   X,
 } from 'lucide-react'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import type { ChangeEvent, FormEvent } from 'react'
+import type { ChangeEvent, FormEvent, KeyboardEvent } from 'react'
 import { searchConversations } from './search'
 import type { SearchResult } from './search'
 import { shouldSkipFeedback } from './feedback'
+import { MarkdownContent } from './MarkdownContent'
 import type { ChatAttachment } from './attachments'
 import {
   formatAttachmentSize,
@@ -236,6 +237,10 @@ function citationText(citation: ChatCitation) {
 
 function citationReferenceExcerpt(citation: ChatCitation) {
   return (citation.excerpt || citationText(citation)).trim()
+}
+
+function isMarkdownDocument(fileName?: string) {
+  return /\.(?:md|markdown)$/i.test((fileName ?? '').split(/[?#]/, 1)[0])
 }
 
 function citationKey(citation: ChatCitation) {
@@ -2035,6 +2040,14 @@ function App() {
     return [step.phase, step.action, step.toolName || step.route].filter(Boolean).join(' / ')
   }
 
+  function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) {
+      return
+    }
+    event.preventDefault()
+    sendMessage()
+  }
+
   function traceMeta(step: AgentTraceStep) {
     const items = []
     if (step.status) {
@@ -2413,7 +2426,11 @@ function App() {
                                 {previewChunks.map((chunk, index) => (
                                   <li key={chunk.id}>
                                     <span>#{index + 1}</span>
-                                    <p>{chunk.content}</p>
+                                    {isMarkdownDocument(previewDocument?.fileName) ? (
+                                      <MarkdownContent className="document-chunk-markdown" content={chunk.content} />
+                                    ) : (
+                                      <p>{chunk.content}</p>
+                                    )}
                                   </li>
                                 ))}
                               </ol>
@@ -3101,7 +3118,11 @@ function App() {
                             <li key={`reference-${citationKey(citation)}`}>
                               <span>[{citation.index}]</span>
                               <div className="citation-reference-content">
-                                <strong>{citationReferenceExcerpt(citation)}</strong>
+                                {isMarkdownDocument(citation.documentName) ? (
+                                  <MarkdownContent className="reference-markdown" content={citationReferenceExcerpt(citation)} />
+                                ) : (
+                                  <strong>{citationReferenceExcerpt(citation)}</strong>
+                                )}
                                 {citation.claim && <small className="citation-claim">{'\u5bf9\u5e94\u7b54\u6848\uff1a'}{citation.claim}</small>}
                               </div>
                             </li>
@@ -3116,7 +3137,11 @@ function App() {
                               <strong>{citationTitle(citation)}</strong>
                               <small>{citationMeta(citation)}</small>
                             </summary>
-                            <p>{citationText(citation)}</p>
+                            {isMarkdownDocument(citation.documentName) ? (
+                              <MarkdownContent className="citation-markdown" content={citationText(citation)} />
+                            ) : (
+                              <p>{citationText(citation)}</p>
+                            )}
                           </details>
                         ))}
                       </div>
@@ -3234,31 +3259,35 @@ function App() {
             <textarea
               aria-label="输入问题"
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="输入问题，或输入 / 打开命令"
-              rows={2}
+              onKeyDown={handleComposerKeyDown}
+              placeholder="输入问题…"
+              rows={1}
               value={draft}
             />
             <div className="composer-toolbar">
-              <div className="composer-tools">
-                <button
-                  className="icon-button"
-                  onClick={() => composerUploadInputRef.current?.click()}
-                  title="上传文件"
-                  type="button"
-                >
-                  <Paperclip size={17} />
+              <span className="composer-hint">Enter 发送 · Shift + Enter 换行</span>
+              <div className="composer-actions">
+                <div className="composer-tools">
+                  <button
+                    className="icon-button"
+                    onClick={() => composerUploadInputRef.current?.click()}
+                    title="上传文件"
+                    type="button"
+                  >
+                    <Paperclip size={17} />
+                  </button>
+                  <input
+                    accept=".txt,.md,.markdown,.csv,.json,text/plain,text/markdown,text/csv,application/json"
+                    hidden
+                    onChange={handleComposerUploadChange}
+                    ref={composerUploadInputRef}
+                    type="file"
+                  />
+                </div>
+                <button className="send-button" disabled={!draft.trim() || isStreaming} type="submit" title="发送">
+                  <ArrowUp size={18} />
                 </button>
-                <input
-                  accept=".txt,.md,.markdown,.csv,.json,text/plain,text/markdown,text/csv,application/json"
-                  hidden
-                  onChange={handleComposerUploadChange}
-                  ref={composerUploadInputRef}
-                  type="file"
-                />
               </div>
-              <button className="send-button" disabled={!draft.trim() || isStreaming} type="submit" title="发送">
-                <ArrowUp size={18} />
-              </button>
             </div>
           </form>
         </div>
@@ -3311,7 +3340,11 @@ function App() {
                         <small>{citationMeta(citation)}</small>
                       </div>
                     </summary>
-                    <p>{citationText(citation)}</p>
+                    {isMarkdownDocument(citation.documentName) ? (
+                      <MarkdownContent className="citation-markdown" content={citationText(citation)} />
+                    ) : (
+                      <p>{citationText(citation)}</p>
+                    )}
                   </details>
                 ))
               : sourcePreview.map((source, index) => (
