@@ -35,6 +35,8 @@ public class PostgresUserProfileStore implements UserProfileStore {
                 updated_at = now()
             """;
 
+    private static final String DELETE_SQL = "DELETE FROM user_profiles WHERE user_id = ?";
+
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private volatile boolean schemaInitialized;
@@ -84,6 +86,19 @@ public class PostgresUserProfileStore implements UserProfileStore {
             }
         } catch (Exception exception) {
             log.warn("Postgres user profile merge failed. user={} error={}", userId, exception.getMessage());
+        }
+    }
+
+    @Override
+    public boolean forget(String userId) {
+        if (userId == null || userId.isBlank() || !ensureSchema()) {
+            return false;
+        }
+        try {
+            return jdbcTemplate.update(DELETE_SQL, userId) > 0;
+        } catch (Exception exception) {
+            log.warn("Postgres user profile delete failed. user={} error={}", userId, exception.getMessage());
+            return false;
         }
     }
 

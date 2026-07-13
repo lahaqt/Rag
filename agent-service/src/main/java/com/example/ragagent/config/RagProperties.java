@@ -378,7 +378,7 @@ public record RagProperties(
 
         @ConstructorBinding
         public Memory {
-            provider = (provider == null || provider.isBlank()) ? "in-memory" : provider;
+            provider = (provider == null || provider.isBlank()) ? "postgres" : provider;
             enabled = enabled == null || enabled;
             recentMessages = recentMessages == null ? 8 : Math.max(2, Math.min(recentMessages, 30));
             summarizeAfterMessages = summarizeAfterMessages == null

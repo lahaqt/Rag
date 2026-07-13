@@ -71,7 +71,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         Boolean metaExists = redisTemplate.hasKey(metaKey);
         if (Boolean.FALSE.equals(metaExists) || metaExists == null) {
             if (request.normalizedHistory().isEmpty()) {
-                return new StoredMemory(List.of(), "", 0, Map.of(), Instant.now());
+                return new StoredMemory(List.of(), "", 0, 0, Map.of(), Instant.now());
             }
             StoredMemory seed = StoredMemory.fromRequest(request);
             seedConversation(conversationId, seed);
@@ -81,13 +81,13 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         Map<Object, Object> metaMap = redisTemplate.opsForHash().entries(metaKey);
         String summary = getStr(metaMap, "summary");
         int summaryVersion = getInt(metaMap, "summaryVersion");
-        int messageCount = getInt(metaMap, "messageCount");
+        int summarizedMessageCount = getInt(metaMap, "summarizedMessageCount");
         Instant updatedAt = Instant.parse(getStr(metaMap, "updatedAt"));
 
         List<ChatMessage> allMessages = readAllMessages(messagesKey);
         Map<String, String> dialogState = readState(stateKey);
 
-        return new StoredMemory(allMessages, summary, summaryVersion, dialogState, updatedAt);
+        return new StoredMemory(allMessages, summary, summaryVersion, summarizedMessageCount, dialogState, updatedAt);
     }
 
     @Override
@@ -97,6 +97,15 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         } catch (Exception ex) {
             log.warn("Redis memory persist failed, ignoring. conversation={} error={}",
                     conversationId, ex.getMessage());
+        }
+    }
+
+    @Override
+    protected void deleteStored(String storageKey) {
+        try {
+            redisTemplate.delete(List.of(metaKey(storageKey), messagesKey(storageKey), stateKey(storageKey)));
+        } catch (Exception exception) {
+            log.warn("Redis memory delete failed. conversation={} error={}", storageKey, exception.getMessage());
         }
     }
 
@@ -118,6 +127,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         Map<String, String> meta = new LinkedHashMap<>();
         meta.put("summary", memory.rollingSummary());
         meta.put("summaryVersion", Integer.toString(memory.summaryVersion()));
+        meta.put("summarizedMessageCount", Integer.toString(memory.summarizedMessageCount()));
         meta.put("messageCount", Integer.toString(memory.messages().size()));
         meta.put("updatedAt", memory.updatedAt().toString());
         redisTemplate.opsForHash().putAll(metaKey, meta);
@@ -146,6 +156,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         Map<String, String> meta = new LinkedHashMap<>();
         meta.put("summary", seed.rollingSummary());
         meta.put("summaryVersion", Integer.toString(seed.summaryVersion()));
+        meta.put("summarizedMessageCount", Integer.toString(seed.summarizedMessageCount()));
         meta.put("messageCount", Integer.toString(seed.messages().size()));
         meta.put("updatedAt", seed.updatedAt().toString());
         redisTemplate.opsForHash().putAll(metaKey, meta);

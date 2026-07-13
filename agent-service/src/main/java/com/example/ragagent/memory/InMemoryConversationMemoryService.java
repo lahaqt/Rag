@@ -67,6 +67,7 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
                     memory.messages,
                     memory.rollingSummary,
                     memory.summaryVersion,
+                    memory.summarizedMessageCount,
                     memory.dialogState,
                     memory.updatedAt
             );
@@ -81,10 +82,16 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
             memory.messages.addAll(stored.messages());
             memory.rollingSummary = stored.rollingSummary();
             memory.summaryVersion = stored.summaryVersion();
+            memory.summarizedMessageCount = stored.summarizedMessageCount();
             memory.dialogState.clear();
             memory.dialogState.putAll(stored.dialogState());
             memory.updatedAt = stored.updatedAt();
         }
+    }
+
+    @Override
+    protected void deleteStored(String storageKey) {
+        conversations.remove(storageKey);
     }
 
     private static final class MutableConversationMemory {
@@ -92,6 +99,7 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
         private final Map<String, String> dialogState = new LinkedHashMap<>();
         private String rollingSummary = "";
         private int summaryVersion = 0;
+        private int summarizedMessageCount = 0;
         private Instant updatedAt = Instant.now();
     }
 }

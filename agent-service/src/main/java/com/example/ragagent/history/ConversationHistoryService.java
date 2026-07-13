@@ -2,16 +2,25 @@ package com.example.ragagent.history;
 
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
+import com.example.ragagent.memory.MemoryProjectionEvent;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.interceptor.TransactionAspectSupport;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Service
 public class ConversationHistoryService {
@@ -64,6 +73,40 @@ public class ConversationHistoryService {
     private static final String ADD_MESSAGE_TRACE_ID_SQL = """
             ALTER TABLE chat_messages
             ADD COLUMN IF NOT EXISTS trace_id VARCHAR(64) NOT NULL DEFAULT ''
+            """;
+
+    private static final String CREATE_TURN_RECEIPTS_SQL = """
+            CREATE TABLE IF NOT EXISTS chat_turn_receipts (
+                turn_key        VARCHAR(128) PRIMARY KEY,
+                conversation_id VARCHAR(128) NOT NULL,
+                created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+            )
+            """;
+
+    private static final String INSERT_TURN_RECEIPT_SQL = """
+            INSERT INTO chat_turn_receipts (turn_key, conversation_id) VALUES (?, ?)
+            """;
+
+    private static final String CREATE_MEMORY_OUTBOX_SQL = """
+            CREATE TABLE IF NOT EXISTS memory_projection_outbox (
+                id              BIGSERIAL PRIMARY KEY,
+                turn_key        VARCHAR(128) NOT NULL UNIQUE,
+                conversation_id VARCHAR(128) NOT NULL,
+                payload         JSONB NOT NULL,
+                status          VARCHAR(16) NOT NULL DEFAULT 'pending',
+                attempts        INT NOT NULL DEFAULT 0,
+                available_at    TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                last_error      TEXT NOT NULL DEFAULT '',
+                created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                locked_at       TIMESTAMP WITH TIME ZONE,
+                processed_at    TIMESTAMP WITH TIME ZONE
+            )
+            """;
+
+    private static final String INSERT_MEMORY_OUTBOX_SQL = """
+            INSERT INTO memory_projection_outbox (turn_key, conversation_id, payload)
+            VALUES (?, ?, ?::jsonb)
+            ON CONFLICT (turn_key) DO NOTHING
             """;
 
     private static final String INSERT_CONVERSATION_SQL = """
@@ -204,10 +247,14 @@ public class ConversationHistoryService {
         return get(id, userId);
     }
 
+    @Transactional
     public void recordTurn(ChatRequest request, ChatResponse response) {
         try {
             doRecordTurn(request, response);
         } catch (Exception exception) {
+            if (TransactionSynchronizationManager.isActualTransactionActive()) {
+                TransactionAspectSupport.currentTransactionStatus().setRollbackOnly();
+            }
             log.warn("Conversation history write failed. conversation={} error={}",
                     request.conversationId(), exception.getMessage());
         }
@@ -222,7 +269,12 @@ public class ConversationHistoryService {
             return;
         }
         String userId = normalizeUserId(request.options() == null ? "" : request.options().userId());
+        String turnKey = turnKey(request, response, userId);
+        if (!claimTurn(turnKey, conversationId)) {
+            return;
+        }
         ensureConversation(conversationId, userId, request);
+        lockConversation(conversationId, userId);
         int nextSeq = nextSeq(conversationId);
         jdbcTemplate.update(
                 INSERT_MESSAGE_SQL,
@@ -255,6 +307,7 @@ public class ConversationHistoryService {
                 conversationId,
                 userId
         );
+        enqueueMemoryProjection(turnKey, conversationId, request, response);
         autoTitle(conversationId, userId, request.query());
     }
 
@@ -267,6 +320,9 @@ public class ConversationHistoryService {
             jdbcTemplate.execute(CREATE_CONVERSATIONS_SQL);
             jdbcTemplate.execute(CREATE_MESSAGES_SQL);
             jdbcTemplate.execute(ADD_MESSAGE_TRACE_ID_SQL);
+            jdbcTemplate.execute(CREATE_TURN_RECEIPTS_SQL);
+            jdbcTemplate.execute(CREATE_MEMORY_OUTBOX_SQL);
+            jdbcTemplate.execute("ALTER TABLE memory_projection_outbox ADD COLUMN IF NOT EXISTS locked_at TIMESTAMP WITH TIME ZONE");
             jdbcTemplate.execute(CREATE_CONVERSATION_INDEX_SQL);
             jdbcTemplate.execute(CREATE_MESSAGE_INDEX_SQL);
         } catch (Exception exception) {
@@ -283,6 +339,60 @@ public class ConversationHistoryService {
     private int nextSeq(String conversationId) {
         Integer maxSeq = jdbcTemplate.queryForObject(SELECT_MAX_SEQ_SQL, Integer.class, conversationId);
         return (maxSeq == null ? -1 : maxSeq) + 1;
+    }
+
+    private boolean claimTurn(String turnKey, String conversationId) {
+        try {
+            jdbcTemplate.update(INSERT_TURN_RECEIPT_SQL, turnKey, conversationId);
+            return true;
+        } catch (DuplicateKeyException exception) {
+            log.debug("Ignoring duplicate conversation turn. conversation={} turn={}", conversationId, turnKey);
+            return false;
+        }
+    }
+
+    private void enqueueMemoryProjection(
+            String turnKey,
+            String conversationId,
+            ChatRequest request,
+            ChatResponse response
+    ) {
+        try {
+            String payload = objectMapper.writeValueAsString(new MemoryProjectionEvent(request, response));
+            jdbcTemplate.update(INSERT_MEMORY_OUTBOX_SQL, turnKey, conversationId, payload);
+        } catch (JsonProcessingException exception) {
+            throw new IllegalStateException("Failed to serialize memory projection event.", exception);
+        }
+    }
+
+    private void lockConversation(String conversationId, String userId) {
+        jdbcTemplate.queryForObject(
+                "SELECT id FROM chat_conversations WHERE id = ? AND user_id = ? FOR UPDATE",
+                String.class,
+                conversationId,
+                userId
+        );
+    }
+
+    private String turnKey(ChatRequest request, ChatResponse response, String userId) {
+        String traceId = response == null ? "" : safe(response.traceId());
+        String raw = String.join("\u001f",
+                userId,
+                safe(request.conversationId()),
+                normalizeForKey(request.query()),
+                traceId,
+                traceId.isBlank() && response != null ? normalizeForKey(response.answer()) : ""
+        );
+        try {
+            byte[] hash = MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
+            return "turn-" + HexFormat.of().formatHex(hash);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException("SHA-256 digest is not available.", exception);
+        }
+    }
+
+    private String normalizeForKey(String value) {
+        return value == null ? "" : value.replaceAll("\\s+", " ").trim();
     }
 
     private void autoTitle(String conversationId, String userId, String query) {

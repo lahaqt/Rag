@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
@@ -37,13 +38,24 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                 metadata        JSONB NOT NULL DEFAULT '{}',
                 confidence      DOUBLE PRECISION NOT NULL DEFAULT 0,
                 created_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-                updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()
+                updated_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
+                expires_at      TIMESTAMP WITH TIME ZONE
             )
             """;
 
     private static final String CREATE_SCOPE_INDEX_SQL = """
             CREATE INDEX IF NOT EXISTS idx_semantic_memories_scope_owner
                 ON semantic_memories(scope, owner_id, conversation_id, updated_at DESC)
+            """;
+
+    private static final String CREATE_EXPIRY_INDEX_SQL = """
+            CREATE INDEX IF NOT EXISTS idx_semantic_memories_expires_at
+                ON semantic_memories(expires_at)
+            """;
+
+    private static final String ALTER_EXPIRY_SQL = """
+            ALTER TABLE semantic_memories
+            ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE
             """;
 
     private static final String ALTER_EMBEDDING_SQL = """
@@ -74,15 +86,16 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     private static final String INSERT_SQL = """
             INSERT INTO semantic_memories (
                 id, dedupe_key, scope, owner_id, conversation_id, type, content, metadata,
-                confidence, created_at, updated_at, embedding, embedding_provider, embedding_model, embedding_dimensions
+                confidence, created_at, updated_at, expires_at, embedding, embedding_provider, embedding_model, embedding_dimensions
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?::vector, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?::vector, ?, ?, ?)
             ON CONFLICT (dedupe_key) DO UPDATE SET
                 metadata = CASE
                     WHEN EXCLUDED.confidence >= semantic_memories.confidence THEN EXCLUDED.metadata
                     ELSE semantic_memories.metadata
                 END,
                 confidence = GREATEST(semantic_memories.confidence, EXCLUDED.confidence),
+                expires_at = EXCLUDED.expires_at,
                 embedding = COALESCE(EXCLUDED.embedding, semantic_memories.embedding),
                 embedding_provider = CASE
                     WHEN EXCLUDED.embedding IS NOT NULL THEN EXCLUDED.embedding_provider
@@ -102,15 +115,16 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     private static final String LEGACY_INSERT_SQL = """
             INSERT INTO semantic_memories (
                 id, dedupe_key, scope, owner_id, conversation_id, type, content, metadata,
-                confidence, created_at, updated_at
+                confidence, created_at, updated_at, expires_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?)
             ON CONFLICT (dedupe_key) DO UPDATE SET
                 metadata = CASE
                     WHEN EXCLUDED.confidence >= semantic_memories.confidence THEN EXCLUDED.metadata
                     ELSE semantic_memories.metadata
                 END,
                 confidence = GREATEST(semantic_memories.confidence, EXCLUDED.confidence),
+                expires_at = EXCLUDED.expires_at,
                 updated_at = now()
             """;
 
@@ -118,8 +132,11 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             SELECT id, scope, owner_id, conversation_id, type, content, metadata,
                    confidence, created_at, updated_at
             FROM semantic_memories
-            WHERE (scope = 'user' AND owner_id = ?)
-               OR (scope = 'conversation' AND conversation_id = ?)
+            WHERE (expires_at IS NULL OR expires_at > now())
+              AND ((scope = 'user' AND owner_id = ?)
+                   OR (scope = 'conversation' AND conversation_id = ?))
+              AND (type = 'preference' OR COALESCE(metadata->>'knowledgeBaseId', '') = ?)
+              AND COALESCE(metadata->>'status', 'confirmed') <> 'candidate'
             ORDER BY updated_at DESC
             LIMIT ?
             """;
@@ -130,14 +147,54 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                    1 - (embedding <=> ?::vector) AS vector_score
             FROM semantic_memories
             WHERE embedding IS NOT NULL
+              AND (expires_at IS NULL OR expires_at > now())
               AND embedding_provider = ?
               AND embedding_model = ?
               AND embedding_dimensions = ?
               AND ((scope = 'user' AND owner_id = ?)
                    OR (scope = 'conversation' AND conversation_id = ?))
+              AND (type = 'preference' OR COALESCE(metadata->>'knowledgeBaseId', '') = ?)
+              AND COALESCE(metadata->>'status', 'confirmed') <> 'candidate'
               AND 1 - (embedding <=> ?::vector) >= ?
             ORDER BY embedding <=> ?::vector
             LIMIT ?
+            """;
+
+    private static final String DELETE_USER_SQL = """
+            DELETE FROM semantic_memories WHERE scope = 'user' AND owner_id = ?
+            """;
+
+    private static final String DELETE_CONVERSATION_SQL = """
+            DELETE FROM semantic_memories WHERE scope = 'conversation' AND conversation_id = ?
+            """;
+
+    private static final String DELETE_EXPIRED_SQL = """
+            DELETE FROM semantic_memories WHERE expires_at IS NOT NULL AND expires_at <= now()
+            """;
+
+    private static final String SELECT_PENDING_CANDIDATES_SQL = """
+            SELECT id, scope, owner_id, conversation_id, type, content, metadata,
+                   confidence, created_at, updated_at
+            FROM semantic_memories
+            WHERE scope = 'user' AND owner_id = ?
+              AND metadata->>'status' = 'candidate'
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """;
+
+    private static final String CONFIRM_CANDIDATE_SQL = """
+            UPDATE semantic_memories
+            SET metadata = jsonb_set(metadata, '{status}', '"confirmed"'::jsonb, true), updated_at = now()
+            WHERE id = ? AND owner_id = ? AND scope = 'user'
+              AND metadata->>'status' = 'candidate'
+            RETURNING id, scope, owner_id, conversation_id, type, content, metadata,
+                      confidence, created_at, updated_at
+            """;
+
+    private static final String REJECT_CANDIDATE_SQL = """
+            DELETE FROM semantic_memories
+            WHERE id = ? AND owner_id = ? AND scope = 'user'
+              AND metadata->>'status' = 'candidate'
             """;
 
     private final JdbcTemplate jdbcTemplate;
@@ -167,20 +224,33 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
 
     @Override
     public List<MemoryItem> recall(String userId, String conversationId, String query, int maxItems) {
+        return recall(userId, conversationId, "", query, maxItems);
+    }
+
+    @Override
+    public List<MemoryItem> recall(
+            String userId,
+            String conversationId,
+            String knowledgeBaseId,
+            String query,
+            int maxItems
+    ) {
         if (maxItems <= 0) {
             return List.of();
         }
         if (!ensureSchema()) {
             return List.of();
         }
-        List<MemoryItem> vectorMatches = recallByVector(userId, conversationId, query, maxItems);
+        List<MemoryItem> vectorMatches = recallByVector(userId, conversationId, knowledgeBaseId, query, maxItems);
         if (!vectorMatches.isEmpty()) {
             return vectorMatches;
         }
-        return recallByTokens(userId, conversationId, query, maxItems);
+        return recallByTokens(userId, conversationId, knowledgeBaseId, query, maxItems);
     }
 
-    private List<MemoryItem> recallByVector(String userId, String conversationId, String query, int maxItems) {
+    private List<MemoryItem> recallByVector(
+            String userId, String conversationId, String knowledgeBaseId, String query, int maxItems
+    ) {
         if (!embeddingConfig.enabled() || embeddingClient == null || query == null || query.isBlank()) {
             return List.of();
         }
@@ -198,6 +268,7 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                             embeddingClient.dimensions(),
                             safe(userId),
                             safe(conversationId),
+                            safe(knowledgeBaseId),
                             toVectorLiteral(queryEmbedding),
                             embeddingConfig.similarityThreshold(),
                             toVectorLiteral(queryEmbedding),
@@ -216,7 +287,9 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
         }
     }
 
-    private List<MemoryItem> recallByTokens(String userId, String conversationId, String query, int maxItems) {
+    private List<MemoryItem> recallByTokens(
+            String userId, String conversationId, String knowledgeBaseId, String query, int maxItems
+    ) {
         try {
             Set<String> queryTokens = tokens(query);
             List<MemoryItem> candidates = jdbcTemplate.query(
@@ -224,6 +297,7 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                     this::mapItem,
                     safe(userId),
                     safe(conversationId),
+                    safe(knowledgeBaseId),
                     MAX_CANDIDATES
             );
             return candidates.stream()
@@ -270,6 +344,7 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                             item.confidence(),
                             item.createdAt(),
                             item.updatedAt(),
+                            expiryFor(item),
                             toVectorLiteralOrNull(embedding),
                             embedding == null ? "" : embeddingClient.providerName(),
                             embedding == null ? "" : embeddingClient.modelName(),
@@ -287,7 +362,8 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                             serializeMetadata(item.metadata()),
                             item.confidence(),
                             item.createdAt(),
-                            item.updatedAt()
+                            item.updatedAt(),
+                            expiryFor(item)
                     });
                 }
             }
@@ -296,6 +372,89 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             }
         } catch (Exception exception) {
             log.warn("Postgres semantic memory persist failed. error={}", exception.getMessage());
+        }
+    }
+
+    @Override
+    public int forgetUser(String userId) {
+        if (userId == null || userId.isBlank() || !ensureSchema()) {
+            return 0;
+        }
+        try {
+            return jdbcTemplate.update(DELETE_USER_SQL, userId);
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory user delete failed. user={} error={}", userId, exception.getMessage());
+            return 0;
+        }
+    }
+
+    @Override
+    public int forgetConversation(String conversationId) {
+        if (conversationId == null || conversationId.isBlank() || !ensureSchema()) {
+            return 0;
+        }
+        try {
+            return jdbcTemplate.update(DELETE_CONVERSATION_SQL, conversationId);
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory conversation delete failed. conversation={} error={}", conversationId, exception.getMessage());
+            return 0;
+        }
+    }
+
+    @Override
+    public List<MemoryItem> listCandidates(String userId, int maxItems) {
+        if (userId == null || userId.isBlank() || maxItems <= 0 || !ensureSchema()) {
+            return List.of();
+        }
+        try {
+            return jdbcTemplate.query(SELECT_PENDING_CANDIDATES_SQL, this::mapItem, userId, maxItems);
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory candidate list failed. user={} error={}", userId, exception.getMessage());
+            return List.of();
+        }
+    }
+
+    @Override
+    public java.util.Optional<MemoryItem> confirmCandidate(String memoryId, String userId) {
+        if (memoryId == null || memoryId.isBlank() || userId == null || userId.isBlank() || !ensureSchema()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            List<MemoryItem> rows = jdbcTemplate.query(CONFIRM_CANDIDATE_SQL, this::mapItem, memoryId, userId);
+            return rows.stream().findFirst();
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory candidate confirmation failed. memory={} user={} error={}",
+                    memoryId, userId, exception.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    @Override
+    public boolean rejectCandidate(String memoryId, String userId) {
+        if (memoryId == null || memoryId.isBlank() || userId == null || userId.isBlank() || !ensureSchema()) {
+            return false;
+        }
+        try {
+            return jdbcTemplate.update(REJECT_CANDIDATE_SQL, memoryId, userId) > 0;
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory candidate rejection failed. memory={} user={} error={}",
+                    memoryId, userId, exception.getMessage());
+            return false;
+        }
+    }
+
+    @Scheduled(fixedDelayString = "PT6H")
+    void deleteExpired() {
+        if (!ensureSchema()) {
+            return;
+        }
+        try {
+            int deleted = jdbcTemplate.update(DELETE_EXPIRED_SQL);
+            if (deleted > 0) {
+                log.info("Expired semantic memories deleted count={}", deleted);
+            }
+        } catch (Exception exception) {
+            log.warn("Expired semantic memory cleanup failed. error={}", exception.getMessage());
         }
     }
 
@@ -311,6 +470,8 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
         try {
             jdbcTemplate.execute(CREATE_TABLE_SQL);
             jdbcTemplate.execute(CREATE_SCOPE_INDEX_SQL);
+            jdbcTemplate.execute(ALTER_EXPIRY_SQL);
+            jdbcTemplate.execute(CREATE_EXPIRY_INDEX_SQL);
             schemaInitialized = true;
             ensureVectorSchema();
             return true;
@@ -439,6 +600,14 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             log.warn("Semantic memory embedding failed. type={} error={}", item.type(), exception.getMessage());
             return null;
         }
+    }
+
+    private java.sql.Timestamp expiryFor(MemoryItem item) {
+        if (item == null || "preference".equals(item.type())) {
+            return null;
+        }
+        long days = "business_context".equals(item.type()) ? 30 : 14;
+        return java.sql.Timestamp.from(item.updatedAt().plus(Duration.ofDays(days)));
     }
 
     private String toVectorLiteralOrNull(float[] vector) {

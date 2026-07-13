@@ -16,9 +16,12 @@ public class WindowConversationSummarizer implements ConversationSummarizer {
     ) {
         int end = Math.max(0, messages.size() - recentMessages);
         if (end == 0) {
-            return new MemorySummary("", false);
+            return new MemorySummary(currentSummary == null ? "" : currentSummary, false);
         }
         StringBuilder summary = new StringBuilder();
+        if (currentSummary != null && !currentSummary.isBlank()) {
+            summary.append(trim(currentSummary, Math.max(120, maxCharacters * 2 / 3)));
+        }
         for (ChatMessage message : messages.subList(0, end)) {
             if (!summary.isEmpty()) {
                 summary.append(" | ");

@@ -8,4 +8,8 @@ public interface ConversationMemoryService {
     MemoryContext load(ChatRequest request);
 
     void recordTurn(ChatRequest request, QueryAnalysisResponse analysis, ChatResponse response);
+
+    /** Removes short-lived working memory for one user-owned conversation. */
+    default void forget(String userId, String conversationId) {
+    }
 }

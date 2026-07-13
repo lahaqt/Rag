@@ -15,11 +15,24 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
 
     @Override
     public List<MemoryItem> recall(String userId, String conversationId, String query, int maxItems) {
+        return recall(userId, conversationId, "", query, maxItems);
+    }
+
+    @Override
+    public List<MemoryItem> recall(
+            String userId,
+            String conversationId,
+            String knowledgeBaseId,
+            String query,
+            int maxItems
+    ) {
         String normalizedUserId = userId == null ? "" : userId;
         String normalizedConversationId = conversationId == null ? "" : conversationId;
         Set<String> queryTokens = tokens(query);
         return items.values().stream()
                 .filter(item -> belongsToScope(item, normalizedUserId, normalizedConversationId))
+                .filter(item -> belongsToKnowledgeBase(item, knowledgeBaseId))
+                .filter(item -> !"candidate".equals(item.metadata().get("status")))
                 .map(item -> Map.entry(item, score(queryTokens, item)))
                 .filter(entry -> entry.getValue() > 0.0)
                 .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
@@ -27,6 +40,14 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
                 .limit(Math.max(0, maxItems))
                 .map(Map.Entry::getKey)
                 .toList();
+    }
+
+    private boolean belongsToKnowledgeBase(MemoryItem item, String knowledgeBaseId) {
+        if ("preference".equals(item.type())) {
+            return true;
+        }
+        String itemKnowledgeBaseId = item.metadata().getOrDefault("knowledgeBaseId", "");
+        return java.util.Objects.equals(itemKnowledgeBaseId, knowledgeBaseId == null ? "" : knowledgeBaseId);
     }
 
     @Override
@@ -41,6 +62,71 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
             String key = dedupeKey(item);
             items.merge(key, item, this::keepHigherConfidence);
         }
+    }
+
+    @Override
+    public List<MemoryItem> listCandidates(String userId, int maxItems) {
+        return items.values().stream()
+                .filter(item -> "user".equals(item.scope()) && userId != null && userId.equals(item.ownerId()))
+                .filter(item -> "candidate".equals(item.metadata().get("status")))
+                .sorted(Comparator.comparing(MemoryItem::updatedAt).reversed())
+                .limit(Math.max(0, maxItems))
+                .toList();
+    }
+
+    @Override
+    public java.util.Optional<MemoryItem> confirmCandidate(String memoryId, String userId) {
+        if (memoryId == null || userId == null) {
+            return java.util.Optional.empty();
+        }
+        for (Map.Entry<String, MemoryItem> entry : items.entrySet()) {
+            MemoryItem item = entry.getValue();
+            if (!memoryId.equals(item.id()) || !userId.equals(item.ownerId())
+                    || !"candidate".equals(item.metadata().get("status"))) {
+                continue;
+            }
+            Map<String, String> metadata = new LinkedHashMap<>(item.metadata());
+            metadata.put("status", "confirmed");
+            MemoryItem confirmed = new MemoryItem(item.id(), item.scope(), item.ownerId(), item.conversationId(),
+                    item.type(), item.content(), metadata, item.confidence(), item.createdAt(), java.time.Instant.now());
+            if (items.replace(entry.getKey(), item, confirmed)) {
+                return java.util.Optional.of(confirmed);
+            }
+        }
+        return java.util.Optional.empty();
+    }
+
+    @Override
+    public boolean rejectCandidate(String memoryId, String userId) {
+        for (Map.Entry<String, MemoryItem> entry : items.entrySet()) {
+            MemoryItem item = entry.getValue();
+            if (memoryId != null && memoryId.equals(item.id()) && userId != null && userId.equals(item.ownerId())
+                    && "candidate".equals(item.metadata().get("status"))) {
+                return items.remove(entry.getKey(), item);
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public int forgetUser(String userId) {
+        return removeMatching(item -> "user".equals(item.scope()) && userId != null && userId.equals(item.ownerId()));
+    }
+
+    @Override
+    public int forgetConversation(String conversationId) {
+        return removeMatching(item -> "conversation".equals(item.scope())
+                && conversationId != null && conversationId.equals(item.conversationId()));
+    }
+
+    private int removeMatching(java.util.function.Predicate<MemoryItem> predicate) {
+        int removed = 0;
+        for (Map.Entry<String, MemoryItem> entry : items.entrySet()) {
+            if (predicate.test(entry.getValue()) && items.remove(entry.getKey(), entry.getValue())) {
+                removed++;
+            }
+        }
+        return removed;
     }
 
     private boolean belongsToScope(MemoryItem item, String userId, String conversationId) {

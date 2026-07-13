@@ -35,16 +35,22 @@ public class BusinessLongTermMemoryExtractor implements LongTermMemoryExtractor 
         metadata.put("intent", safe(analysis == null ? "" : analysis.intent()));
         metadata.put("route", safe(analysis == null ? "" : analysis.route()));
         metadata.put("source", "conversation_turn");
+        metadata.put("knowledgeBaseId", safe(request.knowledgeBaseId()));
 
         if (dialogState != null && !isBlank(dialogState.get("topicEntity"))) {
-            items.add(item(userId, conversationId, "topic", "Current topic entity: " + dialogState.get("topicEntity"), metadata, 0.72));
+            items.add(item("conversation", conversationId, conversationId, "topic",
+                    "Current topic entity: " + dialogState.get("topicEntity"), metadata, 0.72));
         }
         if (dialogState != null && !isBlank(dialogState.get("orderId"))) {
-            items.add(item(userId, conversationId, "business_context", "Referenced order id: " + dialogState.get("orderId"), metadata, 0.78));
+            items.add(item("conversation", conversationId, conversationId, "business_context",
+                    "Referenced order id: " + dialogState.get("orderId"), metadata, 0.78));
         }
-        extractPreference(request.query()).ifPresent(preference ->
-                items.add(item(userId, conversationId, "preference", "User preference: " + preference, metadata, 0.82))
-        );
+        extractPreference(request.query()).ifPresent(preference -> {
+            Map<String, String> candidateMetadata = new LinkedHashMap<>(metadata);
+            candidateMetadata.put("status", "candidate");
+            items.add(item(isBlank(userId) ? "conversation" : "user", isBlank(userId) ? conversationId : userId,
+                    conversationId, "preference", "User preference: " + preference, candidateMetadata, 0.82));
+        });
 
         return items;
     }
@@ -54,16 +60,14 @@ public class BusinessLongTermMemoryExtractor implements LongTermMemoryExtractor 
         if (isBlank(userId) || request == null || isBlank(request.query())) {
             return Map.of();
         }
-        Map<String, String> facts = new LinkedHashMap<>();
-        extractPreference(request.query()).ifPresent(value -> facts.put("preference", value));
-        if (dialogState != null && !isBlank(dialogState.get("knowledgeBaseId"))) {
-            facts.put("lastKnowledgeBaseId", dialogState.get("knowledgeBaseId"));
-        }
-        return facts;
+        // User profiles only accept confirmed memory candidates. Conversation-scoped
+        // state already retains transient context such as the active knowledge base.
+        return Map.of();
     }
 
     private MemoryItem item(
-            String userId,
+            String scope,
+            String ownerId,
             String conversationId,
             String type,
             String content,
@@ -73,8 +77,8 @@ public class BusinessLongTermMemoryExtractor implements LongTermMemoryExtractor 
         Instant now = Instant.now();
         return new MemoryItem(
                 "",
-                isBlank(userId) ? "conversation" : "user",
-                isBlank(userId) ? conversationId : userId,
+                scope,
+                ownerId,
                 conversationId,
                 type,
                 content,

@@ -63,9 +63,10 @@ final class AgentResponseFinalizer {
         }
         if (conversationHistoryService != null) {
             conversationHistoryService.recordTurn(context.analysisRequest, response);
+        } else {
+            // Test/degraded-mode fallback when no canonical history store is available.
+            conversationMemoryService.recordTurn(context.analysisRequest, context.analysis, response);
         }
-        // Persist the canonical turn before updating the derived memory projection.
-        conversationMemoryService.recordTurn(context.analysisRequest, context.analysis, response);
         return response;
     }
 

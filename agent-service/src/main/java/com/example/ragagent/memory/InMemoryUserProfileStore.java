@@ -34,4 +34,9 @@ public class InMemoryUserProfileStore implements UserProfileStore {
             return new UserProfile(userId, merged, Instant.now());
         });
     }
+
+    @Override
+    public boolean forget(String userId) {
+        return userId != null && profiles.remove(userId) != null;
+    }
 }

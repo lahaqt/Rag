@@ -24,6 +24,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
                 id               VARCHAR(128)  PRIMARY KEY,
                 summary          TEXT          NOT NULL DEFAULT '',
                 summary_version  INT           NOT NULL DEFAULT 0,
+                summarized_message_count INT   NOT NULL DEFAULT 0,
                 message_count    INT           NOT NULL DEFAULT 0,
                 dialog_state     JSONB         NOT NULL DEFAULT '{}',
                 knowledge_base_id VARCHAR(64),
@@ -51,7 +52,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             """;
 
     private static final String SELECT_META_SQL = """
-            SELECT summary, summary_version, dialog_state
+            SELECT summary, summary_version, summarized_message_count, dialog_state
             FROM conversation_memory
             WHERE id = ? AND expires_at > now()
             """;
@@ -67,19 +68,23 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             WHERE conversation_id = ? ORDER BY seq
             """;
 
-    private static final String SELECT_MAX_SEQ_SQL = """
-            SELECT COALESCE(MAX(seq), -1) FROM conversation_messages WHERE conversation_id = ?
-            """;
-
-    private static final String INSERT_MESSAGE_SQL = """
-            INSERT INTO conversation_messages (conversation_id, seq, role, content)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (conversation_id, seq) DO NOTHING
+    /**
+     * chat_messages is the canonical durable transcript. conversation_messages
+     * remains a read-only compatibility fallback for data written by earlier
+     * versions of the memory subsystem.
+     */
+    private static final String SELECT_HISTORY_MESSAGES_SQL = """
+            SELECT m.role, m.content
+            FROM chat_messages m
+            JOIN chat_conversations c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ? AND c.user_id = ?
+            ORDER BY m.seq
             """;
 
     private static final String UPDATE_MEMORY_SQL = """
             UPDATE conversation_memory
             SET summary = ?, summary_version = ?, message_count = ?,
+                summarized_message_count = ?,
                 dialog_state = ?::jsonb, updated_at = now(),
                 expires_at = now() + ? * interval '1 second'
             WHERE id = ?
@@ -125,6 +130,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         try {
             jdbcTemplate.execute(CREATE_MEMORY_TABLE_SQL);
             jdbcTemplate.execute(CREATE_MESSAGES_TABLE_SQL);
+            jdbcTemplate.execute("ALTER TABLE conversation_memory ADD COLUMN IF NOT EXISTS summarized_message_count INT NOT NULL DEFAULT 0");
             jdbcTemplate.execute(CREATE_INDEX_SQL);
             cleanExpiredConversations();
         } catch (Exception ex) {
@@ -159,12 +165,10 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         List<Map<String, Object>> metaRows = jdbcTemplate.queryForList(SELECT_META_SQL, conversationId);
         if (metaRows.isEmpty()) {
             jdbcTemplate.update(INSERT_MEMORY_SQL, conversationId, config.ttlSeconds());
-            if (!request.normalizedHistory().isEmpty()) {
-                seedMessages(conversationId, request.normalizedHistory());
-            }
             return new StoredMemory(
-                    request.normalizedHistory(),
+                    canonicalOrRequestMessages(conversationId, request),
                     "",
+                    0,
                     0,
                     Map.of(),
                     Instant.now()
@@ -174,11 +178,12 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         Map<String, Object> metaRow = metaRows.get(0);
         String summary = (String) metaRow.get("summary");
         int summaryVersion = ((Number) metaRow.get("summary_version")).intValue();
+        int summarizedMessageCount = ((Number) metaRow.get("summarized_message_count")).intValue();
         Map<String, String> dialogState = parseDialogState(metaRow.get("dialog_state"));
 
-        List<ChatMessage> allMessages = readAllMessages(conversationId);
+        List<ChatMessage> allMessages = canonicalOrLegacyMessages(conversationId, request);
 
-        return new StoredMemory(allMessages, summary, summaryVersion, dialogState, Instant.now());
+        return new StoredMemory(allMessages, summary, summaryVersion, summarizedMessageCount, dialogState, Instant.now());
     }
 
     @Override
@@ -191,32 +196,60 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         }
     }
 
-    private void doPersist(String conversationId, StoredMemory memory) {
-        Integer maxSeq = jdbcTemplate.queryForObject(SELECT_MAX_SEQ_SQL, Integer.class, conversationId);
-        int existingCount = (maxSeq == null ? -1 : maxSeq) + 1;
-
-        if (memory.messages().size() > existingCount) {
-            List<ChatMessage> newMessages = memory.messages().subList(existingCount, memory.messages().size());
-            for (ChatMessage message : newMessages) {
-                jdbcTemplate.update(INSERT_MESSAGE_SQL, conversationId, existingCount++, message.role(), message.content());
-            }
+    @Override
+    protected void deleteStored(String storageKey) {
+        try {
+            jdbcTemplate.update("DELETE FROM conversation_memory WHERE id = ?", storageKey);
+        } catch (Exception exception) {
+            log.warn("Postgres memory delete failed. conversation={} error={}", storageKey, exception.getMessage());
         }
+    }
 
+    private void doPersist(String conversationId, StoredMemory memory) {
         String dialogStateJson = serializeDialogState(memory.dialogState());
         jdbcTemplate.update(UPDATE_MEMORY_SQL,
                 memory.rollingSummary(),
                 memory.summaryVersion(),
                 memory.messages().size(),
+                memory.summarizedMessageCount(),
                 dialogStateJson,
                 config.ttlSeconds(),
                 conversationId
         );
     }
 
-    private void seedMessages(String conversationId, List<ChatMessage> history) {
-        for (int i = 0; i < history.size(); i++) {
-            ChatMessage message = history.get(i);
-            jdbcTemplate.update(INSERT_MESSAGE_SQL, conversationId, i, message.role(), message.content());
+    private List<ChatMessage> canonicalOrRequestMessages(String storageKey, ChatRequest request) {
+        List<ChatMessage> canonical = readHistoryMessages(request);
+        return canonical.isEmpty() ? request.normalizedHistory() : canonical;
+    }
+
+    private List<ChatMessage> canonicalOrLegacyMessages(String storageKey, ChatRequest request) {
+        List<ChatMessage> canonical = readHistoryMessages(request);
+        return canonical.isEmpty() ? readAllMessages(storageKey) : canonical;
+    }
+
+    private List<ChatMessage> readHistoryMessages(ChatRequest request) {
+        String logicalConversationId = request.conversationId();
+        if (logicalConversationId == null || logicalConversationId.isBlank()) {
+            return List.of();
+        }
+        String userId = request.options() == null || request.options().userId() == null
+                || request.options().userId().isBlank()
+                ? "local-user"
+                : request.options().userId().trim();
+        try {
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                    SELECT_HISTORY_MESSAGES_SQL, logicalConversationId, userId
+            );
+            List<ChatMessage> messages = new ArrayList<>(rows.size());
+            for (Map<String, Object> row : rows) {
+                messages.add(new ChatMessage((String) row.get("role"), (String) row.get("content")));
+            }
+            return messages;
+        } catch (Exception exception) {
+            log.warn("Canonical conversation history read failed, using memory fallback. conversation={} error={}",
+                    logicalConversationId, exception.getMessage());
+            return List.of();
         }
     }
 

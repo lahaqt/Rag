@@ -80,9 +80,19 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         recordLongTermMemory(conversationId, request, analysis, response, updated.dialogState());
     }
 
+    @Override
+    public final void forget(String userId, String conversationId) {
+        if (conversationId == null || conversationId.isBlank()) {
+            return;
+        }
+        deleteStored(memoryStorageKey(userId, conversationId));
+    }
+
     protected abstract StoredMemory loadStored(String conversationId, ChatRequest request);
 
     protected abstract void persistStored(String conversationId, StoredMemory memory);
+
+    protected abstract void deleteStored(String storageKey);
 
     protected StoredMemory applyTurn(
             StoredMemory memory,
@@ -91,24 +101,33 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             ChatResponse response
     ) {
         List<ChatMessage> messages = new ArrayList<>(memory.messages());
-        appendIfNew(messages, new ChatMessage("user", normalize(request.query())));
-        if (response != null && response.answer() != null && !response.answer().isBlank()) {
-            appendIfNew(messages, new ChatMessage("assistant", normalize(response.answer())));
+        ChatMessage userMessage = new ChatMessage("user", normalize(request.query()));
+        ChatMessage assistantMessage = response == null || response.answer() == null || response.answer().isBlank()
+                ? null
+                : new ChatMessage("assistant", normalize(response.answer()));
+        if (!endsWithTurn(messages, userMessage, assistantMessage)) {
+            appendIfNew(messages, userMessage);
+            if (assistantMessage != null) {
+                appendIfNew(messages, assistantMessage);
+            }
         }
 
         String rollingSummary = memory.rollingSummary();
         int summaryVersion = memory.summaryVersion();
-        if (messages.size() >= config.summarizeAfterMessages()) {
+        int summarizedMessageCount = memory.summarizedMessageCount();
+        int summaryEnd = Math.max(0, messages.size() - config.recentMessages());
+        if (messages.size() >= config.summarizeAfterMessages() && summaryEnd > summarizedMessageCount) {
             MemorySummary summary = summarizer.summarize(
                     rollingSummary,
-                    messages,
-                    config.recentMessages(),
+                    messages.subList(summarizedMessageCount, summaryEnd),
+                    0,
                     config.summaryMaxCharacters()
             );
             rollingSummary = summary.content();
             if (summary.changed()) {
                 summaryVersion++;
             }
+            summarizedMessageCount = summaryEnd;
         }
 
         Map<String, String> dialogState = stateExtractor.extract(
@@ -124,6 +143,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 messages,
                 rollingSummary,
                 summaryVersion,
+                summarizedMessageCount,
                 dialogState,
                 Instant.now()
         );
@@ -135,6 +155,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         List<MemoryItem> semanticMemories = semanticMemoryStore.recall(
                 userId,
                 conversationId,
+                request.knowledgeBaseId(),
                 request.query(),
                 config.semanticMemoryMaxItems()
         );
@@ -201,6 +222,23 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         messages.add(candidate);
     }
 
+    private boolean endsWithTurn(List<ChatMessage> messages, ChatMessage userMessage, ChatMessage assistantMessage) {
+        int required = assistantMessage == null ? 1 : 2;
+        if (messages.size() < required) {
+            return false;
+        }
+        ChatMessage storedUser = messages.get(messages.size() - required);
+        if (!storedUser.role().equals(userMessage.role()) || !storedUser.content().equals(userMessage.content())) {
+            return false;
+        }
+        if (assistantMessage == null) {
+            return true;
+        }
+        ChatMessage storedAssistant = messages.get(messages.size() - 1);
+        return storedAssistant.role().equals(assistantMessage.role())
+                && storedAssistant.content().equals(assistantMessage.content());
+    }
+
     protected String normalizeConversationId(ChatRequest request) {
         if (request.conversationId() != null && !request.conversationId().isBlank()) {
             return request.conversationId();
@@ -216,8 +254,11 @@ public abstract class AbstractConversationMemoryService implements ConversationM
     }
 
     protected String memoryStorageKey(ChatRequest request, String conversationId) {
-        String userId = normalizeUserId(request);
-        String owner = userId.isBlank() ? "anonymous" : userId;
+        return memoryStorageKey(normalizeUserId(request), conversationId);
+    }
+
+    private String memoryStorageKey(String userId, String conversationId) {
+        String owner = userId == null || userId.isBlank() ? "anonymous" : userId;
         String raw = owner + "\u001f" + (conversationId == null ? "" : conversationId);
         try {
             byte[] digest = MessageDigest.getInstance("SHA-256").digest(raw.getBytes(StandardCharsets.UTF_8));
@@ -235,12 +276,14 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             List<ChatMessage> messages,
             String rollingSummary,
             int summaryVersion,
+            int summarizedMessageCount,
             Map<String, String> dialogState,
             Instant updatedAt
     ) {
         public StoredMemory {
             messages = messages == null ? List.of() : List.copyOf(messages);
             rollingSummary = rollingSummary == null ? "" : rollingSummary;
+            summarizedMessageCount = Math.max(0, Math.min(summarizedMessageCount, messages.size()));
             dialogState = dialogState == null ? Map.of() : Map.copyOf(dialogState);
         }
 
@@ -248,6 +291,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             return new StoredMemory(
                     request.normalizedHistory(),
                     "",
+                    0,
                     0,
                     Map.of(),
                     Instant.now()

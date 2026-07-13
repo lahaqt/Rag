@@ -85,7 +85,7 @@ rag:
     timeout-seconds: 12
     failure-isolation-enabled: true
   memory:
-    provider: in-memory
+    provider: postgres
     enabled: true
     ttl-seconds: 86400
     recent-messages: 8
