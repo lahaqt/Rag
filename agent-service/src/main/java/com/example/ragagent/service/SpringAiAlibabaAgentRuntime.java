@@ -62,6 +62,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final QueryAnalysisClient queryAnalysisClient;
     private final ToolRouter toolRouter;
     private final McpToolGateway mcpToolGateway;
+    private final FunctionToolRegistry functionToolRegistry;
     private final AgentCapabilityExecutor capabilityExecutor;
     private final AgentResponseFinalizer responseFinalizer;
     private final AnswerGenerator answerGenerator;
@@ -69,6 +70,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final ConversationMemoryService conversationMemoryService;
     private final AgentTracePersistenceService tracePersistenceService;
     private final AgentStageTracer stageTracer;
+    private final DynamicToolPlanner dynamicToolPlanner;
     private final TraceContextProvider traceContextProvider;
     private final int maxToolIterations;
     private final int maxReflectionRetries;
@@ -86,6 +88,7 @@ public class SpringAiAlibabaAgentRuntime {
             RagRetrievalTool ragRetrievalTool,
             WebSearchTool webSearchTool,
             McpToolGateway mcpToolGateway,
+            FunctionToolRegistry functionToolRegistry,
             AnswerGenerator answerGenerator,
             ReflectionCritic reflectionCritic,
             ConversationMemoryService conversationMemoryService,
@@ -98,10 +101,12 @@ public class SpringAiAlibabaAgentRuntime {
         this.queryAnalysisClient = queryAnalysisClient;
         this.toolRouter = toolRouter;
         this.mcpToolGateway = mcpToolGateway;
+        this.functionToolRegistry = functionToolRegistry;
         this.capabilityExecutor = new AgentCapabilityExecutor(
                 ragRetrievalTool,
                 webSearchTool,
                 mcpToolGateway,
+                functionToolRegistry,
                 properties
         );
         this.answerGenerator = answerGenerator;
@@ -109,6 +114,7 @@ public class SpringAiAlibabaAgentRuntime {
         this.conversationMemoryService = conversationMemoryService;
         this.tracePersistenceService = tracePersistenceService;
         this.stageTracer = stageTracer;
+        this.dynamicToolPlanner = new DynamicToolPlanner(mcpToolGateway, functionToolRegistry);
         this.traceContextProvider = traceContextProvider;
         this.responseFinalizer = new AgentResponseFinalizer(
                 conversationMemoryService,
@@ -494,6 +500,11 @@ public class SpringAiAlibabaAgentRuntime {
                     runKnowledge(context);
                     context.lastToolResult = context.results.get("rag_retrieval");
                 }
+                case "function_call" -> {
+                    context.toolAttempts++;
+                    capabilityExecutor.runFunction(context);
+                    context.lastToolResult = context.results.get("function_call");
+                }
                 default -> context.addTrace(new AgentTraceStep(
                         context.nextStep(),
                         "spring_ai_alibaba_agent",
@@ -515,18 +526,27 @@ public class SpringAiAlibabaAgentRuntime {
     private Map<String, Object> replanOrdinaryCapability(AgentExecutionContext context) {
         AgentToolResult result = context.lastToolResult;
         boolean needsAnotherCapability = needsAnotherCapability(result);
-        String nextCapability = plannerEnabled && needsAnotherCapability && context.toolAttempts < maxToolIterations
-                ? context.advanceCapability()
-                : "";
+        ToolPlan nextPlan = plannerEnabled && context.toolAttempts < maxToolIterations
+                ? dynamicToolPlanner.next(context).orElse(null)
+                : null;
+        String nextCapability = nextPlan != null
+                ? nextPlan.capability()
+                : plannerEnabled && needsAnotherCapability && context.toolAttempts < maxToolIterations
+                        ? context.advanceCapability()
+                        : "";
         context.replanCapability = !nextCapability.isBlank();
         if (context.replanCapability) {
             context.capabilities = Set.of(nextCapability);
+            context.pendingToolPlan = nextPlan;
         }
-        String action = context.replanCapability ? "next_capability" : "generate";
+        String action = nextPlan != null ? "observation_bound_tool_chain"
+                : context.replanCapability ? "next_capability" : "generate";
         String observation = "attempts=" + context.toolAttempts
                 + "; lastTool=" + (result == null ? "" : result.toolName())
                 + "; reason=" + replanReason(result, needsAnotherCapability)
-                + (context.replanCapability ? "; nextTool=" + nextCapability : "");
+                + (context.replanCapability ? "; nextTool=" + nextCapability : "")
+                + (nextPlan == null ? "" : "; toolTarget=" + nextPlan.toolKey()
+                        + "; arguments=" + nextPlan.arguments());
         context.addTrace(AgentTraceStep.timed(
                 context.nextStep(),
                 "spring_ai_alibaba_planner",
@@ -615,7 +635,8 @@ public class SpringAiAlibabaAgentRuntime {
             CombinedExecution execution = combine(context);
             context.decision = execution.decision();
             context.toolResult = execution.result();
-            context.draft = generateDraft(context, execution.decision(), execution.result());
+            context.draft = java.util.Optional.ofNullable(generateDraft(context, execution.decision(), execution.result()))
+                    .orElseGet(() -> new AnswerDraft("Agent answer generation returned no draft.", false, "empty_answer_draft"));
             context.retry = false;
             context.reflectionReplan = false;
             context.addTrace(AgentTraceStep.timed(
@@ -666,6 +687,13 @@ public class SpringAiAlibabaAgentRuntime {
                     context.reflectionHint,
                     context.streamSink
             );
+        }
+        if ("function_call".equals(toolName)) {
+            if (result == null || !result.success()) {
+                return new AnswerDraft("Function tool failed: " + safe(result == null ? "" : result.observation()), false,
+                        result == null ? "function_call_empty_result" : result.finishReason());
+            }
+            return answerGenerator.generateFromMcpTool(context.request, context.analysis, result, context.reflectionHint, context.streamSink);
         }
         if ("multi_agent".equals(toolName)) {
             if (result == null || !result.success()) {
@@ -938,6 +966,9 @@ public class SpringAiAlibabaAgentRuntime {
             if (capabilities.contains(candidate)) {
                 ordered.add(candidate);
             }
+        }
+        if (capabilities.contains("function_call") && !ordered.contains("function_call")) {
+            ordered.add("function_call");
         }
         return List.copyOf(ordered);
     }

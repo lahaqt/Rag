@@ -8,6 +8,7 @@ import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.AgentStageTracer;
 import com.example.ragagent.observability.TraceContextSnapshot;
 import io.micrometer.tracing.Span;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,6 +37,8 @@ final class AgentExecutionContext {
     final List<AgentTraceStep> trace = new CopyOnWriteArrayList<>();
     final Map<String, ToolDecision> decisions = new ConcurrentHashMap<>();
     final Map<String, AgentToolResult> results = new ConcurrentHashMap<>();
+    final List<AgentToolResult> observations = new CopyOnWriteArrayList<>();
+    final Set<String> executedToolKeys = ConcurrentHashMap.newKeySet();
     volatile ChatRequest analysisRequest;
     volatile ChatRequest request;
     volatile QueryAnalysisResponse analysis;
@@ -45,6 +48,7 @@ final class AgentExecutionContext {
     volatile int capabilityIndex = -1;
     volatile int toolAttempts;
     volatile AgentToolResult lastToolResult;
+    volatile ToolPlan pendingToolPlan;
     volatile ToolDecision decision = ToolDecision.none();
     volatile AgentToolResult toolResult;
     volatile AnswerDraft draft;
@@ -121,6 +125,28 @@ final class AgentExecutionContext {
         }
         capabilityIndex = nextIndex;
         return capabilityPlan.get(nextIndex);
+    }
+
+    void recordObservation(AgentToolResult result) {
+        if (result == null) {
+            return;
+        }
+        observations.add(result);
+        Object key = result.structuredObservation().data().get("_toolKey");
+        if (key == null && "mcp_tool".equals(result.toolName())) {
+            key = result.structuredObservation().data().get("_mcpToolKey");
+        }
+        if (key != null && !key.toString().isBlank()) {
+            executedToolKeys.add(key.toString());
+        }
+    }
+
+    Map<String, Object> mergedObservationData() {
+        Map<String, Object> merged = new LinkedHashMap<>();
+        for (AgentToolResult result : observations) {
+            merged.putAll(result.structuredObservation().data());
+        }
+        return Map.copyOf(merged);
     }
 
     long remainingExecutionNanos() {

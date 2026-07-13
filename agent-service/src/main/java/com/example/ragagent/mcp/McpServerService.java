@@ -181,6 +181,46 @@ public class McpServerService {
         return bestScore > 0 ? Optional.of(bestSelection) : Optional.empty();
     }
 
+    /**
+     * Finds a not-yet-executed tool whose identifier-shaped required input can
+     * be supplied by a prior structured observation.
+     */
+    public Optional<McpToolSelection> selectNextTool(
+            String query,
+            Map<String, Object> observation,
+            java.util.Set<String> executedToolKeys
+    ) {
+        String normalizedQuery = normalize(query);
+        McpToolSelection bestSelection = null;
+        int bestScore = 0;
+        for (ManagedMcpServer server : servers.values()) {
+            if (!server.definition().enabled()) {
+                continue;
+            }
+            for (McpToolDescriptor tool : server.tools()) {
+                String key = server.definition().id() + "." + tool.name();
+                if (executedToolKeys != null && executedToolKeys.contains(key)) {
+                    continue;
+                }
+                ToolArgumentBinder.BoundArguments bound = ToolArgumentBinder.bind(
+                        tool, inferArguments(tool, query), observation
+                );
+                if (!ToolArgumentBinder.requiredIdentifiersBound(tool, bound.boundProperties())) {
+                    continue;
+                }
+                int score = scoreTool(normalizedQuery, tool) + bound.boundProperties().size() * 10;
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestSelection = new McpToolSelection(
+                            server.definition().id(), tool.name(), tool, bound.arguments(),
+                            "observation_bound_mcp_chain:" + String.join(",", bound.boundProperties())
+                    );
+                }
+            }
+        }
+        return Optional.ofNullable(bestSelection);
+    }
+
     public McpToolCallResponse callSelection(McpToolSelection selection) {
         return callTool(selection.serverId(), selection.toolName(), selection.arguments());
     }

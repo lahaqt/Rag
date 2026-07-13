@@ -19,6 +19,7 @@ final class AgentCapabilityExecutor {
     private final RagRetrievalTool ragRetrievalTool;
     private final WebSearchTool webSearchTool;
     private final McpToolGateway mcpToolGateway;
+    private final FunctionToolRegistry functionToolRegistry;
     private final int readOnlyToolMaxAttempts;
     private final int retryBackoffMillis;
     private final Semaphore multiAgentConcurrency;
@@ -28,11 +29,13 @@ final class AgentCapabilityExecutor {
             RagRetrievalTool ragRetrievalTool,
             WebSearchTool webSearchTool,
             McpToolGateway mcpToolGateway,
+            FunctionToolRegistry functionToolRegistry,
             RagProperties properties
     ) {
         this.ragRetrievalTool = ragRetrievalTool;
         this.webSearchTool = webSearchTool;
         this.mcpToolGateway = mcpToolGateway;
+        this.functionToolRegistry = functionToolRegistry;
         this.readOnlyToolMaxAttempts = properties == null || properties.agent() == null
                 ? 2
                 : properties.agent().readOnlyToolMaxAttempts();
@@ -48,9 +51,10 @@ final class AgentCapabilityExecutor {
 
     void runKnowledge(AgentExecutionContext context) {
         long started = System.nanoTime();
+        ToolPlan plan = takePlan(context, "rag_retrieval");
         ToolDecision decision = context.decisions.computeIfAbsent(
                 "rag_retrieval",
-                ignored -> ToolDecision.ragRetrieval(primaryQuery(context), "graph_knowledge_agent")
+                ignored -> ToolDecision.ragRetrieval(plan == null ? primaryQuery(context) : plan.query(), "graph_knowledge_agent")
         );
         AgentToolResult result;
         if (isBlank(context.request.knowledgeBaseId())) {
@@ -68,14 +72,16 @@ final class AgentCapabilityExecutor {
             ));
         }
         context.results.put("rag_retrieval", result);
+        context.recordObservation(result);
         context.addTrace(capabilityTrace(context, result, "knowledge_agent", started));
     }
 
     void runWebSearch(AgentExecutionContext context) {
         long started = System.nanoTime();
+        ToolPlan plan = takePlan(context, "web_search");
         ToolDecision decision = context.decisions.computeIfAbsent(
                 "web_search",
-                ignored -> ToolDecision.webSearch(context.request.query().trim(), "graph_web_search_agent")
+                ignored -> ToolDecision.webSearch(plan == null ? context.request.query().trim() : plan.query(), "graph_web_search_agent")
         );
         AgentToolResult result = executeCapability(context, "web_search", decision.query(), () -> executeReadOnlyWithRetry(
                 "web_search",
@@ -83,6 +89,7 @@ final class AgentCapabilityExecutor {
                 () -> AgentToolResult.webSearch(decision.query(), webSearchTool.search(decision.query()))
         ));
         context.results.put("web_search", result);
+        context.recordObservation(result);
         context.addTrace(capabilityTrace(context, result, "web_search_agent", started));
     }
 
@@ -92,14 +99,36 @@ final class AgentCapabilityExecutor {
                 "mcp_tool",
                 ignored -> ToolDecision.mcpTool(context.request.query().trim(), "graph_mcp_tool_agent")
         );
+        ToolPlan plan = takePlan(context, "mcp_tool");
         AgentToolResult result = executeCapability(
                 context,
                 "mcp_tool",
                 decision.query(),
-                () -> mcpToolGateway.execute(decision.query())
+                () -> plan == null ? mcpToolGateway.execute(decision.query()) : mcpToolGateway.execute(plan)
         );
         context.results.put("mcp_tool", result);
+        context.recordObservation(result);
         context.addTrace(capabilityTrace(context, result, "mcp_tool_agent", started));
+    }
+
+    void runFunction(AgentExecutionContext context) {
+        long started = System.nanoTime();
+        ToolPlan plan = takePlan(context, "function_call");
+        AgentToolResult result = plan == null
+                ? AgentToolResult.failure("function_call", context.request.query(), "missing_function_plan", "function_call_failed")
+                : executeCapability(context, "function_call", plan.query(), () -> functionToolRegistry.execute(plan));
+        context.results.put("function_call", result);
+        context.recordObservation(result);
+        context.addTrace(capabilityTrace(context, result, "function_call_agent", started));
+    }
+
+    private ToolPlan takePlan(AgentExecutionContext context, String capability) {
+        ToolPlan plan = context.pendingToolPlan;
+        if (plan != null && capability.equals(plan.capability())) {
+            context.pendingToolPlan = null;
+            return plan;
+        }
+        return null;
     }
 
     private AgentToolResult executeReadOnlyWithRetry(
@@ -168,7 +197,8 @@ final class AgentCapabilityExecutor {
                 safe(result.observation()) + "; attempts=" + attempts,
                 result.finishReason(),
                 result.retrievalHits(),
-                result.webSearchResults()
+                result.webSearchResults(),
+                result.structuredObservation()
         );
     }
 

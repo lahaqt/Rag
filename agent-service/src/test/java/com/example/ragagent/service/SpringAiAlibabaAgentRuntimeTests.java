@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -19,9 +21,13 @@ import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
 import com.example.ragagent.dto.WebSearchResult;
 import com.example.ragagent.memory.NoopConversationMemoryService;
+import com.example.ragagent.mcp.McpToolDescriptor;
+import com.example.ragagent.mcp.ToolArgumentBinder;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -437,6 +443,114 @@ class SpringAiAlibabaAgentRuntimeTests {
     }
 
     @Test
+    void plannerChainsMcpCallsUsingStructuredObservation() {
+        QueryAnalysisResponse analysis = new QueryAnalysisResponse(
+                "conversation-1", "", "check order", "check order", "check order", "tool", 0.95,
+                "tool_invocation", false, false, 0, List.of(), "TOOL_REQUEST", "SINGLE_TOOL",
+                List.of("mcp_tool"), "", Map.of(), "", List.of("test")
+        );
+        McpToolCallPlan logisticsPlan = new McpToolCallPlan(
+                "orders", "query_logistics", null, Map.of("orderId", "ORD-1001"), "observation_bound_mcp_chain:orderId"
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(mcpToolGateway.execute("check order")).thenReturn(AgentToolResult.mcp(
+                "check order", true, "order found", "mcp_tool_completed",
+                new StructuredObservation("order found", Map.of("orderId", "ORD-1001", "_mcpToolKey", "orders.lookup_order"))
+        ));
+        when(mcpToolGateway.planNext(anyString(), anyMap(), anySet())).thenReturn(Optional.of(logisticsPlan));
+        when(mcpToolGateway.execute(any(ToolPlan.class))).thenReturn(AgentToolResult.mcp(
+                "check order", true, "shipment found", "mcp_tool_completed",
+                new StructuredObservation("shipment found", Map.of("status", "IN_TRANSIT", "_mcpToolKey", "orders.query_logistics"))
+        ));
+        when(answerGenerator.generateFromMcpTool(any(), any(), any(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Order ORD-1001 is in transit.", false, "mcp_chain_answer"));
+
+        ChatResponse response = runtime(propertiesWithPriority(List.of("mcp_tool", "rag_retrieval", "web_search")))
+                .answer(new ChatRequest("check order", null, "conversation-1", List.of(), null));
+
+        assertThat(response.answer()).isEqualTo("Order ORD-1001 is in transit.");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "observation_bound_tool_chain".equals(step.action())
+                        && step.observation().contains("toolTarget=orders.query_logistics")
+                        && step.observation().contains("orderId=ORD-1001"));
+        verify(mcpToolGateway).execute("check order");
+        verify(mcpToolGateway).execute(any(ToolPlan.class));
+        verify(mcpToolGateway, times(2)).planNext(anyString(), anyMap(), anySet());
+    }
+
+    @Test
+    void parameterBindingUsesStructuredObservationForRequiredIdentifier() throws Exception {
+        McpToolDescriptor descriptor = new McpToolDescriptor(
+                "query_logistics", "Query logistics", "Track order delivery.",
+                new ObjectMapper().readTree("{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}")
+        );
+
+        ToolArgumentBinder.BoundArguments bound = ToolArgumentBinder.bind(
+                descriptor,
+                Map.of("orderId", "${observation.orderId}"),
+                Map.of("order", Map.of("order_id", "ORD-1001"))
+        );
+
+        assertThat(bound.arguments()).containsEntry("orderId", "ORD-1001");
+        assertThat(ToolArgumentBinder.requiredIdentifiersBound(descriptor, bound.boundProperties())).isTrue();
+    }
+
+    @Test
+    void ragObservationCanDirectTheNextWebCapability() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis("SINGLE_TOOL", List.of("rag_retrieval"));
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any())).thenReturn(new AgentToolResult(
+                "rag_retrieval", "refund", true, "policy requires live confirmation", "rag_retrieval_completed", List.of(), List.of(),
+                new StructuredObservation("policy requires live confirmation", Map.of(
+                        "_toolKey", "rag_retrieval", "nextCapability", "web_search", "nextQuery", "latest refund policy"
+                ))
+        ));
+        when(webSearchTool.search("latest refund policy"))
+                .thenReturn(List.of(new WebSearchResult(1, "Refund policy", "https://example.com", "Updated today")));
+        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Latest refund policy", false, "web_answer"));
+
+        ChatResponse response = runtime(propertiesWithPriority(List.of("rag_retrieval", "web_search", "mcp_tool")))
+                .answer(request("refund"));
+
+        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.agentTrace()).anyMatch(step -> "observation_bound_tool_chain".equals(step.action())
+                && step.observation().contains("toolTarget=web_search"));
+        verify(webSearchTool).search("latest refund policy");
+    }
+
+    @Test
+    void localFunctionRegistryPlansAndBindsFromObservation() throws Exception {
+        McpToolDescriptor descriptor = new McpToolDescriptor(
+                "query_logistics", "Query logistics", "Track an order.",
+                new ObjectMapper().readTree("{\"type\":\"object\",\"properties\":{\"orderId\":{\"type\":\"string\"}},\"required\":[\"orderId\"]}")
+        );
+        FunctionToolRegistry registry = new FunctionToolRegistry(List.of(new FunctionTool() {
+            @Override
+            public McpToolDescriptor descriptor() {
+                return descriptor;
+            }
+
+            @Override
+            public AgentToolResult execute(Map<String, Object> arguments) {
+                return AgentToolResult.mcp("", true, "shipment found", "function_completed",
+                        new StructuredObservation("shipment found", Map.of("status", "IN_TRANSIT")));
+            }
+        }));
+
+        ToolPlan plan = registry.planNext("track order", Map.of("order_id", "ORD-1001"), Set.of()).orElseThrow();
+        AgentToolResult result = registry.execute(plan);
+
+        assertThat(plan.arguments()).containsEntry("orderId", "ORD-1001");
+        assertThat(result.toolName()).isEqualTo("function_call");
+        assertThat(result.structuredObservation().data()).containsEntry("_toolKey", "function.query_logistics");
+    }
+
+    @Test
     void executionDeadlineStopsGraphBeforeTheNextNode() {
         when(queryAnalysisClient.analyze(any())).thenAnswer(ignored -> {
             Thread.sleep(2100);
@@ -473,6 +587,7 @@ class SpringAiAlibabaAgentRuntimeTests {
                 ragRetrievalTool,
                 webSearchTool,
                 mcpToolGateway,
+                new FunctionToolRegistry(List.of()),
                 answerGenerator,
                 new ReflectionCritic(),
                 new NoopConversationMemoryService(),
