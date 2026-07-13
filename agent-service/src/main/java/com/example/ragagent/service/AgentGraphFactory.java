@@ -32,6 +32,7 @@ final class AgentGraphFactory {
     private static final String NODE_FANOUT_KNOWLEDGE_MCP = "fanout_knowledge_mcp";
     private static final String NODE_FANOUT_WEB_MCP = "fanout_web_mcp";
     private static final String NODE_FANOUT_ALL = "fanout_all_capabilities";
+    private static final String NODE_MULTI_AGENT_REPLAN = "replan_multi_agent";
     private static final String NODE_GENERATE = "generate_answer";
     private static final String NODE_REFLECT = "reflect_answer";
     private static final String NODE_FINALIZE = "finalize_response";
@@ -107,6 +108,7 @@ final class AgentGraphFactory {
             graph.addNode(NODE_FANOUT_KNOWLEDGE_MCP, AsyncNodeAction.node_async(nodes.multiAgentFanOut()));
             graph.addNode(NODE_FANOUT_WEB_MCP, AsyncNodeAction.node_async(nodes.multiAgentFanOut()));
             graph.addNode(NODE_FANOUT_ALL, AsyncNodeAction.node_async(nodes.multiAgentFanOut()));
+            graph.addNode(NODE_MULTI_AGENT_REPLAN, AsyncNodeAction.node_async(nodes.replanMultiAgent()));
             graph.addNode(NODE_GENERATE, AsyncNodeAction.node_async(nodes.generate()));
             graph.addNode(NODE_REFLECT, AsyncNodeAction.node_async(nodes.reflect()));
             graph.addNode(NODE_FINALIZE, AsyncNodeAction.node_async(nodes.finalizeResponse()));
@@ -136,9 +138,19 @@ final class AgentGraphFactory {
             graph.addEdge(NODE_FANOUT_ALL, NODE_KNOWLEDGE);
             graph.addEdge(NODE_FANOUT_ALL, NODE_WEB);
             graph.addEdge(NODE_FANOUT_ALL, NODE_MCP);
-            graph.addEdge(NODE_KNOWLEDGE, NODE_GENERATE);
-            graph.addEdge(NODE_WEB, NODE_GENERATE);
-            graph.addEdge(NODE_MCP, NODE_GENERATE);
+            graph.addEdge(NODE_KNOWLEDGE, NODE_MULTI_AGENT_REPLAN);
+            graph.addEdge(NODE_WEB, NODE_MULTI_AGENT_REPLAN);
+            graph.addEdge(NODE_MCP, NODE_MULTI_AGENT_REPLAN);
+            graph.addConditionalEdges(
+                    NODE_MULTI_AGENT_REPLAN,
+                    AsyncEdgeAction.edge_async(edges.multiAgentReplan()),
+                    Map.of(
+                            EDGE_KNOWLEDGE, NODE_KNOWLEDGE,
+                            EDGE_WEB, NODE_WEB,
+                            EDGE_MCP, NODE_MCP,
+                            EDGE_GENERATE, NODE_GENERATE
+                    )
+            );
             graph.addEdge(NODE_GENERATE, NODE_REFLECT);
             graph.addConditionalEdges(
                     NODE_REFLECT,
@@ -169,6 +181,7 @@ final class AgentGraphFactory {
             NodeAction executeWebSearch,
             NodeAction executeMcp,
             NodeAction multiAgentFanOut,
+            NodeAction replanMultiAgent,
             NodeAction generate,
             NodeAction reflect,
             NodeAction finalizeResponse
@@ -179,6 +192,7 @@ final class AgentGraphFactory {
             EdgeAction ordinaryReplan,
             EdgeAction ordinaryReflection,
             EdgeAction multiAgentDispatch,
+            EdgeAction multiAgentReplan,
             EdgeAction multiAgentReflection
     ) {
     }

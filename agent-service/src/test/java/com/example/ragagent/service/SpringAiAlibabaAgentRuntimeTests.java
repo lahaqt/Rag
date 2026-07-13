@@ -164,6 +164,73 @@ class SpringAiAlibabaAgentRuntimeTests {
     }
 
     @Test
+    void multiAgentGraphReplansASecondRagRetrievalFromStructuredObservation() {
+        QueryAnalysisResponse analysis = knowledgeAnalysis("PARALLEL", List.of("rag_retrieval"));
+        AgentToolResult initial = new AgentToolResult(
+                "rag_retrieval", "refund", true, "Need exception policy", "rag_retrieval_completed", List.of(hit()), List.of(),
+                new StructuredObservation("Need exception policy", Map.of(
+                        "_toolKey", "rag_retrieval", "nextCapability", "rag_retrieval", "nextQuery", "refund exception"
+                ))
+        );
+        AgentToolResult followUp = AgentToolResult.retrieval("refund exception", List.of(
+                new RetrievalHit(2, "kb-1", "doc-2", "chunk-2", 1, "exceptions.md", "Exception evidence", 0.93)
+        ));
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any())).thenReturn(initial, followUp);
+        when(answerGenerator.generateFromMultiAgent(any(), any(), any(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Refund exception answer [1]", false, "multi_agent_rag_replan"));
+
+        ChatResponse response = runtime().answerMultiAgent(request("/multi-agent refund"));
+
+        assertThat(response.answer()).isEqualTo("Refund exception answer [1]");
+        assertThat(response.toolName()).isEqualTo("multi_agent");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "observation_bound_tool_chain".equals(step.action())
+                        && step.observation().contains("nextTool=rag_retrieval:refund exception"));
+        verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
+    }
+
+    @Test
+    void multiAgentGraphChainsDistinctMcpToolsFromStructuredObservation() {
+        QueryAnalysisResponse analysis = new QueryAnalysisResponse(
+                "conversation-1", "", "check order", "check order", "check order", "tool", 0.95,
+                "tool_invocation", false, false, 0, List.of(), "TOOL_REQUEST", "PARALLEL",
+                List.of("mcp_tool"), "", Map.of(), "", List.of("test")
+        );
+        McpToolCallPlan logisticsPlan = new McpToolCallPlan(
+                "orders", "query_logistics", null, Map.of("orderId", "ORD-1001"), "observation_bound_mcp_chain:orderId"
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(mcpToolGateway.execute("check order")).thenReturn(AgentToolResult.mcp(
+                "check order", true, "order found", "mcp_tool_completed",
+                new StructuredObservation("order found", Map.of("orderId", "ORD-1001", "_mcpToolKey", "orders.lookup_order"))
+        ));
+        when(mcpToolGateway.planNext(anyString(), anyMap(), anySet())).thenReturn(Optional.of(logisticsPlan));
+        when(mcpToolGateway.execute(any(ToolPlan.class))).thenReturn(AgentToolResult.mcp(
+                "check order", true, "shipment found", "mcp_tool_completed",
+                new StructuredObservation("shipment found", Map.of("status", "IN_TRANSIT", "_mcpToolKey", "orders.query_logistics"))
+        ));
+        when(answerGenerator.generateFromMultiAgent(any(), any(), any(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Order ORD-1001 is in transit.", false, "multi_agent_mcp_chain"));
+
+        ChatResponse response = runtime().answerMultiAgent(new ChatRequest(
+                "/multi-agent check order", null, "conversation-1", List.of(), null
+        ));
+
+        assertThat(response.answer()).isEqualTo("Order ORD-1001 is in transit.");
+        assertThat(response.toolName()).isEqualTo("multi_agent");
+        assertThat(response.agentTrace())
+                .anyMatch(step -> "observation_bound_tool_chain".equals(step.action())
+                        && step.observation().contains("nextTool=orders.query_logistics"));
+        verify(mcpToolGateway).execute("check order");
+        verify(mcpToolGateway).execute(any(ToolPlan.class));
+    }
+
+    @Test
     void multiAgentIsolatesFailedSpecialistAndLabelsThePartialResult() {
         QueryAnalysisResponse analysis = knowledgeAnalysis(
                 "PARALLEL",

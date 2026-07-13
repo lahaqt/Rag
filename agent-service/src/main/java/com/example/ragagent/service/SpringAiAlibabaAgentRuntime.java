@@ -156,6 +156,7 @@ public class SpringAiAlibabaAgentRuntime {
                         this::executeWebSearch,
                         this::executeMcp,
                         this::multiAgentFanOut,
+                        this::replanMultiAgent,
                         this::generate,
                         this::reflect,
                         this::finalizeResponse
@@ -164,6 +165,7 @@ public class SpringAiAlibabaAgentRuntime {
                         this::ordinaryReplanEdge,
                         this::ordinaryReflectionEdge,
                         this::multiAgentDispatchEdge,
+                        this::multiAgentReplanEdge,
                         this::multiAgentReflectionEdge
                 )
         );
@@ -323,6 +325,19 @@ public class SpringAiAlibabaAgentRuntime {
 
     private String multiAgentReflectionEdge(OverAllState state) {
         return context(state).retry ? "retry" : "finish";
+    }
+
+    private String multiAgentReplanEdge(OverAllState state) {
+        AgentExecutionContext context = context(state);
+        if (!context.replanCapability) {
+            return "generate";
+        }
+        return switch (firstSupported(context.capabilities)) {
+            case "rag_retrieval" -> "knowledge";
+            case "web_search" -> "web";
+            case "mcp_tool" -> "mcp";
+            default -> "generate";
+        };
     }
 
     private String multiAgentDispatchEdge(OverAllState state) {
@@ -607,6 +622,38 @@ public class SpringAiAlibabaAgentRuntime {
         });
     }
 
+    /**
+     * Continues a multi-agent run only when a completed specialist observation
+     * explicitly identifies another safe capability or MCP tool. This keeps the
+     * initial fan-out parallel while follow-up calls remain ordered and bounded.
+     */
+    private Map<String, Object> replanMultiAgent(OverAllState state) {
+        AgentExecutionContext context = context(state);
+        return context.inStage("multi_agent_planning", () -> {
+            int attempts = context.observations.size();
+            ToolPlan nextPlan = plannerEnabled && attempts < maxToolIterations
+                    ? dynamicToolPlanner.next(context).orElse(null)
+                    : null;
+            context.replanCapability = nextPlan != null;
+            if (nextPlan != null) {
+                context.capabilities = Set.of(nextPlan.capability());
+                context.pendingToolPlan = nextPlan;
+            }
+            context.addTrace(AgentTraceStep.timed(
+                    context.nextStep(),
+                    "spring_ai_alibaba_multi_agent_planner",
+                    context.analysis.route(),
+                    nextPlan == null ? "" : nextPlan.capability(),
+                    nextPlan == null ? "generate" : "observation_bound_tool_chain",
+                    "attempts=" + attempts + (nextPlan == null ? "" : "; nextTool=" + nextPlan.toolKey()
+                            + "; arguments=" + nextPlan.arguments()),
+                    "ok",
+                    0
+            ));
+            return stateUpdate(context);
+        });
+    }
+
     private void runKnowledge(AgentExecutionContext context) {
         context.inStage("rag_retrieval", () -> {
             capabilityExecutor.runKnowledge(context);
@@ -877,6 +924,9 @@ public class SpringAiAlibabaAgentRuntime {
     }
 
     private List<AgentToolResult> orderedResults(AgentExecutionContext context) {
+        if (context.multiAgent) {
+            return List.copyOf(context.observations);
+        }
         return List.of("rag_retrieval", "web_search", "mcp_tool").stream()
                 .map(context.results::get)
                 .filter(java.util.Objects::nonNull)

@@ -13,16 +13,20 @@ final class DynamicToolPlanner {
     }
 
     Optional<ToolPlan> next(AgentExecutionContext context) {
-        AgentToolResult last = context.lastToolResult;
+        AgentToolResult last = context.latestSuccessfulObservation();
         if (last == null || !last.success()) {
             return Optional.empty();
         }
         java.util.Map<String, Object> data = context.mergedObservationData();
         Object nextCapability = data.get("nextCapability");
-        if (nextCapability instanceof String capability && java.util.Set.of("rag_retrieval", "web_search").contains(capability)
-                && !context.executedToolKeys.contains(capability)) {
+        if (nextCapability instanceof String capability && java.util.Set.of("rag_retrieval", "web_search").contains(capability)) {
             String query = data.get("nextQuery") instanceof String value && !value.isBlank() ? value : context.request.query();
-            return Optional.of(new ToolPlan(capability, capability, query, java.util.Map.of(), "observation_directive"));
+            String toolKey = "rag_retrieval".equals(capability)
+                    ? "rag_retrieval:" + query.trim().toLowerCase()
+                    : capability;
+            if (!context.executedToolKeys.contains(toolKey)) {
+                return Optional.of(new ToolPlan(capability, toolKey, query, java.util.Map.of(), "observation_directive"));
+            }
         }
         if (context.capabilityPlan.contains("function_call")) {
             Optional<ToolPlan> functionPlan = functionToolRegistry.planNext(
@@ -32,7 +36,9 @@ final class DynamicToolPlanner {
                 return functionPlan;
             }
         }
-        if ("mcp_tool".equals(last.toolName()) || context.capabilityPlan.contains("mcp_tool")) {
+        boolean mcpObservationExists = context.observations.stream()
+                .anyMatch(result -> result.success() && "mcp_tool".equals(result.toolName()));
+        if (mcpObservationExists || context.capabilityPlan.contains("mcp_tool")) {
             return mcpToolGateway.planNext(context.request.query(), data, context.executedToolKeys)
                     .filter(plan -> !context.executedToolKeys.contains(plan.key()))
                     .map(plan -> new ToolPlan("mcp_tool", plan.key(), context.request.query(), plan.arguments(), plan.reason()));

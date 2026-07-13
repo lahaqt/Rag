@@ -128,10 +128,17 @@ final class AgentExecutionContext {
     }
 
     void recordObservation(AgentToolResult result) {
+        recordObservation(result, "");
+    }
+
+    void recordObservation(AgentToolResult result, String executedToolKey) {
         if (result == null) {
             return;
         }
         observations.add(result);
+        if (result.success() && executedToolKey != null && !executedToolKey.isBlank()) {
+            executedToolKeys.add(executedToolKey);
+        }
         Object key = result.structuredObservation().data().get("_toolKey");
         if (key == null && "mcp_tool".equals(result.toolName())) {
             key = result.structuredObservation().data().get("_mcpToolKey");
@@ -139,6 +146,16 @@ final class AgentExecutionContext {
         if (key != null && !key.toString().isBlank()) {
             executedToolKeys.add(key.toString());
         }
+    }
+
+    AgentToolResult latestSuccessfulObservation() {
+        for (int index = observations.size() - 1; index >= 0; index--) {
+            AgentToolResult result = observations.get(index);
+            if (result.success()) {
+                return result;
+            }
+        }
+        return null;
     }
 
     Map<String, Object> mergedObservationData() {

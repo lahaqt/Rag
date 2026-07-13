@@ -52,10 +52,15 @@ final class AgentCapabilityExecutor {
     void runKnowledge(AgentExecutionContext context) {
         long started = System.nanoTime();
         ToolPlan plan = takePlan(context, "rag_retrieval");
-        ToolDecision decision = context.decisions.computeIfAbsent(
-                "rag_retrieval",
-                ignored -> ToolDecision.ragRetrieval(plan == null ? primaryQuery(context) : plan.query(), "graph_knowledge_agent")
-        );
+        ToolDecision decision = plan == null
+                ? context.decisions.computeIfAbsent(
+                        "rag_retrieval",
+                        ignored -> ToolDecision.ragRetrieval(primaryQuery(context), "graph_knowledge_agent")
+                )
+                : ToolDecision.ragRetrieval(plan.query(), "graph_knowledge_agent_replan");
+        if (plan != null) {
+            context.decisions.put("rag_retrieval", decision);
+        }
         AgentToolResult result;
         if (isBlank(context.request.knowledgeBaseId())) {
             result = AgentToolResult.failure(
@@ -72,17 +77,22 @@ final class AgentCapabilityExecutor {
             ));
         }
         context.results.put("rag_retrieval", result);
-        context.recordObservation(result);
+        context.recordObservation(result, plan == null ? retrievalExecutionKey(decision.query()) : plan.toolKey());
         context.addTrace(capabilityTrace(context, result, "knowledge_agent", started));
     }
 
     void runWebSearch(AgentExecutionContext context) {
         long started = System.nanoTime();
         ToolPlan plan = takePlan(context, "web_search");
-        ToolDecision decision = context.decisions.computeIfAbsent(
-                "web_search",
-                ignored -> ToolDecision.webSearch(plan == null ? context.request.query().trim() : plan.query(), "graph_web_search_agent")
-        );
+        ToolDecision decision = plan == null
+                ? context.decisions.computeIfAbsent(
+                        "web_search",
+                        ignored -> ToolDecision.webSearch(context.request.query().trim(), "graph_web_search_agent")
+                )
+                : ToolDecision.webSearch(plan.query(), "graph_web_search_agent_replan");
+        if (plan != null) {
+            context.decisions.put("web_search", decision);
+        }
         AgentToolResult result = executeCapability(context, "web_search", decision.query(), () -> executeReadOnlyWithRetry(
                 "web_search",
                 decision.query(),
@@ -129,6 +139,10 @@ final class AgentCapabilityExecutor {
             return plan;
         }
         return null;
+    }
+
+    private String retrievalExecutionKey(String query) {
+        return "rag_retrieval:" + (query == null ? "" : query.trim().toLowerCase());
     }
 
     private AgentToolResult executeReadOnlyWithRetry(
