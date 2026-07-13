@@ -2,6 +2,7 @@ package com.example.ragagent.service;
 
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.AgentTraceStep;
+import com.example.ragagent.observability.PlanMetrics;
 import java.util.function.Supplier;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
@@ -24,6 +25,7 @@ final class AgentCapabilityExecutor {
     private final int retryBackoffMillis;
     private final Semaphore multiAgentConcurrency;
     private final boolean multiAgentFailureIsolationEnabled;
+    private final ToolExecutionManager toolExecutionManager = new ToolExecutionManager();
 
     AgentCapabilityExecutor(
             RagRetrievalTool ragRetrievalTool,
@@ -70,7 +72,7 @@ final class AgentCapabilityExecutor {
                     "knowledge_base_required"
             );
         } else {
-            result = executeCapability(context, "rag_retrieval", decision.query(), () -> executeReadOnlyWithRetry(
+            result = executeWithBudget(context, "rag_retrieval", decision.query(), () -> executeReadOnlyWithRetry(
                     "rag_retrieval",
                     decision.query(),
                     () -> ragRetrievalTool.execute(context.request, context.analysis, decision)
@@ -93,7 +95,7 @@ final class AgentCapabilityExecutor {
         if (plan != null) {
             context.decisions.put("web_search", decision);
         }
-        AgentToolResult result = executeCapability(context, "web_search", decision.query(), () -> executeReadOnlyWithRetry(
+        AgentToolResult result = executeWithBudget(context, "web_search", decision.query(), () -> executeReadOnlyWithRetry(
                 "web_search",
                 decision.query(),
                 () -> AgentToolResult.webSearch(decision.query(), webSearchTool.search(decision.query()))
@@ -110,7 +112,7 @@ final class AgentCapabilityExecutor {
                 ignored -> ToolDecision.mcpTool(context.request.query().trim(), "graph_mcp_tool_agent")
         );
         ToolPlan plan = takePlan(context, "mcp_tool");
-        AgentToolResult result = executeCapability(
+        AgentToolResult result = executeWithBudget(
                 context,
                 "mcp_tool",
                 decision.query(),
@@ -126,10 +128,52 @@ final class AgentCapabilityExecutor {
         ToolPlan plan = takePlan(context, "function_call");
         AgentToolResult result = plan == null
                 ? AgentToolResult.failure("function_call", context.request.query(), "missing_function_plan", "function_call_failed")
-                : executeCapability(context, "function_call", plan.query(), () -> functionToolRegistry.execute(plan));
+                : executeWithBudget(context, "function_call", plan.query(), () -> functionToolRegistry.execute(plan));
         context.results.put("function_call", result);
         context.recordObservation(result);
         context.addTrace(capabilityTrace(context, result, "function_call_agent", started));
+    }
+
+    /**
+     * Executes exactly one globally scheduled step.  The step id travels with
+     * the result and trace so two retrieval steps (or two calls of the same
+     * capability) can never overwrite one another's scheduler state.
+     */
+    void runPlanStep(AgentExecutionContext context, PlanStep step) {
+        long started = System.nanoTime();
+        ToolPlan plan = context.takePlanTool(step.stepId);
+        if (plan == null) plan = step.actualTool();
+        final ToolPlan resolvedPlan = plan;
+        String capability = step.capability;
+        String query = resolvedPlan == null || isBlank(resolvedPlan.query()) ? context.request.query().trim() : resolvedPlan.query();
+        AgentToolResult result = switch (capability) {
+            case "rag_retrieval" -> {
+                ToolDecision decision = ToolDecision.ragRetrieval(query, "global_plan_scheduler");
+                if (isBlank(context.request.knowledgeBaseId())) {
+                    yield AgentToolResult.failure(capability, query, "knowledge_base_required", "knowledge_base_required");
+                }
+                yield executeWithBudget(context, capability, query, () -> executeReadOnlyWithRetry(
+                        capability, query, () -> ragRetrievalTool.execute(context.request, context.analysis, decision)
+                ));
+            }
+            case "web_search" -> executeWithBudget(context, capability, query, () -> executeReadOnlyWithRetry(
+                    capability, query, () -> AgentToolResult.webSearch(query, webSearchTool.search(query))
+            ));
+            case "mcp_tool" -> executeWithBudget(context, capability, query,
+                    () -> resolvedPlan == null ? mcpToolGateway.execute(query) : mcpToolGateway.execute(resolvedPlan));
+            case "function_call" -> resolvedPlan == null
+                    ? AgentToolResult.failure(capability, query, "missing_function_plan", "function_call_failed")
+                    : executeWithBudget(context, capability, query, () -> functionToolRegistry.execute(resolvedPlan));
+            default -> AgentToolResult.failure(capability, query, "unsupported_plan_capability", "unsupported_plan_capability");
+        };
+        context.results.put(capability, result); // compatibility view only; scheduler state remains step-keyed.
+        context.recordPlanResult(step.stepId, result);
+        PlanMetrics.step(capability, result.success() ? "succeeded" : "failed");
+        context.recordObservation(result, resolvedPlan == null ? "" : resolvedPlan.toolKey());
+        AgentTraceStep trace = capabilityTrace(context, result, capability + "_agent", started)
+                .withAttribute("planStepId", step.stepId)
+                .withAttribute("parallelGroup", step.parallelGroup);
+        context.addTrace(trace);
     }
 
     private ToolPlan takePlan(AgentExecutionContext context, String capability) {
@@ -139,6 +183,16 @@ final class AgentCapabilityExecutor {
             return plan;
         }
         return null;
+    }
+
+    private AgentToolResult executeWithBudget(
+            AgentExecutionContext context,
+            String toolName,
+            String query,
+            Supplier<AgentToolResult> operation
+    ) {
+        return toolExecutionManager.execute(context, toolName, query,
+                () -> executeCapability(context, toolName, query, operation));
     }
 
     private String retrievalExecutionKey(String query) {
@@ -235,7 +289,7 @@ final class AgentCapabilityExecutor {
             String action,
             long started
     ) {
-        return AgentTraceStep.timed(
+        AgentTraceStep trace = AgentTraceStep.timed(
                 context.nextStep(),
                 "spring_ai_alibaba_agent",
                 context.analysis.route(),
@@ -244,7 +298,8 @@ final class AgentCapabilityExecutor {
                 result.observation(),
                 result.success() ? "ok" : "error",
                 Math.max(0, (System.nanoTime() - started) / 1_000_000)
-        );
+        ).withAttribute("toolAttempts", context.toolAttempts());
+        return trace;
     }
 
     private String primaryQuery(AgentExecutionContext context) {

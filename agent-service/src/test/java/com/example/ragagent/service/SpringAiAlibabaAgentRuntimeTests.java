@@ -423,13 +423,13 @@ class SpringAiAlibabaAgentRuntimeTests {
                 .thenReturn(AgentToolResult.failure("rag_retrieval", "refund", "knowledge unavailable", "retrieval_failed"));
         when(webSearchTool.search("refund"))
                 .thenReturn(List.of(new WebSearchResult(1, "Refund update", "https://example.com", "Updated refund policy")));
-        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+        when(answerGenerator.generateFromMultiAgent(any(), any(), any(), anyString(), any()))
                 .thenReturn(new AnswerDraft("Refund update", false, "web_search_test"));
 
         ChatResponse response = runtime(propertiesWithPriority(List.of("rag_retrieval", "web_search", "mcp_tool")))
                 .answer(request("refund"));
 
-        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.toolName()).isEqualTo("planned_task");
         assertThat(response.agentTrace())
                 .anyMatch(step -> "plan_replanned".equals(step.action())
                         && "spring_ai_alibaba_plan".equals(step.phase())
@@ -475,7 +475,7 @@ class SpringAiAlibabaAgentRuntimeTests {
         when(ragRetrievalTool.execute(any(), any(), any()))
                 .thenReturn(AgentToolResult.retrieval("refund policy", List.of(hit())))
                 .thenReturn(AgentToolResult.retrieval("exchange policy", List.of(hit())));
-        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+        when(answerGenerator.generateFromMultiAgent(any(), any(), any(), anyString(), any()))
                 .thenReturn(new AnswerDraft("Policy answer [1]", false, "test_answer"));
 
         ChatResponse response = runtime().answer(request("refund and exchange"));
@@ -521,13 +521,13 @@ class SpringAiAlibabaAgentRuntimeTests {
                 .thenReturn(new AnswerDraft("", true, "empty_llm_draft"));
         when(webSearchTool.search("refund"))
                 .thenReturn(List.of(new WebSearchResult(1, "Refund update", "https://example.com", "Updated policy")));
-        when(answerGenerator.generateFromWebSearch(any(), any(), any(), anyList(), anyString(), any()))
+        when(answerGenerator.generateFromMultiAgent(any(), any(), any(), anyString(), any()))
                 .thenReturn(new AnswerDraft("Refund update", false, "web_search_test"));
 
         ChatResponse response = runtime(propertiesWithPriority(List.of("rag_retrieval", "web_search", "mcp_tool")))
                 .answer(request("refund"));
 
-        assertThat(response.toolName()).isEqualTo("web_search");
+        assertThat(response.toolName()).isEqualTo("planned_task");
         assertThat(response.agentTrace())
                 .anyMatch(step -> "plan_created".equals(step.action())
                         && step.attributes().containsKey("executionPlan"))

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.LinkedHashSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.List;
 import org.springframework.stereotype.Component;
 
 /**
@@ -42,5 +43,31 @@ final class PlanLlmClient {
         } catch (Exception ignored) {
             return Optional.empty();
         }
+    }
+
+    Optional<PlanDelta> suggestPlanDelta(AgentExecutionContext context, Set<String> allowedCapabilities, int maxSteps) {
+        if (!llmGateway.isConfigured() || allowedCapabilities.isEmpty()) return Optional.empty();
+        try {
+            String response = llmGateway.complete(
+                    "Return JSON only: {\"action\":\"ADD_STEPS|SKIP_STEPS|FINISH|CLARIFY\",\"steps\":[{\"id\":\"s1\",\"capability\":\"...\",\"dependsOn\":[],\"completionCondition\":\"...\"}],\"targetStepIds\":[],\"reason\":\"...\"}. "
+                            + "Use only allowed capabilities. Never output tool names, arguments, URLs, secrets, or business data.",
+                    "Task: " + context.request.query() + "\nAllow-list: " + allowedCapabilities + "\nMax steps: " + maxSteps,
+                    0.0, 300
+            );
+            JsonNode root = objectMapper.readTree(response);
+            PlanDelta.Action action = PlanDelta.Action.valueOf(root.path("action").asText("CLARIFY"));
+            List<PlanDelta.Step> steps = new java.util.ArrayList<>();
+            for (JsonNode node : root.path("steps")) {
+                String capability = node.path("capability").asText("").trim();
+                if (!allowedCapabilities.contains(capability)) return Optional.empty();
+                List<String> dependencies = new java.util.ArrayList<>();
+                node.path("dependsOn").forEach(value -> dependencies.add(value.asText("")));
+                steps.add(new PlanDelta.Step(node.path("id").asText(""), capability, dependencies,
+                        node.path("completionCondition").asText("")));
+            }
+            if (steps.size() > maxSteps) return Optional.empty();
+            List<String> targets = new java.util.ArrayList<>(); root.path("targetStepIds").forEach(value -> targets.add(value.asText("")));
+            return Optional.of(new PlanDelta(action, steps, targets, root.path("reason").asText("")));
+        } catch (Exception ignored) { return Optional.empty(); }
     }
 }

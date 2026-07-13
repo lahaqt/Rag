@@ -7,6 +7,7 @@ import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.AgentStageTracer;
 import com.example.ragagent.observability.TraceContextSnapshot;
+import com.example.ragagent.observability.TraceDataSanitizer;
 import io.micrometer.tracing.Span;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,7 +38,12 @@ final class AgentExecutionContext {
     final List<AgentTraceStep> trace = new CopyOnWriteArrayList<>();
     final Map<String, ToolDecision> decisions = new ConcurrentHashMap<>();
     final Map<String, AgentToolResult> results = new ConcurrentHashMap<>();
-    final Map<String, String> currentPlanSteps = new ConcurrentHashMap<>();
+    final Map<String, AgentToolResult> planResults = new ConcurrentHashMap<>();
+    final Map<String, String> planExecutionIds = new ConcurrentHashMap<>();
+    final EvidenceSet evidenceSet = new EvidenceSet();
+    /** Plan state is keyed by stable step id, never by capability. */
+    final Set<String> runningPlanStepIds = ConcurrentHashMap.newKeySet();
+    final Map<String, ToolPlan> pendingPlanTools = new ConcurrentHashMap<>();
     final List<AgentToolResult> observations = new CopyOnWriteArrayList<>();
     final Set<String> executedToolKeys = ConcurrentHashMap.newKeySet();
     volatile ChatRequest analysisRequest;
@@ -47,7 +53,8 @@ final class AgentExecutionContext {
     volatile List<String> capabilityPlan = List.of();
     /** Index of the capability currently being executed; -1 means no capability was selected. */
     volatile int capabilityIndex = -1;
-    volatile int toolAttempts;
+    final AtomicInteger toolAttempts = new AtomicInteger();
+    final int maxToolAttempts;
     volatile AgentToolResult lastToolResult;
     volatile ToolPlan pendingToolPlan;
     volatile ExecutionPlan executionPlan;
@@ -76,7 +83,8 @@ final class AgentExecutionContext {
             AgentTracePersistenceService runPersistenceService,
             AgentStageTracer stageTracer,
             Span parentSpan,
-            long maxExecutionNanos
+            long maxExecutionNanos,
+            int maxToolAttempts
     ) {
         this.runId = runId;
         this.rawRequest = rawRequest;
@@ -87,6 +95,7 @@ final class AgentExecutionContext {
         this.stageTracer = stageTracer;
         this.parentSpan = parentSpan;
         this.maxExecutionNanos = maxExecutionNanos;
+        this.maxToolAttempts = Math.max(1, maxToolAttempts);
     }
 
     int nextStep() {
@@ -94,7 +103,10 @@ final class AgentExecutionContext {
     }
 
     void addTrace(AgentTraceStep traceStep) {
-        AgentTraceStep correlatedStep = traceStep.withAttribute("runId", runId);
+        AgentTraceStep sanitized = new AgentTraceStep(traceStep.step(), traceStep.phase(), traceStep.route(), traceStep.toolName(),
+                traceStep.action(), TraceDataSanitizer.text(traceStep.observation()), traceStep.status(), traceStep.durationMs(),
+                TraceDataSanitizer.text(traceStep.error()), traceStep.traceId(), traceStep.spanId(), TraceDataSanitizer.attributes(traceStep.attributes()));
+        AgentTraceStep correlatedStep = sanitized.withAttribute("runId", runId);
         if (stageTracer != null) {
             TraceContextSnapshot traceContext = stageTracer.current();
             if (traceContext.available()) {
@@ -152,6 +164,67 @@ final class AgentExecutionContext {
         if (key != null && !key.toString().isBlank()) {
             executedToolKeys.add(key.toString());
         }
+    }
+
+    boolean reserveToolAttempt() {
+        while (true) {
+            int current = toolAttempts.get();
+            if (current >= maxToolAttempts || remainingExecutionNanos() <= 0) {
+                return false;
+            }
+            if (toolAttempts.compareAndSet(current, current + 1)) {
+                return true;
+            }
+        }
+    }
+
+    int toolAttempts() {
+        return toolAttempts.get();
+    }
+
+    void schedulePlanStep(String stepId, ToolPlan toolPlan) {
+        if (stepId == null || stepId.isBlank()) {
+            return;
+        }
+        runningPlanStepIds.add(stepId);
+        if (toolPlan != null) {
+            pendingPlanTools.put(stepId, toolPlan);
+        }
+    }
+
+    ToolPlan takePlanTool(String stepId) {
+        if (stepId == null || stepId.isBlank()) return null;
+        return pendingPlanTools.remove(stepId);
+    }
+
+    void recordPlanResult(String stepId, AgentToolResult result) {
+        if (stepId != null && !stepId.isBlank() && result != null) {
+            planResults.put(stepId, result);
+            String executionId = planExecutionIds.computeIfAbsent(stepId, ignored -> "exec-" + java.util.UUID.randomUUID());
+            evidenceSet.add(stepId, executionId, result);
+        }
+    }
+
+    void completePlanStep(String stepId) {
+        if (stepId != null) {
+            runningPlanStepIds.remove(stepId);
+            pendingPlanTools.remove(stepId);
+        }
+    }
+
+    List<AgentToolResult> orderedPlanResults() {
+        if (executionPlan == null) {
+            return List.of();
+        }
+        return executionPlan.steps().stream()
+                .map(step -> evidenceSet.resultForStep(step.stepId))
+                .flatMap(java.util.Optional::stream)
+                .toList();
+    }
+
+    List<AgentToolResult> orderedPlanDiagnostics() {
+        if (executionPlan == null) return List.of();
+        return executionPlan.steps().stream().map(step -> planResults.get(step.stepId)).filter(java.util.Objects::nonNull).toList();
     }
 
     AgentToolResult latestSuccessfulObservation() {

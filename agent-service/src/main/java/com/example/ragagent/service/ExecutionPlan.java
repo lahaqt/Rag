@@ -22,7 +22,7 @@ final class ExecutionPlan {
         this.goal = goal == null ? "" : goal;
         this.createdBy = createdBy == null ? "template" : createdBy;
         this.maxSteps = Math.max(1, maxSteps);
-        this.steps = List.copyOf(steps == null ? List.of() : steps);
+        this.steps = new ArrayList<>(steps == null ? List.of() : steps);
     }
 
     synchronized Optional<PlanStep> nextReady() {
@@ -43,6 +43,27 @@ final class ExecutionPlan {
 
     synchronized Optional<PlanStep> step(String stepId) {
         return steps.stream().filter(step -> step.stepId.equals(stepId)).findFirst();
+    }
+
+    synchronized List<PlanStep> steps() {
+        return List.copyOf(steps);
+    }
+
+    synchronized boolean applyDelta(PlanDelta delta, List<PlanStep> additions) {
+        if (delta == null) return false;
+        if (delta.action() == PlanDelta.Action.FINISH) { finish(ExecutionPlanStatus.FINISHED); return true; }
+        if (delta.action() == PlanDelta.Action.CLARIFY) { finish(ExecutionPlanStatus.CLARIFYING); return true; }
+        if (delta.action() == PlanDelta.Action.SKIP_STEPS) {
+            delta.targetStepIds().forEach(id -> step(id).ifPresent(value -> value.skip("plan_delta_skip")));
+            return true;
+        }
+        if (delta.action() == PlanDelta.Action.ADD_STEPS || delta.action() == PlanDelta.Action.CONTINUE) {
+            if (additions == null || additions.isEmpty() || steps.size() + additions.size() > maxSteps) return false;
+            Set<String> ids = steps.stream().map(step -> step.stepId).collect(java.util.stream.Collectors.toSet());
+            if (additions.stream().anyMatch(step -> !ids.add(step.stepId))) return false;
+            steps.addAll(additions); return true;
+        }
+        return false;
     }
 
     synchronized void finish(ExecutionPlanStatus nextStatus) { status = nextStatus; }

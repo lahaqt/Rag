@@ -28,13 +28,51 @@ final class ExecutionPlanFactory {
                 ? iterativeRetrievalSteps(context, maxSteps)
                 : capabilitySteps(context, maxSteps);
         if (steps.isEmpty() && llmFallbackEnabled && planLlmClient != null) {
-            planLlmClient.suggestCapabilities(context, SUPPORTED).ifPresent(capabilities ->
-                    steps.addAll(capabilitySteps(context, maxSteps, capabilities)));
+            planLlmClient.suggestPlanDelta(context, SUPPORTED, maxSteps)
+                    .filter(delta -> delta.action() == PlanDelta.Action.CONTINUE || delta.action() == PlanDelta.Action.ADD_STEPS)
+                    .filter(this::validDelta)
+                    .ifPresent(delta -> steps.addAll(deltaSteps(context, delta)));
         }
         if (steps.isEmpty()) {
             return Optional.empty();
         }
         return Optional.of(new ExecutionPlan(context.request.query(), "template", maxSteps, steps));
+    }
+
+    private List<PlanStep> deltaSteps(AgentExecutionContext context, PlanDelta delta) {
+        List<PlanStep> steps = new ArrayList<>();
+        int number = 0;
+        for (PlanDelta.Step step : delta.steps()) {
+            String id = step.id() == null || step.id().isBlank() ? "llm-step-" + (++number) : step.id().trim();
+            steps.add(new PlanStep(id, goal(step.capability()), step.capability(), Set.copyOf(step.dependsOn()),
+                    step.completionCondition(), "llm", initialTool(step.capability(), context)));
+        }
+        return steps;
+    }
+
+    private boolean validDelta(PlanDelta delta) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (PlanDelta.Step step : delta.steps()) {
+            if (step.id() == null || step.id().isBlank() || !SUPPORTED.contains(step.capability()) || !ids.add(step.id())) return false;
+        }
+        for (PlanDelta.Step step : delta.steps()) {
+            if (!ids.containsAll(step.dependsOn()) || step.dependsOn().contains(step.id())) return false;
+        }
+        return !hasCycle(delta.steps(), new LinkedHashSet<>(), new LinkedHashSet<>());
+    }
+
+    private boolean hasCycle(List<PlanDelta.Step> steps, Set<String> visiting, Set<String> visited) {
+        java.util.Map<String, PlanDelta.Step> byId = new java.util.LinkedHashMap<>();
+        steps.forEach(step -> byId.put(step.id(), step));
+        for (String id : byId.keySet()) if (cycle(id, byId, visiting, visited)) return true;
+        return false;
+    }
+
+    private boolean cycle(String id, java.util.Map<String, PlanDelta.Step> byId, Set<String> visiting, Set<String> visited) {
+        if (visited.contains(id)) return false;
+        if (!visiting.add(id)) return true;
+        for (String dependency : byId.get(id).dependsOn()) if (cycle(dependency, byId, visiting, visited)) return true;
+        visiting.remove(id); visited.add(id); return false;
     }
 
     boolean eligible(QueryAnalysisResponse analysis) {
