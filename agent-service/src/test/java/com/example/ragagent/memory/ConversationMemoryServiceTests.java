@@ -177,6 +177,10 @@ class ConversationMemoryServiceTests {
                 .containsExactly("question 1", "answer 1");
         assertThat(summarizedSegments.get(1)).extracting(ChatMessage::content)
                 .containsExactly("question 2", "answer 2");
+        MemoryContext context = memoryService.load(request("question 4"));
+        assertThat(context.rawMessageCount()).isEqualTo(6);
+        assertThat(context.recentMessages()).extracting(ChatMessage::content)
+                .containsExactly("question 3", "answer 3");
     }
 
     @Test

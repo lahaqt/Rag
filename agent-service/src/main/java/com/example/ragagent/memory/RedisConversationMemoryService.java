@@ -114,13 +114,8 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         String messagesKey = messagesKey(conversationId);
         String stateKey = stateKey(conversationId);
 
-        List<ChatMessage> existingMessages = readAllMessages(messagesKey);
-        int existingCount = existingMessages.size();
-        List<ChatMessage> newMessages = new ArrayList<>();
-        if (memory.messages().size() > existingCount) {
-            newMessages.addAll(memory.messages().subList(existingCount, memory.messages().size()));
-        }
-        for (ChatMessage message : newMessages) {
+        redisTemplate.delete(messagesKey);
+        for (ChatMessage message : memory.messages()) {
             redisTemplate.opsForList().rightPush(messagesKey, serializeMessage(message));
         }
 
@@ -128,7 +123,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         meta.put("summary", memory.rollingSummary());
         meta.put("summaryVersion", Integer.toString(memory.summaryVersion()));
         meta.put("summarizedMessageCount", Integer.toString(memory.summarizedMessageCount()));
-        meta.put("messageCount", Integer.toString(memory.messages().size()));
+        meta.put("messageCount", Integer.toString(memory.summarizedMessageCount() + memory.messages().size()));
         meta.put("updatedAt", memory.updatedAt().toString());
         redisTemplate.opsForHash().putAll(metaKey, meta);
 

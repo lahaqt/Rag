@@ -115,11 +115,12 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         String rollingSummary = memory.rollingSummary();
         int summaryVersion = memory.summaryVersion();
         int summarizedMessageCount = memory.summarizedMessageCount();
-        int summaryEnd = Math.max(0, messages.size() - config.recentMessages());
-        if (messages.size() >= config.summarizeAfterMessages() && summaryEnd > summarizedMessageCount) {
+        int messagesToCompact = Math.max(0, messages.size() - config.recentMessages());
+        int totalMessageCount = summarizedMessageCount + messages.size();
+        if (totalMessageCount >= config.summarizeAfterMessages() && messagesToCompact > 0) {
             MemorySummary summary = summarizer.summarize(
                     rollingSummary,
-                    messages.subList(summarizedMessageCount, summaryEnd),
+                    messages.subList(0, messagesToCompact),
                     0,
                     config.summaryMaxCharacters()
             );
@@ -127,7 +128,8 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             if (summary.changed()) {
                 summaryVersion++;
             }
-            summarizedMessageCount = summaryEnd;
+            summarizedMessageCount += messagesToCompact;
+            messages = new ArrayList<>(messages.subList(messagesToCompact, messages.size()));
         }
 
         Map<String, String> dialogState = stateExtractor.extract(
@@ -135,7 +137,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 request,
                 analysis,
                 response,
-                messages.size(),
+                summarizedMessageCount + messages.size(),
                 config.stateMaxEntries()
         );
 
@@ -150,7 +152,6 @@ public abstract class AbstractConversationMemoryService implements ConversationM
     }
 
     protected MemoryContext buildContext(String conversationId, StoredMemory stored, ChatRequest request) {
-        int start = Math.max(0, stored.messages().size() - config.recentMessages());
         String userId = normalizeUserId(request);
         List<MemoryItem> semanticMemories = semanticMemoryStore.recall(
                 userId,
@@ -164,12 +165,12 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 : new UserProfile(userId, Map.of(), null);
         return new MemoryContext(
                 conversationId,
-                stored.messages().subList(start, stored.messages().size()),
+                stored.messages(),
                 stored.rollingSummary(),
                 stored.dialogState(),
                 semanticMemories,
                 userProfile,
-                stored.messages().size(),
+                stored.summarizedMessageCount() + stored.messages().size(),
                 stored.summaryVersion()
         );
     }
@@ -283,7 +284,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         public StoredMemory {
             messages = messages == null ? List.of() : List.copyOf(messages);
             rollingSummary = rollingSummary == null ? "" : rollingSummary;
-            summarizedMessageCount = Math.max(0, Math.min(summarizedMessageCount, messages.size()));
+            summarizedMessageCount = Math.max(0, summarizedMessageCount);
             dialogState = dialogState == null ? Map.of() : Map.copyOf(dialogState);
         }
 

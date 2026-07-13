@@ -79,6 +79,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             JOIN chat_conversations c ON c.id = m.conversation_id
             WHERE m.conversation_id = ? AND c.user_id = ?
             ORDER BY m.seq
+            OFFSET ?
             """;
 
     private static final String UPDATE_MEMORY_SQL = """
@@ -166,7 +167,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         if (metaRows.isEmpty()) {
             jdbcTemplate.update(INSERT_MEMORY_SQL, conversationId, config.ttlSeconds());
             return new StoredMemory(
-                    canonicalOrRequestMessages(conversationId, request),
+                    canonicalOrRequestMessages(conversationId, request, 0),
                     "",
                     0,
                     0,
@@ -181,7 +182,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         int summarizedMessageCount = ((Number) metaRow.get("summarized_message_count")).intValue();
         Map<String, String> dialogState = parseDialogState(metaRow.get("dialog_state"));
 
-        List<ChatMessage> allMessages = canonicalOrLegacyMessages(conversationId, request);
+        List<ChatMessage> allMessages = canonicalOrLegacyMessages(conversationId, request, summarizedMessageCount);
 
         return new StoredMemory(allMessages, summary, summaryVersion, summarizedMessageCount, dialogState, Instant.now());
     }
@@ -210,7 +211,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         jdbcTemplate.update(UPDATE_MEMORY_SQL,
                 memory.rollingSummary(),
                 memory.summaryVersion(),
-                memory.messages().size(),
+                memory.summarizedMessageCount() + memory.messages().size(),
                 memory.summarizedMessageCount(),
                 dialogStateJson,
                 config.ttlSeconds(),
@@ -218,17 +219,24 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         );
     }
 
-    private List<ChatMessage> canonicalOrRequestMessages(String storageKey, ChatRequest request) {
-        List<ChatMessage> canonical = readHistoryMessages(request);
+    private List<ChatMessage> canonicalOrRequestMessages(String storageKey, ChatRequest request, int summarizedMessageCount) {
+        List<ChatMessage> canonical = readHistoryMessages(request, summarizedMessageCount);
         return canonical.isEmpty() ? request.normalizedHistory() : canonical;
     }
 
-    private List<ChatMessage> canonicalOrLegacyMessages(String storageKey, ChatRequest request) {
-        List<ChatMessage> canonical = readHistoryMessages(request);
-        return canonical.isEmpty() ? readAllMessages(storageKey) : canonical;
+    private List<ChatMessage> canonicalOrLegacyMessages(
+            String storageKey, ChatRequest request, int summarizedMessageCount
+    ) {
+        List<ChatMessage> canonical = readHistoryMessages(request, summarizedMessageCount);
+        if (!canonical.isEmpty()) {
+            return canonical;
+        }
+        List<ChatMessage> legacy = readAllMessages(storageKey);
+        int start = Math.min(Math.max(0, summarizedMessageCount), legacy.size());
+        return legacy.subList(start, legacy.size());
     }
 
-    private List<ChatMessage> readHistoryMessages(ChatRequest request) {
+    private List<ChatMessage> readHistoryMessages(ChatRequest request, int summarizedMessageCount) {
         String logicalConversationId = request.conversationId();
         if (logicalConversationId == null || logicalConversationId.isBlank()) {
             return List.of();
@@ -239,7 +247,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
                 : request.options().userId().trim();
         try {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(
-                    SELECT_HISTORY_MESSAGES_SQL, logicalConversationId, userId
+                    SELECT_HISTORY_MESSAGES_SQL, logicalConversationId, userId, Math.max(0, summarizedMessageCount)
             );
             List<ChatMessage> messages = new ArrayList<>(rows.size());
             for (Map<String, Object> row : rows) {
