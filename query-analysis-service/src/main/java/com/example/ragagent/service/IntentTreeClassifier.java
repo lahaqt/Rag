@@ -63,7 +63,8 @@ public class IntentTreeClassifier {
         }
 
         if (queryIntent == QueryIntent.TOOL) {
-            String capability = requiresWebSearch(normalizedQuery) ? "web_search" : "mcp_tool";
+            String capability = requiresWebSearch(normalizedQuery) ? "web_search"
+                    : requiresFunctionCall(normalizedQuery) ? "function_call" : "mcp_tool";
             reasons.add("request_type:tool_request");
             reasons.add("execution_mode:single_tool");
             reasons.add("required_capability:" + capability);
@@ -104,6 +105,11 @@ public class IntentTreeClassifier {
                 || lower.contains("latest")
                 || lower.contains("news")
                 || lower.contains("weather");
+    }
+
+    private boolean requiresFunctionCall(String query) {
+        String lower = query.toLowerCase();
+        return lower.contains("function") || lower.contains("local function") || query.contains("本地函数") || query.contains("调用函数");
     }
 
     private String detectSystemCommand(String query) {

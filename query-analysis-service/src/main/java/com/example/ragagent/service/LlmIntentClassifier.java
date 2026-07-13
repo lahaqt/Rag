@@ -22,7 +22,7 @@ public class LlmIntentClassifier {
     private static final Set<String> EXECUTION_MODES = Set.of(
             "DIRECT", "SINGLE_TOOL", "ITERATIVE_TOOL", "PLANNED_TASK"
     );
-    private static final Set<String> CAPABILITIES = Set.of("rag_retrieval", "web_search", "mcp_tool");
+    private static final Set<String> CAPABILITIES = Set.of("rag_retrieval", "web_search", "mcp_tool", "function_call");
     private static final String PROMPT_TEMPLATE = """
             你是 RAG Agent 的意图识别 JSON 分类器。只输出一个 JSON 对象，不要输出 Markdown、解释或代码块。
 
@@ -37,7 +37,7 @@ public class LlmIntentClassifier {
             intent: knowledge | tool | system_command | chitchat | follow_up | clarification
             requestType: USER_QUESTION | TOOL_REQUEST | SYSTEM_COMMAND | CHITCHAT | UNSAFE_OR_UNSUPPORTED
             executionMode: DIRECT | SINGLE_TOOL | ITERATIVE_TOOL | PLANNED_TASK
-            requiredCapabilities: rag_retrieval | web_search | mcp_tool
+            requiredCapabilities: rag_retrieval | web_search | mcp_tool | function_call
             systemCommand: CLEAR_MEMORY | SWITCH_KNOWLEDGE_BASE | CHANGE_TOP_K | ENABLE_RETRIEVAL_DEBUG | EXPORT_CHAT | MANAGE_MCP_SERVER | SYSTEM_COMMAND | ""
 
             输出 JSON schema：
@@ -58,6 +58,7 @@ public class LlmIntentClassifier {
             - 知识库问答使用 intent=knowledge, requestType=USER_QUESTION, requiredCapabilities=["rag_retrieval"]。
             - 联网/实时工具使用 intent=tool, requestType=TOOL_REQUEST, requiredCapabilities=["web_search"]。
             - MCP 工具使用 intent=tool, requestType=TOOL_REQUEST, requiredCapabilities=["mcp_tool"]。
+            - 本地业务 Function 使用 intent=tool, requestType=TOOL_REQUEST, requiredCapabilities=["function_call"]。
             - 系统指令使用 intent=system_command, requestType=SYSTEM_COMMAND, executionMode=DIRECT。
             - 闲聊使用 intent=chitchat, requestType=CHITCHAT, executionMode=DIRECT。
             - 需要澄清时使用 intent=follow_up 或 clarification, executionMode=DIRECT，并给出 clarificationQuestion。
