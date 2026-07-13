@@ -79,7 +79,10 @@ rag:
     read-only-tool-max-attempts: 2
     retry-backoff-millis: 100
     max-execution-seconds: 45
-    max-reflection-retries: 2
+      max-reflection-retries: 2
+      global-plan-enabled: true
+      plan-llm-fallback-enabled: true
+      max-plan-steps: 4
   multi-agent:
     max-concurrency: 4
     timeout-seconds: 12

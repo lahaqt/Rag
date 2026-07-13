@@ -49,7 +49,7 @@ public record RagProperties(
             mcp = new Mcp(false, 8, List.of());
         }
         if (agent == null) {
-            agent = new Agent(4, 2, true, List.of("web_search", "mcp_tool", "rag_retrieval"), 8, 2, 100, 45);
+            agent = new Agent(4, 2, true, List.of("web_search", "mcp_tool", "rag_retrieval"), 8, 2, 100, 45, true, true, 4);
         }
         if (multiAgent == null) {
             multiAgent = new MultiAgent(4, 12, true);
@@ -219,7 +219,10 @@ public record RagProperties(
             Integer toolTimeoutSeconds,
             Integer readOnlyToolMaxAttempts,
             Integer retryBackoffMillis,
-            Integer maxExecutionSeconds
+            Integer maxExecutionSeconds,
+            Boolean globalPlanEnabled,
+            Boolean planLlmFallbackEnabled,
+            Integer maxPlanSteps
     ) {
         public Agent {
             maxIterations = maxIterations == null ? 4 : Math.max(1, Math.min(maxIterations, 8));
@@ -241,6 +244,9 @@ public record RagProperties(
                     : Math.max(1, Math.min(readOnlyToolMaxAttempts, 4));
             retryBackoffMillis = retryBackoffMillis == null ? 100 : Math.max(0, Math.min(retryBackoffMillis, 2000));
             maxExecutionSeconds = maxExecutionSeconds == null ? 45 : Math.max(2, Math.min(maxExecutionSeconds, 300));
+            globalPlanEnabled = globalPlanEnabled == null || globalPlanEnabled;
+            planLlmFallbackEnabled = planLlmFallbackEnabled == null || planLlmFallbackEnabled;
+            maxPlanSteps = maxPlanSteps == null ? maxIterations : Math.max(1, Math.min(maxPlanSteps, maxIterations));
         }
 
         public Agent(
@@ -249,7 +255,21 @@ public record RagProperties(
                 Boolean plannerEnabled,
                 List<String> capabilityPriority
         ) {
-            this(maxIterations, maxReflectionRetries, plannerEnabled, capabilityPriority, 8, 2, 100, 45);
+            this(maxIterations, maxReflectionRetries, plannerEnabled, capabilityPriority, 8, 2, 100, 45, true, true, maxIterations);
+        }
+
+        public Agent(
+                Integer maxIterations,
+                Integer maxReflectionRetries,
+                Boolean plannerEnabled,
+                List<String> capabilityPriority,
+                Integer toolTimeoutSeconds,
+                Integer readOnlyToolMaxAttempts,
+                Integer retryBackoffMillis,
+                Integer maxExecutionSeconds
+        ) {
+            this(maxIterations, maxReflectionRetries, plannerEnabled, capabilityPriority, toolTimeoutSeconds,
+                    readOnlyToolMaxAttempts, retryBackoffMillis, maxExecutionSeconds, true, true, maxIterations);
         }
     }
 

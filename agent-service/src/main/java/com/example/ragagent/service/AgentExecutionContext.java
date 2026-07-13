@@ -37,6 +37,7 @@ final class AgentExecutionContext {
     final List<AgentTraceStep> trace = new CopyOnWriteArrayList<>();
     final Map<String, ToolDecision> decisions = new ConcurrentHashMap<>();
     final Map<String, AgentToolResult> results = new ConcurrentHashMap<>();
+    final Map<String, String> currentPlanSteps = new ConcurrentHashMap<>();
     final List<AgentToolResult> observations = new CopyOnWriteArrayList<>();
     final Set<String> executedToolKeys = ConcurrentHashMap.newKeySet();
     volatile ChatRequest analysisRequest;
@@ -49,6 +50,11 @@ final class AgentExecutionContext {
     volatile int toolAttempts;
     volatile AgentToolResult lastToolResult;
     volatile ToolPlan pendingToolPlan;
+    volatile ExecutionPlan executionPlan;
+    volatile String currentPlanStepId = "";
+    volatile ReplanDecision planDecision;
+    volatile String plannedClarificationQuestion = "";
+    volatile String plannedFinishReason = "";
     volatile ToolDecision decision = ToolDecision.none();
     volatile AgentToolResult toolResult;
     volatile AnswerDraft draft;

@@ -71,10 +71,14 @@ public class SpringAiAlibabaAgentRuntime {
     private final AgentTracePersistenceService tracePersistenceService;
     private final AgentStageTracer stageTracer;
     private final DynamicToolPlanner dynamicToolPlanner;
+    private final ExecutionPlanFactory executionPlanFactory;
+    private final ExecutionPlanReplanner executionPlanReplanner;
     private final TraceContextProvider traceContextProvider;
     private final int maxToolIterations;
     private final int maxReflectionRetries;
     private final boolean plannerEnabled;
+    private final boolean globalPlanEnabled;
+    private final int maxPlanSteps;
     private final long maxExecutionNanos;
     private final long multiAgentMaxExecutionNanos;
     private final List<String> singleCapabilityPriority;
@@ -89,6 +93,7 @@ public class SpringAiAlibabaAgentRuntime {
             WebSearchTool webSearchTool,
             McpToolGateway mcpToolGateway,
             FunctionToolRegistry functionToolRegistry,
+            PlanLlmClient planLlmClient,
             AnswerGenerator answerGenerator,
             ReflectionCritic reflectionCritic,
             ConversationMemoryService conversationMemoryService,
@@ -115,6 +120,9 @@ public class SpringAiAlibabaAgentRuntime {
         this.tracePersistenceService = tracePersistenceService;
         this.stageTracer = stageTracer;
         this.dynamicToolPlanner = new DynamicToolPlanner(mcpToolGateway, functionToolRegistry);
+        this.executionPlanFactory = new ExecutionPlanFactory(planLlmClient,
+                properties == null || properties.agent() == null || properties.agent().planLlmFallbackEnabled());
+        this.executionPlanReplanner = new ExecutionPlanReplanner(mcpToolGateway, functionToolRegistry);
         this.traceContextProvider = traceContextProvider;
         this.responseFinalizer = new AgentResponseFinalizer(
                 conversationMemoryService,
@@ -130,6 +138,8 @@ public class SpringAiAlibabaAgentRuntime {
                 : properties.agent().maxReflectionRetries();
         this.plannerEnabled = properties == null || properties.agent() == null
                 || properties.agent().plannerEnabled();
+        this.globalPlanEnabled = properties == null || properties.agent() == null || properties.agent().globalPlanEnabled();
+        this.maxPlanSteps = properties == null || properties.agent() == null ? maxToolIterations : properties.agent().maxPlanSteps();
         int maxExecutionSeconds = properties == null || properties.agent() == null
                 ? 45
                 : properties.agent().maxExecutionSeconds();
@@ -150,6 +160,7 @@ public class SpringAiAlibabaAgentRuntime {
                         this::prepareContext,
                         this::analyze,
                         this::route,
+                        this::createPlan,
                         this::executeOrdinaryCapability,
                         this::replanOrdinaryCapability,
                         this::executeKnowledge,
@@ -533,12 +544,40 @@ public class SpringAiAlibabaAgentRuntime {
         });
     }
 
+    private Map<String, Object> createPlan(OverAllState state) {
+        AgentExecutionContext context = context(state);
+        return context.inStage("plan_creation", () -> {
+            if (!globalPlanEnabled || !plannerEnabled) {
+                return stateUpdate(context);
+            }
+            executionPlanFactory.create(context, Math.min(maxPlanSteps, maxToolIterations)).ifPresent(plan -> {
+                context.executionPlan = plan;
+                ReplanDecision decision = executionPlanReplanner.initial(context, Math.min(maxPlanSteps, maxToolIterations));
+                context.addTrace(planTrace(context, "plan_created", decision, "ok"));
+                applyPlanDecision(context, decision);
+                if (context.multiAgent && decision.type() == ReplanDecision.Type.CONTINUE) {
+                    dispatchAdditionalReadyPlanSteps(context);
+                }
+            });
+            return stateUpdate(context);
+        });
+    }
+
     private Map<String, Object> replanOrdinaryCapability(OverAllState state) {
         AgentExecutionContext context = context(state);
         return context.inStage("capability_planning", () -> replanOrdinaryCapability(context));
     }
 
     private Map<String, Object> replanOrdinaryCapability(AgentExecutionContext context) {
+        if (context.executionPlan != null) {
+            ReplanDecision decision = executionPlanReplanner.afterObservation(
+                    context, context.lastToolResult, Math.min(maxPlanSteps, maxToolIterations)
+            );
+            context.currentPlanSteps.clear();
+            applyPlanDecision(context, decision);
+            context.addTrace(planTrace(context, "plan_replanned", decision, "ok"));
+            return stateUpdate(context);
+        }
         AgentToolResult result = context.lastToolResult;
         boolean needsAnotherCapability = needsAnotherCapability(result);
         ToolPlan nextPlan = plannerEnabled && context.toolAttempts < maxToolIterations
@@ -630,6 +669,18 @@ public class SpringAiAlibabaAgentRuntime {
     private Map<String, Object> replanMultiAgent(OverAllState state) {
         AgentExecutionContext context = context(state);
         return context.inStage("multi_agent_planning", () -> {
+            if (context.executionPlan != null) {
+                completeParallelPlanSteps(context);
+                ReplanDecision decision = executionPlanReplanner.afterObservation(
+                        context, null, Math.min(maxPlanSteps, maxToolIterations)
+                );
+                applyPlanDecision(context, decision);
+                if (decision.type() == ReplanDecision.Type.CONTINUE) {
+                    dispatchAdditionalReadyPlanSteps(context);
+                }
+                context.addTrace(planTrace(context, "plan_replanned", decision, "ok"));
+                return stateUpdate(context);
+            }
             int attempts = context.observations.size();
             ToolPlan nextPlan = plannerEnabled && attempts < maxToolIterations
                     ? dynamicToolPlanner.next(context).orElse(null)
@@ -661,6 +712,77 @@ public class SpringAiAlibabaAgentRuntime {
         });
     }
 
+    private void applyPlanDecision(AgentExecutionContext context, ReplanDecision decision) {
+        context.planDecision = decision;
+        context.replanCapability = decision.type() == ReplanDecision.Type.CONTINUE;
+        context.plannedClarificationQuestion = decision.type() == ReplanDecision.Type.CLARIFY
+                ? decision.clarificationQuestion() : "";
+        context.plannedFinishReason = decision.reason();
+        if (!context.replanCapability) {
+            context.pendingToolPlan = null;
+            context.capabilities = Set.of();
+            String action = decision.type() == ReplanDecision.Type.CLARIFY
+                    ? "plan_clarification_required" : "plan_finished";
+            context.addTrace(planTrace(context, action, decision, "ok"));
+            return;
+        }
+        String capability = decision.toolPlan() == null
+                ? context.executionPlan.step(decision.stepId()).map(step -> step.capability).orElse("")
+                : decision.toolPlan().capability();
+        context.currentPlanStepId = decision.stepId();
+        context.currentPlanSteps.put(capability, decision.stepId());
+        context.capabilities = capability.isBlank() ? Set.of() : Set.of(capability);
+        context.pendingToolPlan = decision.toolPlan();
+        context.addTrace(planTrace(context, "plan_step_started", decision, "ok"));
+    }
+
+    private void dispatchAdditionalReadyPlanSteps(AgentExecutionContext context) {
+        if (context.executionPlan == null) return;
+        LinkedHashSet<String> capabilities = new LinkedHashSet<>(context.capabilities);
+        for (PlanStep step : context.executionPlan.readySteps()) {
+            if (capabilities.contains(step.capability)) continue;
+            if ("mcp_tool".equals(step.capability) || "function_call".equals(step.capability)) continue;
+            ToolPlan tool = step.plannedTool;
+            step.markRunning(tool);
+            context.currentPlanSteps.put(step.capability, step.stepId);
+            capabilities.add(step.capability);
+        }
+        context.capabilities = Set.copyOf(capabilities);
+    }
+
+    private void completeParallelPlanSteps(AgentExecutionContext context) {
+        if (context.executionPlan == null) return;
+        for (Map.Entry<String, String> entry : new ArrayList<>(context.currentPlanSteps.entrySet())) {
+            AgentToolResult result = context.results.get(entry.getKey());
+            if (result != null) {
+                context.executionPlan.step(entry.getValue()).ifPresent(step -> step.complete(result.success(), result.finishReason()));
+                context.currentPlanSteps.remove(entry.getKey());
+            }
+        }
+        context.currentPlanStepId = "";
+    }
+
+    private AgentTraceStep planTrace(
+            AgentExecutionContext context,
+            String action,
+            ReplanDecision decision,
+            String status
+    ) {
+        String observation = "decision=" + decision.type()
+                + "; reason=" + decision.reason()
+                + (decision.stepId().isBlank() ? "" : "; stepId=" + decision.stepId())
+                + (decision.toolPlan() == null ? "" : "; nextTool=" + decision.toolPlan().toolKey());
+        AgentTraceStep trace = AgentTraceStep.timed(
+                context.nextStep(), "spring_ai_alibaba_plan", context.analysis.route(),
+                decision.toolPlan() == null ? "" : decision.toolPlan().capability(), action,
+                observation, status, 0
+        );
+        if (context.executionPlan != null) {
+            trace = trace.withAttribute("executionPlan", context.executionPlan.snapshot());
+        }
+        return trace.withAttribute("replanDecision", decision.type().name());
+    }
+
     private void runWebSearch(AgentExecutionContext context) {
         context.inStage("web_search", () -> {
             capabilityExecutor.runWebSearch(context);
@@ -679,11 +801,24 @@ public class SpringAiAlibabaAgentRuntime {
         AgentExecutionContext context = context(state);
         return context.inStage("answer_generation", () -> {
             long started = System.nanoTime();
+            if (!context.plannedClarificationQuestion.isBlank()) {
+                context.draft = new AnswerDraft(context.plannedClarificationQuestion, false, "plan_clarification_required");
+                context.retry = false;
+                context.reflectionReplan = false;
+                context.addTrace(planTrace(context, "plan_clarification_required", context.planDecision, "ok"));
+                return stateUpdate(context);
+            }
             CombinedExecution execution = combine(context);
             context.decision = execution.decision();
             context.toolResult = execution.result();
             context.draft = java.util.Optional.ofNullable(generateDraft(context, execution.decision(), execution.result()))
                     .orElseGet(() -> new AnswerDraft("Agent answer generation returned no draft.", false, "empty_answer_draft"));
+            if (context.planDecision != null && context.planDecision.type() == ReplanDecision.Type.PARTIAL_FINISH) {
+                context.draft = new AnswerDraft(
+                        "已完成可验证的部分步骤；以下结果可能不完整：\n" + context.draft.answer(),
+                        context.draft.llmUsed(), "plan_partial_" + context.draft.finishReason()
+                );
+            }
             context.retry = false;
             context.reflectionReplan = false;
             context.addTrace(AgentTraceStep.timed(
@@ -781,7 +916,7 @@ public class SpringAiAlibabaAgentRuntime {
         context.retry = !reflection.passed() && context.reflectionAttempts < maxReflectionRetries;
         context.reflectionReplan = false;
         String nextCapability = "";
-        if (plannerEnabled && context.retry && context.toolAttempts < maxToolIterations) {
+        if (context.executionPlan == null && plannerEnabled && context.retry && context.toolAttempts < maxToolIterations) {
             nextCapability = context.advanceCapability();
             if (!nextCapability.isBlank()) {
                 context.capabilities = Set.of(nextCapability);

@@ -1,6 +1,7 @@
 package com.example.ragagent.observability;
 
 import java.time.Instant;
+import java.util.Map;
 
 public record AgentRunStepRecord(
         String runId,
@@ -12,6 +13,7 @@ public record AgentRunStepRecord(
         String observation,
         String error,
         long durationMs,
+        Map<String, Object> attributes,
         Instant createdAt
 ) {
 }

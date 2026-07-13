@@ -431,8 +431,8 @@ class SpringAiAlibabaAgentRuntimeTests {
 
         assertThat(response.toolName()).isEqualTo("web_search");
         assertThat(response.agentTrace())
-                .anyMatch(step -> "next_capability".equals(step.action())
-                        && "spring_ai_alibaba_planner".equals(step.phase())
+                .anyMatch(step -> "plan_replanned".equals(step.action())
+                        && "spring_ai_alibaba_plan".equals(step.phase())
                         && step.observation().contains("nextTool=web_search"));
         verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
         verify(webSearchTool).search("refund");
@@ -459,6 +459,31 @@ class SpringAiAlibabaAgentRuntimeTests {
                 .noneMatch(step -> "next_capability".equals(step.action()));
         verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
         verifyNoInteractions(webSearchTool);
+    }
+
+    @Test
+    void iterativeToolPlanExecutesEveryRetrievalSubQuestionAndEmitsPlanTrace() {
+        QueryAnalysisResponse analysis = new QueryAnalysisResponse(
+                "conversation-1", "kb-1", "refund and exchange", "refund and exchange", "refund and exchange",
+                "knowledge", 0.91, "knowledge_retrieval", true, true, 0,
+                List.of("refund policy", "exchange policy"), "USER_QUESTION", "ITERATIVE_TOOL",
+                List.of("rag_retrieval"), "", Map.of(), "", List.of("multi_intent_decomposed")
+        );
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.retrieval("refund policy", List.of(hit())))
+                .thenReturn(AgentToolResult.retrieval("exchange policy", List.of(hit())));
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Policy answer [1]", false, "test_answer"));
+
+        ChatResponse response = runtime().answer(request("refund and exchange"));
+
+        assertThat(response.answer()).isEqualTo("Policy answer [1]");
+        assertThat(response.agentTrace()).anyMatch(step -> "plan_created".equals(step.action()))
+                .anyMatch(step -> "plan_finished".equals(step.action()));
+        verify(ragRetrievalTool, times(2)).execute(any(), any(), any());
     }
 
     @Test
@@ -504,8 +529,10 @@ class SpringAiAlibabaAgentRuntimeTests {
 
         assertThat(response.toolName()).isEqualTo("web_search");
         assertThat(response.agentTrace())
-                .anyMatch(step -> "replan_capability".equals(step.action())
-                        && "spring_ai_alibaba_reflection".equals(step.phase()));
+                .anyMatch(step -> "plan_created".equals(step.action())
+                        && step.attributes().containsKey("executionPlan"))
+                .anyMatch(step -> "plan_step_started".equals(step.action())
+                        && "web_search".equals(step.toolName()));
         verify(webSearchTool).search("refund");
     }
 
@@ -655,6 +682,7 @@ class SpringAiAlibabaAgentRuntimeTests {
                 webSearchTool,
                 mcpToolGateway,
                 new FunctionToolRegistry(List.of()),
+                new PlanLlmClient(mock(LlmGateway.class), new ObjectMapper()),
                 answerGenerator,
                 new ReflectionCritic(),
                 new NoopConversationMemoryService(),

@@ -23,6 +23,7 @@ final class AgentGraphFactory {
     private static final String NODE_PREPARE = "prepare_context";
     private static final String NODE_ANALYZE = "query_analysis";
     private static final String NODE_ROUTE = "route_capabilities";
+    private static final String NODE_CREATE_PLAN = "create_plan";
     private static final String NODE_EXECUTE = "execute_capability";
     private static final String NODE_REPLAN = "replan_capability";
     private static final String NODE_KNOWLEDGE = "knowledge_agent";
@@ -67,6 +68,7 @@ final class AgentGraphFactory {
             graph.addNode(NODE_PREPARE, AsyncNodeAction.node_async(nodes.prepare()));
             graph.addNode(NODE_ANALYZE, AsyncNodeAction.node_async(nodes.analyze()));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(nodes.route()));
+            graph.addNode(NODE_CREATE_PLAN, AsyncNodeAction.node_async(nodes.createPlan()));
             graph.addNode(NODE_EXECUTE, AsyncNodeAction.node_async(nodes.executeOrdinary()));
             graph.addNode(NODE_REPLAN, AsyncNodeAction.node_async(nodes.replanOrdinary()));
             graph.addNode(NODE_GENERATE, AsyncNodeAction.node_async(nodes.generate()));
@@ -75,7 +77,8 @@ final class AgentGraphFactory {
             graph.addEdge(StateGraph.START, NODE_PREPARE);
             graph.addEdge(NODE_PREPARE, NODE_ANALYZE);
             graph.addEdge(NODE_ANALYZE, NODE_ROUTE);
-            graph.addEdge(NODE_ROUTE, NODE_EXECUTE);
+            graph.addEdge(NODE_ROUTE, NODE_CREATE_PLAN);
+            graph.addEdge(NODE_CREATE_PLAN, NODE_EXECUTE);
             graph.addEdge(NODE_EXECUTE, NODE_REPLAN);
             graph.addConditionalEdges(
                     NODE_REPLAN,
@@ -101,6 +104,7 @@ final class AgentGraphFactory {
             graph.addNode(NODE_PREPARE, AsyncNodeAction.node_async(nodes.prepare()));
             graph.addNode(NODE_ANALYZE, AsyncNodeAction.node_async(nodes.analyze()));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(nodes.route()));
+            graph.addNode(NODE_CREATE_PLAN, AsyncNodeAction.node_async(nodes.createPlan()));
             graph.addNode(NODE_KNOWLEDGE, AsyncNodeAction.node_async(nodes.executeKnowledge()));
             graph.addNode(NODE_WEB, AsyncNodeAction.node_async(nodes.executeWebSearch()));
             graph.addNode(NODE_MCP, AsyncNodeAction.node_async(nodes.executeMcp()));
@@ -115,8 +119,9 @@ final class AgentGraphFactory {
             graph.addEdge(StateGraph.START, NODE_PREPARE);
             graph.addEdge(NODE_PREPARE, NODE_ANALYZE);
             graph.addEdge(NODE_ANALYZE, NODE_ROUTE);
+            graph.addEdge(NODE_ROUTE, NODE_CREATE_PLAN);
             graph.addConditionalEdges(
-                    NODE_ROUTE,
+                    NODE_CREATE_PLAN,
                     AsyncEdgeAction.edge_async(edges.multiAgentDispatch()),
                     Map.of(
                             EDGE_DIRECT, NODE_GENERATE,
@@ -175,6 +180,7 @@ final class AgentGraphFactory {
             NodeAction prepare,
             NodeAction analyze,
             NodeAction route,
+            NodeAction createPlan,
             NodeAction executeOrdinary,
             NodeAction replanOrdinary,
             NodeAction executeKnowledge,

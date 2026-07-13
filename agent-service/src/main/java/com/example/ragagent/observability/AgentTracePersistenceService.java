@@ -20,6 +20,8 @@ public class AgentTracePersistenceService {
     private static final Logger log = LoggerFactory.getLogger(AgentTracePersistenceService.class);
     private static final TypeReference<List<AgentTraceStep>> TRACE_STEPS_TYPE = new TypeReference<>() {
     };
+    private static final TypeReference<java.util.Map<String, Object>> ATTRIBUTES_TYPE = new TypeReference<>() {
+    };
 
     private static final String CREATE_TABLE_SQL = """
             CREATE TABLE IF NOT EXISTS agent_trace_records (
@@ -71,9 +73,14 @@ public class AgentTracePersistenceService {
                 observation       TEXT NOT NULL DEFAULT '',
                 error             TEXT NOT NULL DEFAULT '',
                 duration_ms       BIGINT NOT NULL DEFAULT -1,
+                attributes_json   TEXT NOT NULL DEFAULT '{}',
                 created_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
                 PRIMARY KEY (run_id, step_number)
             )
+            """;
+
+    private static final String ADD_RUN_STEP_ATTRIBUTES_SQL = """
+            ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS attributes_json TEXT NOT NULL DEFAULT '{}'
             """;
 
     private static final String CREATE_CONVERSATION_INDEX_SQL = """
@@ -135,10 +142,11 @@ public class AgentTracePersistenceService {
                 """
                         INSERT INTO agent_run_steps (
                             run_id, step_number, phase, action, tool_name, status, observation, error, duration_ms
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            , attributes_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                 runId, step.step(), step.phase(), step.action(), step.toolName(), step.status(),
-                step.observation(), step.error(), step.durationMs()
+                step.observation(), step.error(), step.durationMs(), serializeAttributes(step.attributes())
         ), "step", runId);
     }
 
@@ -212,6 +220,7 @@ public class AgentTracePersistenceService {
             jdbcTemplate.execute(CREATE_TABLE_SQL);
             jdbcTemplate.execute(CREATE_RUN_TABLE_SQL);
             jdbcTemplate.execute(CREATE_RUN_STEP_TABLE_SQL);
+            jdbcTemplate.execute(ADD_RUN_STEP_ATTRIBUTES_SQL);
             jdbcTemplate.execute(CREATE_TRACE_INDEX_SQL);
             jdbcTemplate.execute(CREATE_CONVERSATION_INDEX_SQL);
             int recovered = jdbcTemplate.update(
@@ -276,8 +285,25 @@ public class AgentTracePersistenceService {
         return new AgentRunStepRecord(
                 rs.getString("run_id"), rs.getInt("step_number"), rs.getString("phase"), rs.getString("action"),
                 rs.getString("tool_name"), rs.getString("status"), rs.getString("observation"), rs.getString("error"),
-                rs.getLong("duration_ms"), instant(rs, "created_at")
+                rs.getLong("duration_ms"), parseAttributes(rs.getString("attributes_json")), instant(rs, "created_at")
         );
+    }
+
+    private String serializeAttributes(java.util.Map<String, Object> attributes) {
+        try {
+            return objectMapper.writeValueAsString(attributes == null ? java.util.Map.of() : attributes);
+        } catch (JsonProcessingException exception) {
+            return "{}";
+        }
+    }
+
+    private java.util.Map<String, Object> parseAttributes(String json) {
+        if (json == null || json.isBlank()) return java.util.Map.of();
+        try {
+            return objectMapper.readValue(json, ATTRIBUTES_TYPE);
+        } catch (JsonProcessingException exception) {
+            return java.util.Map.of();
+        }
     }
 
     private Instant instant(ResultSet rs, String column) throws SQLException {
