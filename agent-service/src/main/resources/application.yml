@@ -62,7 +62,11 @@ rag:
       instruction: 根据用户问题重排文档，优先选择可直接、准确回答问题的内容。
       timeout-seconds: 8
   prompt:
-    max-context-characters: 8000
+    context-window-tokens: 200000
+    reserved-output-tokens: 2400
+    safety-margin-tokens: 8000
+    max-attachment-tokens: 32000
+    max-history-tokens: 48000
   tools:
     web-search:
       provider: bing
@@ -79,10 +83,10 @@ rag:
     read-only-tool-max-attempts: 2
     retry-backoff-millis: 100
     max-execution-seconds: 45
-      max-reflection-retries: 2
-      global-plan-enabled: true
-      plan-llm-fallback-enabled: true
-      max-plan-steps: 4
+    max-reflection-retries: 2
+    global-plan-enabled: true
+    plan-llm-fallback-enabled: true
+    max-plan-steps: 4
   multi-agent:
     max-concurrency: 4
     timeout-seconds: 12
@@ -91,10 +95,10 @@ rag:
     provider: postgres
     enabled: true
     ttl-seconds: 86400
-    recent-messages: 8
-    summarize-after-messages: 12
-    summary-max-characters: 1600
-    summary-mode: window
+    context-window-tokens: 200000
+    recent-token-budget: 32000
+    summary-max-tokens: 4000
+    summary-mode: llm
     semantic-memory-max-items: 4
     profile-enabled: true
     state-max-entries: 16

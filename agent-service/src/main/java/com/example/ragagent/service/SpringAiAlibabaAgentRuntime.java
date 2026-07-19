@@ -19,6 +19,8 @@ import com.example.ragagent.dto.WebSearchResult;
 import com.example.ragagent.history.ConversationHistoryService;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.MemoryContext;
+import com.example.ragagent.memory.MemoryRecallDecision;
+import com.example.ragagent.memory.MemoryRecallPolicy;
 import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.AgentStageTracer;
 import com.example.ragagent.observability.TraceContextProvider;
@@ -70,6 +72,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final AnswerGenerator answerGenerator;
     private final ReflectionCritic reflectionCritic;
     private final ConversationMemoryService conversationMemoryService;
+    private final MemoryRecallPolicy memoryRecallPolicy;
     private final AgentTracePersistenceService tracePersistenceService;
     private final AgentStageTracer stageTracer;
     private final ExecutionPlanFactory executionPlanFactory;
@@ -99,6 +102,7 @@ public class SpringAiAlibabaAgentRuntime {
             AnswerGenerator answerGenerator,
             ReflectionCritic reflectionCritic,
             ConversationMemoryService conversationMemoryService,
+            MemoryRecallPolicy memoryRecallPolicy,
             ConversationHistoryService conversationHistoryService,
             TraceContextProvider traceContextProvider,
             AgentStageTracer stageTracer,
@@ -119,6 +123,7 @@ public class SpringAiAlibabaAgentRuntime {
         this.answerGenerator = answerGenerator;
         this.reflectionCritic = reflectionCritic;
         this.conversationMemoryService = conversationMemoryService;
+        this.memoryRecallPolicy = memoryRecallPolicy;
         this.tracePersistenceService = tracePersistenceService;
         this.stageTracer = stageTracer;
         this.executionPlanFactory = new ExecutionPlanFactory(planLlmClient,
@@ -160,6 +165,7 @@ public class SpringAiAlibabaAgentRuntime {
                 new AgentGraphFactory.Nodes(
                         this::prepareContext,
                         this::analyze,
+                        this::recallLongTermMemory,
                         this::route,
                         this::createPlan,
                         this::executeOrdinaryCapability,
@@ -361,7 +367,8 @@ public class SpringAiAlibabaAgentRuntime {
         AgentExecutionContext context = context(state);
         return context.inStage("context_preparation", () -> {
             long started = System.nanoTime();
-            MemoryContext memory = conversationMemoryService.load(context.rawRequest);
+            MemoryContext memory = conversationMemoryService.loadWorkingContext(context.rawRequest);
+            context.memoryContext = memory;
             context.analysisRequest = withHistory(
                     context.rawRequest,
                     memory.conversationId(),
@@ -414,6 +421,69 @@ public class SpringAiAlibabaAgentRuntime {
                     "intent=" + context.analysis.intent()
                             + "; requestType=" + context.analysis.requestType()
                             + "; executionMode=" + context.analysis.executionMode(),
+                    status,
+                    durationMs(started),
+                    error,
+                    "",
+                    "",
+                    Map.of("graph", context.multiAgent ? multiAgentGraphName() : ordinaryGraphName())
+            ));
+            return stateUpdate(context);
+        });
+    }
+
+    private Map<String, Object> recallLongTermMemory(OverAllState state) {
+        AgentExecutionContext context = context(state);
+        return context.inStage("long_term_memory_recall", () -> {
+            long started = System.nanoTime();
+            String status = "skipped";
+            String error = "";
+            String reason = "policy_unavailable";
+            int recalledItems = 0;
+            try {
+                MemoryRecallDecision decision = memoryRecallPolicy == null
+                        ? MemoryRecallDecision.skip("policy_unavailable")
+                        : memoryRecallPolicy.decide(context.rawRequest, context.analysis);
+                if (decision == null) {
+                    decision = MemoryRecallDecision.skip("empty_policy_decision");
+                }
+                reason = decision.reason();
+                if (decision.shouldRecall()) {
+                    MemoryContext enriched = conversationMemoryService.recallLongTerm(
+                            context.rawRequest,
+                            context.memoryContext,
+                            decision.query()
+                    );
+                    if (enriched != null) {
+                        context.memoryContext = enriched;
+                    }
+                    recalledItems = context.memoryContext == null
+                            ? 0
+                            : context.memoryContext.semanticMemories().size();
+                    status = "ok";
+                }
+            } catch (Exception exception) {
+                status = "fallback";
+                error = safe(exception.getMessage());
+                reason = "recall_failed";
+                log.warn("Long-term memory recall failed, continuing with working memory. message={}",
+                        exception.getMessage());
+            }
+
+            if (context.memoryContext != null) {
+                context.request = withHistory(
+                        context.rawRequest,
+                        context.memoryContext.conversationId(),
+                        context.memoryContext.promptMemory().messages()
+                );
+            }
+            context.addTrace(new AgentTraceStep(
+                    context.nextStep(),
+                    "memory",
+                    context.analysis == null ? "" : context.analysis.route(),
+                    "",
+                    "recall_long_term_memory",
+                    "decision=" + status + "; reason=" + reason + "; recalledItems=" + recalledItems,
                     status,
                     durationMs(started),
                     error,

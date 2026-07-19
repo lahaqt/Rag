@@ -22,6 +22,7 @@ import java.util.Map;
 final class AgentGraphFactory {
     private static final String NODE_PREPARE = "prepare_context";
     private static final String NODE_ANALYZE = "query_analysis";
+    private static final String NODE_RECALL_MEMORY = "recall_long_term_memory";
     private static final String NODE_ROUTE = "route_capabilities";
     private static final String NODE_CREATE_PLAN = "create_plan";
     private static final String NODE_EXECUTE = "execute_capability";
@@ -57,6 +58,7 @@ final class AgentGraphFactory {
             StateGraph graph = graph("rag-agent");
             graph.addNode(NODE_PREPARE, AsyncNodeAction.node_async(nodes.prepare()));
             graph.addNode(NODE_ANALYZE, AsyncNodeAction.node_async(nodes.analyze()));
+            graph.addNode(NODE_RECALL_MEMORY, AsyncNodeAction.node_async(nodes.recallLongTermMemory()));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(nodes.route()));
             graph.addNode(NODE_CREATE_PLAN, AsyncNodeAction.node_async(nodes.createPlan()));
             graph.addNode(NODE_EXECUTE, AsyncNodeAction.node_async(nodes.executeOrdinary()));
@@ -68,7 +70,8 @@ final class AgentGraphFactory {
             graph.addNode(NODE_FINALIZE, AsyncNodeAction.node_async(nodes.finalizeResponse()));
             graph.addEdge(StateGraph.START, NODE_PREPARE);
             graph.addEdge(NODE_PREPARE, NODE_ANALYZE);
-            graph.addEdge(NODE_ANALYZE, NODE_ROUTE);
+            graph.addEdge(NODE_ANALYZE, NODE_RECALL_MEMORY);
+            graph.addEdge(NODE_RECALL_MEMORY, NODE_ROUTE);
             graph.addEdge(NODE_ROUTE, NODE_CREATE_PLAN);
             graph.addEdge(NODE_CREATE_PLAN, NODE_EXECUTE);
             graph.addEdge(NODE_EXECUTE, NODE_REPLAN);
@@ -95,6 +98,7 @@ final class AgentGraphFactory {
             StateGraph graph = graph("rag-multi-agent");
             graph.addNode(NODE_PREPARE, AsyncNodeAction.node_async(nodes.prepare()));
             graph.addNode(NODE_ANALYZE, AsyncNodeAction.node_async(nodes.analyze()));
+            graph.addNode(NODE_RECALL_MEMORY, AsyncNodeAction.node_async(nodes.recallLongTermMemory()));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(nodes.route()));
             graph.addNode(NODE_CREATE_PLAN, AsyncNodeAction.node_async(nodes.createPlan()));
             graph.addNode(NODE_EXECUTE_PLAN, AsyncNodeAction.node_async(nodes.executePlanSteps()));
@@ -105,7 +109,8 @@ final class AgentGraphFactory {
             graph.addNode(NODE_FINALIZE, AsyncNodeAction.node_async(nodes.finalizeResponse()));
             graph.addEdge(StateGraph.START, NODE_PREPARE);
             graph.addEdge(NODE_PREPARE, NODE_ANALYZE);
-            graph.addEdge(NODE_ANALYZE, NODE_ROUTE);
+            graph.addEdge(NODE_ANALYZE, NODE_RECALL_MEMORY);
+            graph.addEdge(NODE_RECALL_MEMORY, NODE_ROUTE);
             graph.addEdge(NODE_ROUTE, NODE_CREATE_PLAN);
             graph.addConditionalEdges(
                     NODE_CREATE_PLAN,
@@ -150,6 +155,7 @@ final class AgentGraphFactory {
     record Nodes(
             NodeAction prepare,
             NodeAction analyze,
+            NodeAction recallLongTermMemory,
             NodeAction route,
             NodeAction createPlan,
             NodeAction executeOrdinary,

@@ -58,13 +58,42 @@ public abstract class AbstractConversationMemoryService implements ConversationM
 
     @Override
     public final MemoryContext load(ChatRequest request) {
+        MemoryContext workingContext = loadWorkingContext(request);
+        return recallLongTerm(request, workingContext, request.query());
+    }
+
+    @Override
+    public final MemoryContext loadWorkingContext(ChatRequest request) {
         if (!config.enabled()) {
             return noOpContext(request);
         }
         String conversationId = normalizeConversationId(request);
         String storageKey = memoryStorageKey(request, conversationId);
         StoredMemory stored = loadStored(storageKey, request);
-        return buildContext(conversationId, stored, request);
+        return buildWorkingContext(conversationId, stored, request);
+    }
+
+    @Override
+    public final MemoryContext recallLongTerm(
+            ChatRequest request,
+            MemoryContext workingContext,
+            String recallQuery
+    ) {
+        if (!config.enabled() || workingContext == null || config.semanticMemoryMaxItems() <= 0) {
+            return workingContext;
+        }
+        String normalizedQuery = normalize(recallQuery);
+        if (normalizedQuery.isBlank()) {
+            return workingContext;
+        }
+        List<MemoryItem> semanticMemories = semanticMemoryStore.recall(
+                normalizeUserId(request),
+                workingContext.conversationId(),
+                request.knowledgeBaseId(),
+                normalizedQuery,
+                config.semanticMemoryMaxItems()
+        );
+        return workingContext.withSemanticMemories(semanticMemories);
     }
 
     @Override
@@ -115,14 +144,12 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         String rollingSummary = memory.rollingSummary();
         int summaryVersion = memory.summaryVersion();
         int summarizedMessageCount = memory.summarizedMessageCount();
-        int messagesToCompact = Math.max(0, messages.size() - config.recentMessages());
-        int totalMessageCount = summarizedMessageCount + messages.size();
-        if (totalMessageCount >= config.summarizeAfterMessages() && messagesToCompact > 0) {
+        int messagesToCompact = compactPrefixSize(messages, config.recentTokenBudget());
+        if (messagesToCompact > 0) {
             MemorySummary summary = summarizer.summarize(
                     rollingSummary,
                     messages.subList(0, messagesToCompact),
-                    0,
-                    config.summaryMaxCharacters()
+                    config.summaryMaxTokens()
             );
             rollingSummary = summary.content();
             if (summary.changed()) {
@@ -151,28 +178,64 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         );
     }
 
-    protected MemoryContext buildContext(String conversationId, StoredMemory stored, ChatRequest request) {
+    protected MemoryContext buildWorkingContext(String conversationId, StoredMemory stored, ChatRequest request) {
         String userId = normalizeUserId(request);
-        List<MemoryItem> semanticMemories = semanticMemoryStore.recall(
-                userId,
-                conversationId,
-                request.knowledgeBaseId(),
-                request.query(),
-                config.semanticMemoryMaxItems()
-        );
         UserProfile userProfile = config.profileEnabled()
                 ? userProfileStore.load(userId)
                 : new UserProfile(userId, Map.of(), null);
         return new MemoryContext(
                 conversationId,
-                stored.messages(),
+                fitRecentMessages(stored.messages(), config.recentTokenBudget()),
                 stored.rollingSummary(),
                 stored.dialogState(),
-                semanticMemories,
+                List.of(),
                 userProfile,
                 stored.summarizedMessageCount() + stored.messages().size(),
                 stored.summaryVersion()
         );
+    }
+
+    private int compactPrefixSize(List<ChatMessage> messages, int tokenBudget) {
+        if (messages == null || messages.isEmpty()) {
+            return 0;
+        }
+        int suffixTokens = 0;
+        int keepFrom = messages.size();
+        while (keepFrom > 0) {
+            int messageTokens = TokenEstimator.estimate(messages.get(keepFrom - 1));
+            if (keepFrom < messages.size() && suffixTokens + messageTokens > tokenBudget) {
+                break;
+            }
+            suffixTokens += messageTokens;
+            keepFrom--;
+            if (suffixTokens >= tokenBudget) {
+                break;
+            }
+        }
+        return keepFrom;
+    }
+
+    private List<ChatMessage> fitRecentMessages(List<ChatMessage> messages, int tokenBudget) {
+        if (messages == null || messages.isEmpty()) {
+            return List.of();
+        }
+        List<ChatMessage> selected = new ArrayList<>();
+        int remaining = tokenBudget;
+        for (int index = messages.size() - 1; index >= 0; index--) {
+            ChatMessage message = messages.get(index);
+            int messageTokens = TokenEstimator.estimate(message);
+            if (messageTokens <= remaining) {
+                selected.add(0, message);
+                remaining -= messageTokens;
+                continue;
+            }
+            if (selected.isEmpty() && remaining > 8) {
+                int contentBudget = Math.max(1, remaining - 4 - TokenEstimator.estimate(message.role()));
+                selected.add(new ChatMessage(message.role(), TokenEstimator.truncate(message.content(), contentBudget)));
+            }
+            break;
+        }
+        return List.copyOf(selected);
     }
 
     protected MemoryContext noOpContext(ChatRequest request) {

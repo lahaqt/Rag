@@ -7,7 +7,6 @@ public interface ConversationSummarizer {
     MemorySummary summarize(
             String currentSummary,
             List<ChatMessage> messages,
-            int recentMessages,
-            int maxCharacters
+            int maxTokens
     );
 }

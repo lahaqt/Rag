@@ -4,6 +4,7 @@ import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.dto.QueryAnalysisResponse;
+import com.example.ragagent.memory.MemoryContext;
 import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.AgentStageTracer;
 import com.example.ragagent.observability.TraceContextSnapshot;
@@ -48,6 +49,7 @@ final class AgentExecutionContext {
     final Set<String> executedToolKeys = ConcurrentHashMap.newKeySet();
     volatile ChatRequest analysisRequest;
     volatile ChatRequest request;
+    volatile MemoryContext memoryContext;
     volatile QueryAnalysisResponse analysis;
     volatile Set<String> capabilities = Set.of();
     volatile List<String> capabilityPlan = List.of();

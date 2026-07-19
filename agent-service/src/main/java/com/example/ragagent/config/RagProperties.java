@@ -29,7 +29,7 @@ public record RagProperties(
             retrieval = new Retrieval(6, 0.0, "hybrid", true, 4, null);
         }
         if (prompt == null) {
-            prompt = new Prompt(8000);
+            prompt = new Prompt(200000, 2400, 8000, 32000, 48000);
         }
         if (llm == null) {
             llm = new Llm(
@@ -55,7 +55,7 @@ public record RagProperties(
             multiAgent = new MultiAgent(4, 12, true);
         }
         if (memory == null) {
-            memory = new Memory("in-memory", true, 8, 12, 1600, 16, 86400L, "window", 4, true, null);
+            memory = new Memory("in-memory", true, 200000, 32000, 4000, 16, 86400L, "llm", 4, true, null);
         }
     }
 
@@ -147,9 +147,38 @@ public record RagProperties(
         }
     }
 
-    public record Prompt(Integer maxContextCharacters) {
+    public record Prompt(
+            Integer contextWindowTokens,
+            Integer reservedOutputTokens,
+            Integer safetyMarginTokens,
+            Integer maxAttachmentTokens,
+            Integer maxHistoryTokens
+    ) {
+        public Prompt(Integer contextWindowTokens) {
+            this(contextWindowTokens, 2400, 8000, 32000, 48000);
+        }
+
         public Prompt {
-            maxContextCharacters = maxContextCharacters == null ? 8000 : Math.max(1000, maxContextCharacters);
+            contextWindowTokens = contextWindowTokens == null
+                    ? 200000
+                    : Math.max(4096, contextWindowTokens);
+            reservedOutputTokens = reservedOutputTokens == null
+                    ? 2400
+                    : Math.max(128, Math.min(reservedOutputTokens, contextWindowTokens / 2));
+            safetyMarginTokens = safetyMarginTokens == null
+                    ? 8000
+                    : Math.max(512, Math.min(safetyMarginTokens, contextWindowTokens / 4));
+            int inputBudget = Math.max(1024, contextWindowTokens - reservedOutputTokens - safetyMarginTokens);
+            maxAttachmentTokens = maxAttachmentTokens == null
+                    ? Math.min(32000, inputBudget / 4)
+                    : Math.max(0, Math.min(maxAttachmentTokens, inputBudget));
+            maxHistoryTokens = maxHistoryTokens == null
+                    ? Math.min(48000, inputBudget / 3)
+                    : Math.max(1024, Math.min(maxHistoryTokens, inputBudget));
+        }
+
+        public int inputTokenBudget() {
+            return Math.max(1024, contextWindowTokens - reservedOutputTokens - safetyMarginTokens);
         }
     }
 
@@ -288,9 +317,9 @@ public record RagProperties(
     public record Memory(
             String provider,
             Boolean enabled,
-            Integer recentMessages,
-            Integer summarizeAfterMessages,
-            Integer summaryMaxCharacters,
+            Integer contextWindowTokens,
+            Integer recentTokenBudget,
+            Integer summaryMaxTokens,
             Integer stateMaxEntries,
             Long ttlSeconds,
             String summaryMode,
@@ -323,9 +352,9 @@ public record RagProperties(
         public Memory(
                 String provider,
                 Boolean enabled,
-                Integer recentMessages,
-                Integer summarizeAfterMessages,
-                Integer summaryMaxCharacters,
+                Integer contextWindowTokens,
+                Integer recentTokenBudget,
+                Integer summaryMaxTokens,
                 Integer stateMaxEntries,
                 Long ttlSeconds,
                 String summaryMode
@@ -333,9 +362,9 @@ public record RagProperties(
             this(
                     provider,
                     enabled,
-                    recentMessages,
-                    summarizeAfterMessages,
-                    summaryMaxCharacters,
+                    contextWindowTokens,
+                    recentTokenBudget,
+                    summaryMaxTokens,
                     stateMaxEntries,
                     ttlSeconds,
                     summaryMode,
@@ -348,21 +377,21 @@ public record RagProperties(
         public Memory(
                 String provider,
                 Boolean enabled,
-                Integer recentMessages,
-                Integer summarizeAfterMessages,
-                Integer summaryMaxCharacters,
+                Integer contextWindowTokens,
+                Integer recentTokenBudget,
+                Integer summaryMaxTokens,
                 Integer stateMaxEntries,
                 Long ttlSeconds
         ) {
             this(
                     provider,
                     enabled,
-                    recentMessages,
-                    summarizeAfterMessages,
-                    summaryMaxCharacters,
+                    contextWindowTokens,
+                    recentTokenBudget,
+                    summaryMaxTokens,
                     stateMaxEntries,
                     ttlSeconds,
-                    "window",
+                    "llm",
                     4,
                     true,
                     null
@@ -372,9 +401,9 @@ public record RagProperties(
         public Memory(
                 String provider,
                 Boolean enabled,
-                Integer recentMessages,
-                Integer summarizeAfterMessages,
-                Integer summaryMaxCharacters,
+                Integer contextWindowTokens,
+                Integer recentTokenBudget,
+                Integer summaryMaxTokens,
                 Integer stateMaxEntries,
                 Long ttlSeconds,
                 String summaryMode,
@@ -384,9 +413,9 @@ public record RagProperties(
             this(
                     provider,
                     enabled,
-                    recentMessages,
-                    summarizeAfterMessages,
-                    summaryMaxCharacters,
+                    contextWindowTokens,
+                    recentTokenBudget,
+                    summaryMaxTokens,
                     stateMaxEntries,
                     ttlSeconds,
                     summaryMode,
@@ -400,16 +429,18 @@ public record RagProperties(
         public Memory {
             provider = (provider == null || provider.isBlank()) ? "postgres" : provider;
             enabled = enabled == null || enabled;
-            recentMessages = recentMessages == null ? 8 : Math.max(2, Math.min(recentMessages, 30));
-            summarizeAfterMessages = summarizeAfterMessages == null
-                    ? 12
-                    : Math.max(recentMessages + 2, Math.min(summarizeAfterMessages, 80));
-            summaryMaxCharacters = summaryMaxCharacters == null
-                    ? 1600
-                    : Math.max(300, Math.min(summaryMaxCharacters, 6000));
+            contextWindowTokens = contextWindowTokens == null
+                    ? 200000
+                    : Math.max(4096, contextWindowTokens);
+            recentTokenBudget = recentTokenBudget == null
+                    ? Math.min(32000, contextWindowTokens / 5)
+                    : Math.max(16, Math.min(recentTokenBudget, contextWindowTokens / 2));
+            summaryMaxTokens = summaryMaxTokens == null
+                    ? Math.min(4000, contextWindowTokens / 20)
+                    : Math.max(16, Math.min(summaryMaxTokens, contextWindowTokens / 4));
             stateMaxEntries = stateMaxEntries == null ? 16 : Math.max(4, Math.min(stateMaxEntries, 64));
             ttlSeconds = ttlSeconds == null ? 86400L : Math.max(60L, Math.min(ttlSeconds, 604800L));
-            summaryMode = (summaryMode == null || summaryMode.isBlank()) ? "window" : summaryMode;
+            summaryMode = (summaryMode == null || summaryMode.isBlank()) ? "llm" : summaryMode;
             semanticMemoryMaxItems = semanticMemoryMaxItems == null
                     ? 4
                     : Math.max(0, Math.min(semanticMemoryMaxItems, 12));

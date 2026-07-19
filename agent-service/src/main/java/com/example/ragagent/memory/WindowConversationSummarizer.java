@@ -11,35 +11,48 @@ public class WindowConversationSummarizer implements ConversationSummarizer {
     public MemorySummary summarize(
             String currentSummary,
             List<ChatMessage> messages,
-            int recentMessages,
-            int maxCharacters
+            int maxTokens
     ) {
-        int end = Math.max(0, messages.size() - recentMessages);
-        if (end == 0) {
+        if (messages == null || messages.isEmpty()) {
             return new MemorySummary(currentSummary == null ? "" : currentSummary, false);
         }
         StringBuilder summary = new StringBuilder();
+        appendCriticalFacts(summary, SummaryFactCoverage.extract(currentSummary, messages), maxTokens);
         if (currentSummary != null && !currentSummary.isBlank()) {
-            summary.append(trim(currentSummary, Math.max(120, maxCharacters * 2 / 3)));
+            append(summary, currentSummary, Math.max(0, maxTokens - TokenEstimator.estimate(summary.toString())));
         }
-        for (ChatMessage message : messages.subList(0, end)) {
-            if (!summary.isEmpty()) {
-                summary.append(" | ");
-            }
-            summary.append(message.role()).append(": ").append(trim(message.content(), 180));
-            if (summary.length() >= maxCharacters) {
+        for (ChatMessage message : messages) {
+            int remaining = maxTokens - TokenEstimator.estimate(summary.toString());
+            if (remaining <= 4) {
                 break;
             }
+            append(summary, message.role() + ": " + normalize(message.content()), remaining);
         }
-        String content = trim(summary.toString(), maxCharacters);
+        String content = TokenEstimator.truncate(summary.toString(), maxTokens);
         return new MemorySummary(content, !content.equals(currentSummary == null ? "" : currentSummary));
     }
 
-    private String trim(String value, int maxLength) {
-        String normalized = WHITESPACE.matcher(value == null ? "" : value.trim()).replaceAll(" ");
-        if (normalized.length() <= maxLength) {
-            return normalized;
+    private void appendCriticalFacts(StringBuilder summary, List<String> facts, int maxTokens) {
+        if (facts.isEmpty()) {
+            return;
         }
-        return normalized.substring(0, Math.max(0, maxLength - 3)) + "...";
+        append(summary, "Key facts: " + String.join("; ", facts), maxTokens);
+    }
+
+    private void append(StringBuilder summary, String value, int remainingTokens) {
+        if (remainingTokens <= 0 || value == null || value.isBlank()) {
+            return;
+        }
+        String separator = summary.isEmpty() ? "" : " | ";
+        int separatorTokens = TokenEstimator.estimate(separator);
+        if (remainingTokens <= separatorTokens) {
+            return;
+        }
+        summary.append(separator)
+                .append(TokenEstimator.truncate(normalize(value), remainingTokens - separatorTokens));
+    }
+
+    private String normalize(String value) {
+        return WHITESPACE.matcher(value == null ? "" : value.trim()).replaceAll(" ");
     }
 }

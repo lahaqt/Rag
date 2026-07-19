@@ -7,13 +7,13 @@ import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
 import com.example.ragagent.dto.WebSearchResult;
+import com.example.ragagent.memory.TokenEstimator;
+import java.util.ArrayList;
 import java.util.List;
 import org.springframework.stereotype.Component;
 
 @Component
 public class PromptBuilder {
-    private static final int MAX_HISTORY_MESSAGES = 8;
-
     private final RagProperties properties;
 
     public PromptBuilder(RagProperties properties) {
@@ -78,13 +78,14 @@ public class PromptBuilder {
         prompt.append("改写后问题：").append(nullToEmpty(analysis.rewrittenQuery())).append("\n");
         prompt.append("意图：").append(nullToEmpty(analysis.intent())).append("\n\n");
 
-        int remainingContextCharacters = appendAttachments(
+        int remainingContextTokens = initialContextBudget(systemPrompt(), prompt);
+        remainingContextTokens = appendAttachments(
                 prompt,
                 request.normalizedAttachments(),
-                properties.prompt().maxContextCharacters()
+                remainingContextTokens
         );
-        appendHistory(prompt, request.normalizedHistory());
-        appendContext(prompt, hits, remainingContextCharacters);
+        remainingContextTokens = appendHistory(prompt, request.normalizedHistory(), remainingContextTokens);
+        appendContext(prompt, hits, remainingContextTokens);
 
         prompt.append("""
 
@@ -118,13 +119,14 @@ public class PromptBuilder {
         prompt.append("工具：").append(toolDecision.toolName()).append("\n");
         prompt.append("搜索 query：").append(toolDecision.query()).append("\n\n");
 
-        int remainingContextCharacters = appendAttachments(
+        int remainingContextTokens = initialContextBudget(webSearchSystemPrompt(), prompt);
+        remainingContextTokens = appendAttachments(
                 prompt,
                 request.normalizedAttachments(),
-                properties.prompt().maxContextCharacters()
+                remainingContextTokens
         );
-        appendHistory(prompt, request.normalizedHistory());
-        appendWebResults(prompt, results, remainingContextCharacters);
+        remainingContextTokens = appendHistory(prompt, request.normalizedHistory(), remainingContextTokens);
+        appendWebResults(prompt, results, remainingContextTokens);
 
         prompt.append("""
 
@@ -153,15 +155,16 @@ public class PromptBuilder {
         prompt.append("工具：").append(nullToEmpty(toolResult.toolName())).append("\n");
         prompt.append("工具 query：").append(nullToEmpty(toolResult.query())).append("\n\n");
 
-        int remainingContextCharacters = appendAttachments(
+        int remainingContextTokens = initialContextBudget(toolSystemPrompt(), prompt);
+        remainingContextTokens = appendAttachments(
                 prompt,
                 request.normalizedAttachments(),
-                properties.prompt().maxContextCharacters()
+                remainingContextTokens
         );
-        appendHistory(prompt, request.normalizedHistory());
+        remainingContextTokens = appendHistory(prompt, request.normalizedHistory(), remainingContextTokens);
 
         prompt.append("MCP 工具返回：\n");
-        prompt.append(trim(nullToEmpty(toolResult.observation()), remainingContextCharacters));
+        prompt.append(TokenEstimator.truncate(nullToEmpty(toolResult.observation()), remainingContextTokens));
         prompt.append("""
 
                 请基于上面的 MCP 工具返回回答用户问题。
@@ -183,17 +186,18 @@ public class PromptBuilder {
         prompt.append("意图：").append(nullToEmpty(analysis.intent())).append("\n");
         prompt.append("执行结果：").append(nullToEmpty(toolResult.finishReason())).append("\n\n");
 
-        int remainingContextCharacters = appendAttachments(
+        int remainingContextTokens = initialContextBudget(multiAgentSystemPrompt(), prompt);
+        remainingContextTokens = appendAttachments(
                 prompt,
                 request.normalizedAttachments(),
-                properties.prompt().maxContextCharacters()
+                remainingContextTokens
         );
-        appendHistory(prompt, request.normalizedHistory());
-        remainingContextCharacters = appendContext(prompt, toolResult.retrievalHits(), remainingContextCharacters);
+        remainingContextTokens = appendHistory(prompt, request.normalizedHistory(), remainingContextTokens);
+        remainingContextTokens = appendContext(prompt, toolResult.retrievalHits(), remainingContextTokens);
         prompt.append("\n");
-        remainingContextCharacters = appendWebResults(prompt, toolResult.webSearchResults(), remainingContextCharacters);
+        remainingContextTokens = appendWebResults(prompt, toolResult.webSearchResults(), remainingContextTokens);
         prompt.append("\nAgent observations:\n");
-        prompt.append(trim(nullToEmpty(toolResult.observation()), remainingContextCharacters));
+        prompt.append(TokenEstimator.truncate(nullToEmpty(toolResult.observation()), remainingContextTokens));
         prompt.append("\nOnly use observations from successful agents as factual evidence; failed-agent messages are diagnostic only.\n");
         prompt.append("""
 
@@ -212,12 +216,19 @@ public class PromptBuilder {
         prompt.append("\n反思提示：").append(reflectionHint).append("\n");
     }
 
-    private int appendAttachments(StringBuilder prompt, List<ChatAttachment> attachments, int maxCharacters) {
+    private int initialContextBudget(String systemPrompt, StringBuilder prompt) {
+        return Math.max(0, properties.prompt().inputTokenBudget()
+                - TokenEstimator.estimate(systemPrompt)
+                - TokenEstimator.estimate(prompt.toString()));
+    }
+
+    private int appendAttachments(StringBuilder prompt, List<ChatAttachment> attachments, int remainingTokens) {
         if (attachments == null || attachments.isEmpty()) {
-            return maxCharacters;
+            return remainingTokens;
         }
 
-        int remaining = maxCharacters;
+        int componentRemaining = Math.min(remainingTokens, properties.prompt().maxAttachmentTokens());
+        int used = 0;
         int index = 1;
         StringBuilder section = new StringBuilder("Attachments:\n");
         for (ChatAttachment attachment : attachments) {
@@ -229,27 +240,30 @@ public class PromptBuilder {
                     nullToEmpty(attachment.fileName()),
                     nullToEmpty(attachment.content())
             );
-            if (block.length() > remaining) {
-                section.append(trim(block, remaining));
-                remaining = 0;
+            int blockTokens = TokenEstimator.estimate(block);
+            if (blockTokens > componentRemaining) {
+                section.append(TokenEstimator.truncate(block, componentRemaining));
+                used += componentRemaining;
+                componentRemaining = 0;
                 break;
             }
             section.append(block);
-            remaining -= block.length();
-            if (remaining <= 0) {
+            componentRemaining -= blockTokens;
+            used += blockTokens;
+            if (componentRemaining <= 0) {
                 break;
             }
         }
         if (index == 1) {
-            return maxCharacters;
+            return remainingTokens;
         }
         prompt.append(section).append("\n");
-        return remaining;
+        return Math.max(0, remainingTokens - used);
     }
 
-    private void appendHistory(StringBuilder prompt, List<ChatMessage> history) {
+    private int appendHistory(StringBuilder prompt, List<ChatMessage> history, int remainingTokens) {
         if (history.isEmpty()) {
-            return;
+            return remainingTokens;
         }
 
         prompt.append("最近会话：\n");
@@ -259,36 +273,81 @@ public class PromptBuilder {
         List<ChatMessage> chatMessages = history.stream()
                 .filter(message -> message.role() == null || !message.role().startsWith("memory_"))
                 .toList();
-        for (ChatMessage message : memoryMessages) {
-            appendHistoryMessage(prompt, message, 1200);
-        }
-        int start = Math.max(0, chatMessages.size() - MAX_HISTORY_MESSAGES);
-        for (ChatMessage message : chatMessages.subList(start, chatMessages.size())) {
-            appendHistoryMessage(prompt, message, 500);
-        }
+        int componentBudget = Math.min(remainingTokens, properties.prompt().maxHistoryTokens());
+        int memoryBudget = Math.min(componentBudget / 3, TokenEstimator.estimateMessages(memoryMessages));
+        int memoryUsed = appendMessages(prompt, memoryMessages, memoryBudget, false);
+        int chatUsed = appendMessages(prompt, chatMessages, componentBudget - memoryUsed, true);
         prompt.append("\n");
+        return Math.max(0, remainingTokens - memoryUsed - chatUsed);
     }
 
-    private void appendHistoryMessage(StringBuilder prompt, ChatMessage message, int maxLength) {
-        prompt.append("- ")
-                .append(message.role())
-                .append(": ")
-                .append(trim(message.content(), maxLength))
-                .append("\n");
+    private int appendMessages(
+            StringBuilder prompt,
+            List<ChatMessage> messages,
+            int tokenBudget,
+            boolean keepNewest
+    ) {
+        if (messages.isEmpty() || tokenBudget <= 0) {
+            return 0;
+        }
+        List<ChatMessage> selected = new ArrayList<>();
+        int selectedTokens = 0;
+        if (keepNewest) {
+            for (int index = messages.size() - 1; index >= 0; index--) {
+                ChatMessage message = messages.get(index);
+                int tokens = TokenEstimator.estimate(message);
+                if (!selected.isEmpty() && selectedTokens + tokens > tokenBudget) {
+                    break;
+                }
+                selected.add(0, message);
+                selectedTokens += tokens;
+                if (selectedTokens >= tokenBudget) {
+                    break;
+                }
+            }
+        } else {
+            for (ChatMessage message : messages) {
+                int tokens = TokenEstimator.estimate(message);
+                if (!selected.isEmpty() && selectedTokens + tokens > tokenBudget) {
+                    break;
+                }
+                selected.add(message);
+                selectedTokens += tokens;
+                if (selectedTokens >= tokenBudget) {
+                    break;
+                }
+            }
+        }
+        int remaining = tokenBudget;
+        int used = 0;
+        for (ChatMessage message : selected) {
+            String prefix = "- " + message.role() + ": ";
+            int prefixTokens = TokenEstimator.estimate(prefix);
+            if (remaining <= prefixTokens) {
+                break;
+            }
+            String content = TokenEstimator.truncate(message.content(), remaining - prefixTokens);
+            String line = prefix + content + "\n";
+            int lineTokens = TokenEstimator.estimate(line);
+            prompt.append(line);
+            remaining -= lineTokens;
+            used += lineTokens;
+        }
+        return used;
     }
 
     private int appendContext(StringBuilder prompt, List<RetrievalHit> hits) {
-        return appendContext(prompt, hits, properties.prompt().maxContextCharacters());
+        return appendContext(prompt, hits, properties.prompt().inputTokenBudget());
     }
 
-    private int appendContext(StringBuilder prompt, List<RetrievalHit> hits, int maxCharacters) {
+    private int appendContext(StringBuilder prompt, List<RetrievalHit> hits, int remainingTokens) {
         prompt.append("知识库片段：\n");
         if (hits.isEmpty()) {
             prompt.append("(无检索结果)\n");
-            return maxCharacters;
+            return remainingTokens;
         }
 
-        int remaining = maxCharacters;
+        int remaining = remainingTokens;
         for (RetrievalHit hit : hits) {
             String block = "[%d] 文档：%s，chunk：%s，分数：%.4f\n%s\n\n".formatted(
                     hit.index(),
@@ -297,12 +356,14 @@ public class PromptBuilder {
                     hit.score(),
                     nullToEmpty(hit.content())
             );
-            if (block.length() > remaining) {
-                prompt.append(trim(block, remaining));
+            int blockTokens = TokenEstimator.estimate(block);
+            if (blockTokens > remaining) {
+                prompt.append(TokenEstimator.truncate(block, remaining));
+                remaining = 0;
                 break;
             }
             prompt.append(block);
-            remaining -= block.length();
+            remaining -= blockTokens;
             if (remaining <= 0) {
                 break;
             }
@@ -311,17 +372,17 @@ public class PromptBuilder {
     }
 
     private int appendWebResults(StringBuilder prompt, List<WebSearchResult> results) {
-        return appendWebResults(prompt, results, properties.prompt().maxContextCharacters());
+        return appendWebResults(prompt, results, properties.prompt().inputTokenBudget());
     }
 
-    private int appendWebResults(StringBuilder prompt, List<WebSearchResult> results, int maxCharacters) {
+    private int appendWebResults(StringBuilder prompt, List<WebSearchResult> results, int remainingTokens) {
         prompt.append("网页搜索结果：\n");
         if (results.isEmpty()) {
             prompt.append("(无搜索结果)\n");
-            return maxCharacters;
+            return remainingTokens;
         }
 
-        int remaining = maxCharacters;
+        int remaining = remainingTokens;
         for (WebSearchResult result : results) {
             String block = "[%d] 标题：%s\nURL：%s\n摘要：%s\n\n".formatted(
                     result.index(),
@@ -329,28 +390,19 @@ public class PromptBuilder {
                     nullToEmpty(result.url()),
                     nullToEmpty(result.snippet())
             );
-            if (block.length() > remaining) {
-                prompt.append(trim(block, remaining));
+            int blockTokens = TokenEstimator.estimate(block);
+            if (blockTokens > remaining) {
+                prompt.append(TokenEstimator.truncate(block, remaining));
+                remaining = 0;
                 break;
             }
             prompt.append(block);
-            remaining -= block.length();
+            remaining -= blockTokens;
             if (remaining <= 0) {
                 break;
             }
         }
         return remaining;
-    }
-
-    private String trim(String value, int maxLength) {
-        if (value == null || maxLength <= 0) {
-            return "";
-        }
-        String normalized = value.replaceAll("\\s+", " ").trim();
-        if (normalized.length() <= maxLength) {
-            return normalized;
-        }
-        return normalized.substring(0, Math.max(0, maxLength - 3)) + "...";
     }
 
     private String nullToEmpty(String value) {

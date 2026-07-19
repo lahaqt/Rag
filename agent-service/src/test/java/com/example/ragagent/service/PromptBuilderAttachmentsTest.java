@@ -63,8 +63,8 @@ class PromptBuilderAttachmentsTest {
 
     @Test
     void longAttachmentContentIsTrimmed() {
-        String content = "x".repeat(50_000);
-        ChatAttachment attachment = new ChatAttachment("big.txt", "text/plain", 50_000, content);
+        String content = "x ".repeat(50_000);
+        ChatAttachment attachment = new ChatAttachment("big.txt", "text/plain", content.length(), content);
         ChatRequest request = new ChatRequest("query", null, null, List.of(), null, List.of(attachment));
 
         String prompt = promptBuilder.userPrompt(request, directAnalysis("query"), List.of());

@@ -5,10 +5,12 @@ import com.example.ragagent.memory.BusinessLongTermMemoryExtractor;
 import com.example.ragagent.memory.ConversationStateExtractor;
 import com.example.ragagent.memory.ConversationSummarizer;
 import com.example.ragagent.memory.ConversationMemoryService;
+import com.example.ragagent.memory.DefaultMemoryRecallPolicy;
 import com.example.ragagent.memory.InMemoryConversationMemoryService;
 import com.example.ragagent.memory.LlmConversationSummarizer;
 import com.example.ragagent.memory.LongTermMemoryExtractor;
 import com.example.ragagent.memory.MemoryEmbeddingClient;
+import com.example.ragagent.memory.MemoryRecallPolicy;
 import com.example.ragagent.memory.PostgresConversationMemoryService;
 import com.example.ragagent.memory.PostgresSemanticMemoryStore;
 import com.example.ragagent.memory.PostgresUserProfileStore;
@@ -31,7 +33,11 @@ public class MemoryServiceConfig {
     public ConversationSummarizer conversationSummarizer(RagProperties properties, LlmGateway llmGateway) {
         ConversationSummarizer fallback = new WindowConversationSummarizer();
         if ("llm".equalsIgnoreCase(properties.memory().summaryMode())) {
-            return new LlmConversationSummarizer(llmGateway, fallback);
+            return new LlmConversationSummarizer(
+                    llmGateway,
+                    fallback,
+                    properties.memory().contextWindowTokens()
+            );
         }
         return fallback;
     }
@@ -58,6 +64,11 @@ public class MemoryServiceConfig {
     @Bean
     public LongTermMemoryExtractor longTermMemoryExtractor() {
         return new BusinessLongTermMemoryExtractor();
+    }
+
+    @Bean
+    public MemoryRecallPolicy memoryRecallPolicy() {
+        return new DefaultMemoryRecallPolicy();
     }
 
     @Bean

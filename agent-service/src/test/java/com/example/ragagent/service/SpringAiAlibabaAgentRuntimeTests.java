@@ -9,6 +9,7 @@ import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -20,6 +21,9 @@ import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.dto.RetrievalHit;
 import com.example.ragagent.dto.WebSearchResult;
+import com.example.ragagent.memory.ConversationMemoryService;
+import com.example.ragagent.memory.DefaultMemoryRecallPolicy;
+import com.example.ragagent.memory.MemoryContext;
 import com.example.ragagent.memory.NoopConversationMemoryService;
 import com.example.ragagent.mcp.McpToolDescriptor;
 import com.example.ragagent.mcp.ToolArgumentBinder;
@@ -30,6 +34,7 @@ import java.util.Optional;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 
 class SpringAiAlibabaAgentRuntimeTests {
     private final QueryAnalysisClient queryAnalysisClient = mock(QueryAnalysisClient.class);
@@ -38,6 +43,34 @@ class SpringAiAlibabaAgentRuntimeTests {
     private final WebSearchTool webSearchTool = mock(WebSearchTool.class);
     private final McpToolGateway mcpToolGateway = mock(McpToolGateway.class);
     private final AnswerGenerator answerGenerator = mock(AnswerGenerator.class);
+
+    @Test
+    void analyzesBeforeLongTermRecallAndUsesTheRewrittenQuery() {
+        ConversationMemoryService memoryService = mock(ConversationMemoryService.class);
+        MemoryContext workingContext = new MemoryContext(
+                "conversation-1", List.of(), "", Map.of(), 0, 0
+        );
+        QueryAnalysisResponse analysis = knowledgeAnalysis("SINGLE_TOOL", List.of("rag_retrieval"));
+        when(memoryService.loadWorkingContext(any())).thenReturn(workingContext);
+        when(memoryService.recallLongTerm(any(), any(), anyString())).thenReturn(workingContext);
+        when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
+        when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
+        when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
+        when(ragRetrievalTool.execute(any(), any(), any()))
+                .thenReturn(AgentToolResult.retrieval("refund", List.of(hit())));
+        when(answerGenerator.generate(any(), any(), anyList(), anyString(), any()))
+                .thenReturn(new AnswerDraft("Refund answer [1]", false, "test_answer"));
+
+        runtime(
+                new RagProperties(null, null, null, null, null, null, null, null, null, null),
+                memoryService
+        ).answer(request("raw refund question"));
+
+        InOrder order = inOrder(memoryService, queryAnalysisClient);
+        order.verify(memoryService).loadWorkingContext(any());
+        order.verify(queryAnalysisClient).analyze(any());
+        order.verify(memoryService).recallLongTerm(any(), any(), org.mockito.ArgumentMatchers.eq("refund"));
+    }
 
     @Test
     void ordinaryChatRunsThroughSpringAiAlibabaGraph() {
@@ -675,6 +708,13 @@ class SpringAiAlibabaAgentRuntimeTests {
     }
 
     private SpringAiAlibabaAgentRuntime runtime(RagProperties properties) {
+        return runtime(properties, new NoopConversationMemoryService());
+    }
+
+    private SpringAiAlibabaAgentRuntime runtime(
+            RagProperties properties,
+            ConversationMemoryService memoryService
+    ) {
         return new SpringAiAlibabaAgentRuntime(
                 queryAnalysisClient,
                 toolRouter,
@@ -685,7 +725,8 @@ class SpringAiAlibabaAgentRuntimeTests {
                 new PlanLlmClient(mock(LlmGateway.class), new ObjectMapper()),
                 answerGenerator,
                 new ReflectionCritic(),
-                new NoopConversationMemoryService(),
+                memoryService,
+                new DefaultMemoryRecallPolicy(),
                 null,
                 null,
                 null,

@@ -61,4 +61,17 @@ public record MemoryContext(
     public List<ChatMessage> promptHistory() {
         return promptMemory().messages();
     }
+
+    public MemoryContext withSemanticMemories(List<MemoryItem> recalledMemories) {
+        return new MemoryContext(
+                conversationId,
+                recentMessages,
+                rollingSummary,
+                dialogState,
+                recalledMemories,
+                userProfile,
+                rawMessageCount,
+                summaryVersion
+        );
+    }
 }
