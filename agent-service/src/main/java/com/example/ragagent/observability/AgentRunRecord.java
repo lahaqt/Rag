@@ -11,6 +11,8 @@ public record AgentRunRecord(
         String traceId,
         String finishReason,
         String error,
+        boolean multiAgent,
+        int recoveryAttempts,
         Instant startedAt,
         Instant completedAt
 ) {

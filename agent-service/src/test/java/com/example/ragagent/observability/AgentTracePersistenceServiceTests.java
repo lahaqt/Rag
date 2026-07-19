@@ -39,4 +39,57 @@ class AgentTracePersistenceServiceTests {
             database.shutdown();
         }
     }
+
+    @Test
+    void queuesReadOnlyInterruptedRunForRecoveryAfterRestart() {
+        EmbeddedDatabase database = new EmbeddedDatabaseBuilder()
+                .setType(EmbeddedDatabaseType.H2)
+                .setName("agent-recovery-test;MODE=PostgreSQL")
+                .build();
+        try {
+            JdbcTemplate jdbcTemplate = new JdbcTemplate(database);
+            AgentTracePersistenceService beforeRestart = new AgentTracePersistenceService(jdbcTemplate, new ObjectMapper());
+            beforeRestart.startRun("run-recoverable", new ChatRequest("refund", "kb-1", "conversation-1", null, null), "rag-agent");
+
+            AgentTracePersistenceService afterRestart = new AgentTracePersistenceService(jdbcTemplate, new ObjectMapper());
+
+            assertThat(afterRestart.findRun("run-recoverable").status()).isEqualTo("RECOVERABLE");
+            assertThat(afterRestart.findRecoverableRuns(10))
+                    .singleElement()
+                    .satisfies(run -> {
+                        assertThat(run.runId()).isEqualTo("run-recoverable");
+                        assertThat(run.request().query()).isEqualTo("refund");
+                        assertThat(run.multiAgent()).isFalse();
+                    });
+            assertThat(afterRestart.claimRecovery("run-recoverable", false)).isTrue();
+            assertThat(afterRestart.findRun("run-recoverable").status()).isEqualTo("RUNNING");
+        } finally {
+            database.shutdown();
+        }
+    }
+
+    @Test
+    void requiresExplicitRecoveryAfterPotentiallySideEffectingTool() {
+        EmbeddedDatabase database = new EmbeddedDatabaseBuilder()
+                .setType(EmbeddedDatabaseType.H2)
+                .setName("agent-recovery-safety-test;MODE=PostgreSQL")
+                .build();
+        try {
+            JdbcTemplate jdbcTemplate = new JdbcTemplate(database);
+            AgentTracePersistenceService beforeRestart = new AgentTracePersistenceService(jdbcTemplate, new ObjectMapper());
+            beforeRestart.startRun("run-manual", new ChatRequest("issue refund", "kb-1", "conversation-1", null, null), "rag-agent");
+            beforeRestart.recordRunStep("run-manual", new AgentTraceStep(
+                    0, "tool", "", "mcp_tool", "call", "", "ok", 1, "", "", "", Map.of()
+            ));
+
+            AgentTracePersistenceService afterRestart = new AgentTracePersistenceService(jdbcTemplate, new ObjectMapper());
+
+            assertThat(afterRestart.findRun("run-manual").status()).isEqualTo("RECOVERY_REQUIRES_MANUAL");
+            assertThat(afterRestart.findRecoverableRuns(10)).isEmpty();
+            assertThat(afterRestart.claimRecovery("run-manual", false)).isFalse();
+            assertThat(afterRestart.claimRecovery("run-manual", true)).isTrue();
+        } finally {
+            database.shutdown();
+        }
+    }
 }

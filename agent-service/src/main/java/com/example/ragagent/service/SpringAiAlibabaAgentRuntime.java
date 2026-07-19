@@ -22,6 +22,7 @@ import com.example.ragagent.memory.MemoryContext;
 import com.example.ragagent.memory.MemoryRecallDecision;
 import com.example.ragagent.memory.MemoryRecallPolicy;
 import com.example.ragagent.observability.AgentTracePersistenceService;
+import com.example.ragagent.observability.RecoverableAgentRun;
 import com.example.ragagent.observability.AgentStageTracer;
 import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
@@ -201,6 +202,15 @@ public class SpringAiAlibabaAgentRuntime {
         return answer(request, streamSink, fallbackTraceContext, null, false);
     }
 
+    /** Re-enters a graph from its durable request after a process interruption. */
+    public ChatResponse resume(RecoverableAgentRun run) {
+        if (run == null || run.request() == null) {
+            throw new IllegalArgumentException("A persisted request is required to resume an agent run.");
+        }
+        return answer(run.request(), ChatStreamSink.noop(), TraceContextSnapshot.empty(), null,
+                run.multiAgent(), run.runId(), true);
+    }
+
     public ChatResponse answer(
             ChatRequest request,
             ChatStreamSink streamSink,
@@ -289,7 +299,19 @@ public class SpringAiAlibabaAgentRuntime {
             Span suppliedParentSpan,
             boolean multiAgent
     ) {
-        String runId = "agent-run-" + UUID.randomUUID();
+        return answer(rawRequest, streamSink, fallbackTraceContext, suppliedParentSpan, multiAgent, null, false);
+    }
+
+    private ChatResponse answer(
+            ChatRequest rawRequest,
+            ChatStreamSink streamSink,
+            TraceContextSnapshot fallbackTraceContext,
+            Span suppliedParentSpan,
+            boolean multiAgent,
+            String persistedRunId,
+            boolean resuming
+    ) {
+        String runId = persistedRunId == null || persistedRunId.isBlank() ? "agent-run-" + UUID.randomUUID() : persistedRunId;
         Span parentSpan = suppliedParentSpan != null
                 ? suppliedParentSpan
                 : traceContextProvider == null ? null : traceContextProvider.currentSpan();
@@ -305,10 +327,26 @@ public class SpringAiAlibabaAgentRuntime {
                 multiAgent ? multiAgentMaxExecutionNanos : maxExecutionNanos,
                 maxToolIterations
         );
+        if (resuming && tracePersistenceService != null) {
+            context.step.set(tracePersistenceService.nextRunStepNumber(runId));
+        }
         CompiledGraph graph = multiAgent ? multiAgentGraph : ordinaryGraph;
         activeContexts.put(runId, context);
         if (tracePersistenceService != null) {
-            tracePersistenceService.startRun(runId, context.rawRequest, multiAgent ? multiAgentGraphName() : ordinaryGraphName());
+            if (!resuming) {
+                tracePersistenceService.startRun(runId, context.rawRequest, multiAgent ? multiAgentGraphName() : ordinaryGraphName());
+            } else {
+                context.addTrace(AgentTraceStep.timed(
+                        context.nextStep(),
+                        "execution_recovery",
+                        "",
+                        "",
+                        "resume_from_durable_request",
+                        "restarted from persisted request after service interruption",
+                        "ok",
+                        0
+                ));
+            }
         }
         try {
             graph.invoke(Map.of(KEY_RUN_ID, runId))

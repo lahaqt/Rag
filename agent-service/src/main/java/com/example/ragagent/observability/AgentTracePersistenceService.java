@@ -57,6 +57,9 @@ public class AgentTracePersistenceService {
                 trace_id          VARCHAR(64) NOT NULL DEFAULT '',
                 finish_reason     VARCHAR(128) NOT NULL DEFAULT '',
                 error             TEXT NOT NULL DEFAULT '',
+                request_json      TEXT NOT NULL DEFAULT '',
+                multi_agent       BOOLEAN NOT NULL DEFAULT false,
+                recovery_attempts INTEGER NOT NULL DEFAULT 0,
                 started_at        TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
                 completed_at      TIMESTAMP WITH TIME ZONE
             )
@@ -81,6 +84,16 @@ public class AgentTracePersistenceService {
 
     private static final String ADD_RUN_STEP_ATTRIBUTES_SQL = """
             ALTER TABLE agent_run_steps ADD COLUMN IF NOT EXISTS attributes_json TEXT NOT NULL DEFAULT '{}'
+            """;
+
+    private static final String ADD_RUN_REQUEST_SQL = """
+            ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS request_json TEXT NOT NULL DEFAULT ''
+            """;
+    private static final String ADD_RUN_MULTI_AGENT_SQL = """
+            ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS multi_agent BOOLEAN NOT NULL DEFAULT false
+            """;
+    private static final String ADD_RUN_RECOVERY_ATTEMPTS_SQL = """
+            ALTER TABLE agent_runs ADD COLUMN IF NOT EXISTS recovery_attempts INTEGER NOT NULL DEFAULT 0
             """;
 
     private static final String CREATE_CONVERSATION_INDEX_SQL = """
@@ -132,9 +145,78 @@ public class AgentTracePersistenceService {
 
     public void startRun(String runId, ChatRequest request, String graphName) {
         write(() -> jdbcTemplate.update(
-                "INSERT INTO agent_runs (run_id, conversation_id, query, graph_name, status) VALUES (?, ?, ?, ?, 'RUNNING')",
-                runId, safe(request.conversationId()), safe(request.query()), safe(graphName)
+                """
+                        INSERT INTO agent_runs (run_id, conversation_id, query, graph_name, status, request_json, multi_agent)
+                        VALUES (?, ?, ?, ?, 'RUNNING', ?, ?)
+                        """,
+                runId, safe(request.conversationId()), safe(request.query()), safe(graphName),
+                serializeRequest(request), "rag-multi-agent".equals(graphName)
         ), "start", runId);
+    }
+
+    /** Claims a previously interrupted run before its graph is restarted. */
+    public boolean claimRecovery(String runId, boolean manual) {
+        String allowedStatuses = manual
+                ? "('RECOVERABLE', 'RECOVERY_REQUIRES_MANUAL', 'FAILED', 'TIMED_OUT')"
+                : "('RECOVERABLE')";
+        try {
+            return jdbcTemplate.update(
+                    "UPDATE agent_runs SET status = 'RUNNING', error = '', completed_at = NULL, recovery_attempts = recovery_attempts + 1 "
+                            + "WHERE run_id = ? AND status IN " + allowedStatuses,
+                    runId
+            ) == 1;
+        } catch (Exception exception) {
+            log.warn("Agent run recovery claim failed. runId={} error={}", runId, exception.getMessage());
+            return false;
+        }
+    }
+
+    public List<RecoverableAgentRun> findRecoverableRuns(int limit) {
+        return jdbcTemplate.query(
+                """
+                        SELECT run_id, request_json, multi_agent, recovery_attempts
+                        FROM agent_runs
+                        WHERE status = 'RECOVERABLE' AND recovery_attempts < 3 AND request_json <> ''
+                        ORDER BY started_at ASC
+                        LIMIT ?
+                        """,
+                (rs, rowNum) -> new RecoverableAgentRun(
+                        rs.getString("run_id"),
+                        parseRequest(rs.getString("request_json")),
+                        rs.getBoolean("multi_agent"),
+                        rs.getInt("recovery_attempts")
+                ),
+                Math.max(1, Math.min(limit, 100))
+        ).stream().filter(run -> run.request() != null).toList();
+    }
+
+    public RecoverableAgentRun findRecoverableRun(String runId) {
+        List<RecoverableAgentRun> runs = jdbcTemplate.query(
+                """
+                        SELECT run_id, request_json, multi_agent, recovery_attempts
+                        FROM agent_runs
+                        WHERE run_id = ? AND request_json <> ''
+                        """,
+                (rs, rowNum) -> new RecoverableAgentRun(
+                        rs.getString("run_id"), parseRequest(rs.getString("request_json")),
+                        rs.getBoolean("multi_agent"), rs.getInt("recovery_attempts")
+                ),
+                runId
+        );
+        return runs.stream().filter(run -> run.request() != null).findFirst().orElse(null);
+    }
+
+    public int nextRunStepNumber(String runId) {
+        try {
+            Integer next = jdbcTemplate.queryForObject(
+                    "SELECT COALESCE(MAX(step_number), -1) + 1 FROM agent_run_steps WHERE run_id = ?",
+                    Integer.class,
+                    runId
+            );
+            return next == null ? 0 : Math.max(0, next);
+        } catch (Exception exception) {
+            return 0;
+        }
     }
 
     public void recordRunStep(String runId, AgentTraceStep step) {
@@ -221,17 +303,36 @@ public class AgentTracePersistenceService {
             jdbcTemplate.execute(CREATE_RUN_TABLE_SQL);
             jdbcTemplate.execute(CREATE_RUN_STEP_TABLE_SQL);
             jdbcTemplate.execute(ADD_RUN_STEP_ATTRIBUTES_SQL);
+            jdbcTemplate.execute(ADD_RUN_REQUEST_SQL);
+            jdbcTemplate.execute(ADD_RUN_MULTI_AGENT_SQL);
+            jdbcTemplate.execute(ADD_RUN_RECOVERY_ATTEMPTS_SQL);
             jdbcTemplate.execute(CREATE_TRACE_INDEX_SQL);
             jdbcTemplate.execute(CREATE_CONVERSATION_INDEX_SQL);
-            int recovered = jdbcTemplate.update(
-                    """
-                            UPDATE agent_runs
-                            SET status = 'FAILED', error = 'agent-service restarted before run completion', completed_at = now()
-                            WHERE status = 'RUNNING'
-                            """
+            List<String> interrupted = jdbcTemplate.queryForList(
+                    "SELECT run_id FROM agent_runs WHERE status = 'RUNNING'", String.class
             );
-            if (recovered > 0) {
-                log.warn("Marked {} interrupted agent runs as failed during startup recovery.", recovered);
+            int recoverable = 0;
+            int manual = 0;
+            for (String runId : interrupted) {
+                boolean hasUnsafeTool = jdbcTemplate.queryForObject(
+                        "SELECT COUNT(*) > 0 FROM agent_run_steps WHERE run_id = ? AND tool_name IN ('mcp_tool', 'function_call')",
+                        Boolean.class,
+                        runId
+                );
+                String status = hasUnsafeTool ? "RECOVERY_REQUIRES_MANUAL" : "RECOVERABLE";
+                jdbcTemplate.update(
+                        "UPDATE agent_runs SET status = ?, error = ?, completed_at = NULL WHERE run_id = ? AND status = 'RUNNING'",
+                        status,
+                        hasUnsafeTool
+                                ? "agent-service restarted after a potentially side-effecting tool; explicit resume required"
+                                : "agent-service restarted before run completion; queued for recovery",
+                        runId
+                );
+                if (hasUnsafeTool) manual++; else recoverable++;
+            }
+            if (recoverable + manual > 0) {
+                log.warn("Recovered {} interrupted agent runs: {} queued automatically, {} require explicit resume.",
+                        recoverable + manual, recoverable, manual);
             }
         } catch (Exception exception) {
             log.warn("Agent trace schema initialization failed. error={}", exception.getMessage());
@@ -277,6 +378,7 @@ public class AgentTracePersistenceService {
                 rs.getString("run_id"), rs.getString("conversation_id"), rs.getString("query"),
                 rs.getString("graph_name"), rs.getString("status"), rs.getString("trace_id"),
                 rs.getString("finish_reason"), rs.getString("error"),
+                rs.getBoolean("multi_agent"), rs.getInt("recovery_attempts"),
                 instant(rs, "started_at"), instant(rs, "completed_at")
         );
     }
@@ -294,6 +396,24 @@ public class AgentTracePersistenceService {
             return objectMapper.writeValueAsString(attributes == null ? java.util.Map.of() : attributes);
         } catch (JsonProcessingException exception) {
             return "{}";
+        }
+    }
+
+    private String serializeRequest(ChatRequest request) {
+        try {
+            return objectMapper.writeValueAsString(request);
+        } catch (JsonProcessingException exception) {
+            return "";
+        }
+    }
+
+    private ChatRequest parseRequest(String json) {
+        if (json == null || json.isBlank()) return null;
+        try {
+            return objectMapper.readValue(json, ChatRequest.class);
+        } catch (JsonProcessingException exception) {
+            log.warn("Unable to deserialize persisted agent request for recovery. error={}", exception.getMessage());
+            return null;
         }
     }
 
