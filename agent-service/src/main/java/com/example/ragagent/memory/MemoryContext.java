@@ -12,8 +12,32 @@ public record MemoryContext(
         List<MemoryItem> semanticMemories,
         UserProfile userProfile,
         int rawMessageCount,
-        int summaryVersion
+        int summaryVersion,
+        MemoryDiagnostics diagnostics
 ) {
+    public MemoryContext(
+            String conversationId,
+            List<ChatMessage> recentMessages,
+            String rollingSummary,
+            Map<String, String> dialogState,
+            List<MemoryItem> semanticMemories,
+            UserProfile userProfile,
+            int rawMessageCount,
+            int summaryVersion
+    ) {
+        this(
+                conversationId,
+                recentMessages,
+                rollingSummary,
+                dialogState,
+                semanticMemories,
+                userProfile,
+                rawMessageCount,
+                summaryVersion,
+                MemoryDiagnostics.empty()
+        );
+    }
+
     public MemoryContext(
             String conversationId,
             List<ChatMessage> recentMessages,
@@ -30,7 +54,8 @@ public record MemoryContext(
                 List.of(),
                 new UserProfile("", Map.of(), null),
                 rawMessageCount,
-                summaryVersion
+                summaryVersion,
+                MemoryDiagnostics.empty()
         );
     }
 
@@ -40,6 +65,7 @@ public record MemoryContext(
         dialogState = dialogState == null ? Map.of() : Map.copyOf(dialogState);
         semanticMemories = semanticMemories == null ? List.of() : List.copyOf(semanticMemories);
         userProfile = userProfile == null ? new UserProfile("", Map.of(), null) : userProfile;
+        diagnostics = diagnostics == null ? MemoryDiagnostics.empty() : diagnostics;
     }
 
     public MemoryAnalysisContext analysisMemory() {
@@ -71,7 +97,8 @@ public record MemoryContext(
                 recalledMemories,
                 userProfile,
                 rawMessageCount,
-                summaryVersion
+                summaryVersion,
+                diagnostics
         );
     }
 }

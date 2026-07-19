@@ -9,4 +9,8 @@ public interface ConversationSummarizer {
             List<ChatMessage> messages,
             int maxTokens
     );
+
+    default MemorySummary summarizeTurn(List<ChatMessage> messages, int maxTokens) {
+        return summarize("", messages, maxTokens);
+    }
 }

@@ -69,6 +69,7 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
                     memory.summaryVersion,
                     memory.summarizedMessageCount,
                     memory.dialogState,
+                    memory.turnSummaries,
                     memory.updatedAt
             );
         }
@@ -85,6 +86,8 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
             memory.summarizedMessageCount = stored.summarizedMessageCount();
             memory.dialogState.clear();
             memory.dialogState.putAll(stored.dialogState());
+            memory.turnSummaries.clear();
+            memory.turnSummaries.putAll(stored.turnSummaries());
             memory.updatedAt = stored.updatedAt();
         }
     }
@@ -100,6 +103,7 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
         private String rollingSummary = "";
         private int summaryVersion = 0;
         private int summarizedMessageCount = 0;
+        private final Map<String, TurnSummary> turnSummaries = new LinkedHashMap<>();
         private Instant updatedAt = Instant.now();
     }
 }

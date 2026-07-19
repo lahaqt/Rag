@@ -29,7 +29,7 @@ public record RagProperties(
             retrieval = new Retrieval(6, 0.0, "hybrid", true, 4, null);
         }
         if (prompt == null) {
-            prompt = new Prompt(200000, 2400, 8000, 32000, 48000);
+            prompt = new Prompt(200000, 2400, 8000, 32000, 112000);
         }
         if (llm == null) {
             llm = new Llm(
@@ -55,7 +55,10 @@ public record RagProperties(
             multiAgent = new MultiAgent(4, 12, true);
         }
         if (memory == null) {
-            memory = new Memory("in-memory", true, 200000, 32000, 4000, 16, 86400L, "llm", 4, true, null);
+            memory = new Memory(
+                    "in-memory", true, 200000, null, 4000, 16, 86400L,
+                    "llm", 4, true, null, 64000, 6, 16000, 2000
+            );
         }
     }
 
@@ -155,7 +158,7 @@ public record RagProperties(
             Integer maxHistoryTokens
     ) {
         public Prompt(Integer contextWindowTokens) {
-            this(contextWindowTokens, 2400, 8000, 32000, 48000);
+            this(contextWindowTokens, 2400, 8000, 32000, 112000);
         }
 
         public Prompt {
@@ -173,7 +176,7 @@ public record RagProperties(
                     ? Math.min(32000, inputBudget / 4)
                     : Math.max(0, Math.min(maxAttachmentTokens, inputBudget));
             maxHistoryTokens = maxHistoryTokens == null
-                    ? Math.min(48000, inputBudget / 3)
+                    ? Math.min(112000, inputBudget * 3 / 5)
                     : Math.max(1024, Math.min(maxHistoryTokens, inputBudget));
         }
 
@@ -325,7 +328,11 @@ public record RagProperties(
             String summaryMode,
             Integer semanticMemoryMaxItems,
             Boolean profileEnabled,
-            SemanticEmbedding semanticEmbedding
+            SemanticEmbedding semanticEmbedding,
+            Integer compactionTriggerTokens,
+            Integer protectedRecentTurns,
+            Integer oversizedTurnTokens,
+            Integer turnSummaryMaxTokens
     ) {
         public record SemanticEmbedding(
                 Boolean enabled,
@@ -370,6 +377,10 @@ public record RagProperties(
                     summaryMode,
                     4,
                     true,
+                    null,
+                    null,
+                    null,
+                    null,
                     null
             );
         }
@@ -394,6 +405,10 @@ public record RagProperties(
                     "llm",
                     4,
                     true,
+                    null,
+                    null,
+                    null,
+                    null,
                     null
             );
         }
@@ -421,6 +436,42 @@ public record RagProperties(
                     summaryMode,
                     semanticMemoryMaxItems,
                     profileEnabled,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+        }
+
+        public Memory(
+                String provider,
+                Boolean enabled,
+                Integer contextWindowTokens,
+                Integer recentTokenBudget,
+                Integer summaryMaxTokens,
+                Integer stateMaxEntries,
+                Long ttlSeconds,
+                String summaryMode,
+                Integer semanticMemoryMaxItems,
+                Boolean profileEnabled,
+                SemanticEmbedding semanticEmbedding
+        ) {
+            this(
+                    provider,
+                    enabled,
+                    contextWindowTokens,
+                    recentTokenBudget,
+                    summaryMaxTokens,
+                    stateMaxEntries,
+                    ttlSeconds,
+                    summaryMode,
+                    semanticMemoryMaxItems,
+                    profileEnabled,
+                    semanticEmbedding,
+                    null,
+                    null,
+                    null,
                     null
             );
         }
@@ -433,8 +484,21 @@ public record RagProperties(
                     ? 200000
                     : Math.max(4096, contextWindowTokens);
             recentTokenBudget = recentTokenBudget == null
-                    ? Math.min(32000, contextWindowTokens / 5)
+                    ? null
                     : Math.max(16, Math.min(recentTokenBudget, contextWindowTokens / 2));
+            compactionTriggerTokens = compactionTriggerTokens == null
+                    ? (recentTokenBudget == null ? Math.min(64000, contextWindowTokens / 3) : recentTokenBudget)
+                    : Math.max(16, Math.min(compactionTriggerTokens, contextWindowTokens / 2));
+            recentTokenBudget = recentTokenBudget == null ? compactionTriggerTokens : recentTokenBudget;
+            protectedRecentTurns = protectedRecentTurns == null
+                    ? 6
+                    : Math.max(1, Math.min(protectedRecentTurns, 20));
+            oversizedTurnTokens = oversizedTurnTokens == null
+                    ? Math.min(16000, compactionTriggerTokens)
+                    : Math.max(16, Math.min(oversizedTurnTokens, compactionTriggerTokens));
+            turnSummaryMaxTokens = turnSummaryMaxTokens == null
+                    ? Math.max(16, Math.min(2000, oversizedTurnTokens / 4))
+                    : Math.max(16, Math.min(turnSummaryMaxTokens, oversizedTurnTokens));
             summaryMaxTokens = summaryMaxTokens == null
                     ? Math.min(4000, contextWindowTokens / 20)
                     : Math.max(16, Math.min(summaryMaxTokens, contextWindowTokens / 4));

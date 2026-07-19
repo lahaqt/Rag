@@ -14,6 +14,7 @@ import org.springframework.stereotype.Component;
 
 @Component
 public class PromptBuilder {
+    private static final int TRAILING_INSTRUCTION_RESERVE_TOKENS = 512;
     private final RagProperties properties;
 
     public PromptBuilder(RagProperties properties) {
@@ -94,6 +95,7 @@ public class PromptBuilder {
                 只能使用已提供的片段编号；不要在答案末尾集中罗列编号，也不要编造来源、编号或原文。
                 """);
         appendReflectionHint(prompt, reflectionHint);
+        validateInputBudget(systemPrompt(), prompt);
         return prompt.toString();
     }
 
@@ -135,6 +137,7 @@ public class PromptBuilder {
                 只能使用已提供的结果编号；不要在答案末尾集中罗列编号，也不要编造来源、编号或原文。
                 """);
         appendReflectionHint(prompt, reflectionHint);
+        validateInputBudget(webSearchSystemPrompt(), prompt);
         return prompt.toString();
     }
 
@@ -171,6 +174,7 @@ public class PromptBuilder {
                 如果工具返回不足以回答，请直接说明还缺少什么。
                 """);
         appendReflectionHint(prompt, reflectionHint);
+        validateInputBudget(toolSystemPrompt(), prompt);
         return prompt.toString();
     }
 
@@ -206,6 +210,7 @@ public class PromptBuilder {
                 只能使用已提供的编号；无法从证据确认的内容要明确说明。
                 """);
         appendReflectionHint(prompt, reflectionHint);
+        validateInputBudget(multiAgentSystemPrompt(), prompt);
         return prompt.toString();
     }
 
@@ -217,9 +222,16 @@ public class PromptBuilder {
     }
 
     private int initialContextBudget(String systemPrompt, StringBuilder prompt) {
-        return Math.max(0, properties.prompt().inputTokenBudget()
-                - TokenEstimator.estimate(systemPrompt)
-                - TokenEstimator.estimate(prompt.toString()));
+        int requiredTokens = TokenEstimator.estimate(systemPrompt)
+                + TokenEstimator.estimate(prompt.toString())
+                + TRAILING_INSTRUCTION_RESERVE_TOKENS;
+        if (requiredTokens > properties.prompt().inputTokenBudget()) {
+            throw new IllegalArgumentException(
+                    "Chat query exceeds the configured model context limit of "
+                            + properties.prompt().contextWindowTokens() + " tokens."
+            );
+        }
+        return properties.prompt().inputTokenBudget() - requiredTokens;
     }
 
     private int appendAttachments(StringBuilder prompt, List<ChatAttachment> attachments, int remainingTokens) {
@@ -290,32 +302,20 @@ public class PromptBuilder {
         if (messages.isEmpty() || tokenBudget <= 0) {
             return 0;
         }
+        if (keepNewest) {
+            return appendNewestCompleteTurns(prompt, messages, tokenBudget);
+        }
         List<ChatMessage> selected = new ArrayList<>();
         int selectedTokens = 0;
-        if (keepNewest) {
-            for (int index = messages.size() - 1; index >= 0; index--) {
-                ChatMessage message = messages.get(index);
-                int tokens = TokenEstimator.estimate(message);
-                if (!selected.isEmpty() && selectedTokens + tokens > tokenBudget) {
-                    break;
-                }
-                selected.add(0, message);
-                selectedTokens += tokens;
-                if (selectedTokens >= tokenBudget) {
-                    break;
-                }
+        for (ChatMessage message : messages) {
+            int tokens = TokenEstimator.estimate(message);
+            if (!selected.isEmpty() && selectedTokens + tokens > tokenBudget) {
+                break;
             }
-        } else {
-            for (ChatMessage message : messages) {
-                int tokens = TokenEstimator.estimate(message);
-                if (!selected.isEmpty() && selectedTokens + tokens > tokenBudget) {
-                    break;
-                }
-                selected.add(message);
-                selectedTokens += tokens;
-                if (selectedTokens >= tokenBudget) {
-                    break;
-                }
+            selected.add(message);
+            selectedTokens += tokens;
+            if (selectedTokens >= tokenBudget) {
+                break;
             }
         }
         int remaining = tokenBudget;
@@ -334,6 +334,74 @@ public class PromptBuilder {
             used += lineTokens;
         }
         return used;
+    }
+
+    private int appendNewestCompleteTurns(
+            StringBuilder prompt,
+            List<ChatMessage> messages,
+            int tokenBudget
+    ) {
+        List<List<ChatMessage>> turns = completeTurns(messages);
+        List<List<ChatMessage>> selected = new ArrayList<>();
+        int used = 0;
+        for (int index = turns.size() - 1; index >= 0; index--) {
+            List<ChatMessage> turn = turns.get(index);
+            int turnTokens = renderedTokens(turn);
+            if (used + turnTokens > tokenBudget) {
+                if (selected.isEmpty()) {
+                    throw new IllegalArgumentException(
+                            "Protected conversation history exceeds the configured history token budget."
+                    );
+                }
+                break;
+            }
+            selected.add(0, turn);
+            used += turnTokens;
+        }
+        for (List<ChatMessage> turn : selected) {
+            for (ChatMessage message : turn) {
+                prompt.append("- ")
+                        .append(message.role())
+                        .append(": ")
+                        .append(message.content())
+                        .append("\n");
+            }
+        }
+        return used;
+    }
+
+    private List<List<ChatMessage>> completeTurns(List<ChatMessage> messages) {
+        List<List<ChatMessage>> turns = new ArrayList<>();
+        for (int index = 0; index < messages.size();) {
+            ChatMessage first = messages.get(index);
+            int endExclusive = index + 1;
+            if ("user".equalsIgnoreCase(first.role())
+                    && endExclusive < messages.size()
+                    && "assistant".equalsIgnoreCase(messages.get(endExclusive).role())) {
+                endExclusive++;
+            }
+            turns.add(List.copyOf(messages.subList(index, endExclusive)));
+            index = endExclusive;
+        }
+        return turns;
+    }
+
+    private int renderedTokens(List<ChatMessage> messages) {
+        int tokens = 0;
+        for (ChatMessage message : messages) {
+            tokens += TokenEstimator.estimate("- " + message.role() + ": " + message.content() + "\n");
+        }
+        return tokens;
+    }
+
+    private void validateInputBudget(String systemPrompt, StringBuilder prompt) {
+        int total = TokenEstimator.estimate(systemPrompt) + TokenEstimator.estimate(prompt.toString());
+        if (total > properties.prompt().inputTokenBudget()) {
+            throw new IllegalArgumentException(
+                    "Chat prompt exceeds the configured model context limit of "
+                            + properties.prompt().contextWindowTokens() + " tokens."
+            );
+        }
     }
 
     private int appendContext(StringBuilder prompt, List<RetrievalHit> hits) {

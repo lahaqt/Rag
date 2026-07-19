@@ -66,7 +66,7 @@ rag:
     reserved-output-tokens: 2400
     safety-margin-tokens: 8000
     max-attachment-tokens: 32000
-    max-history-tokens: 48000
+    max-history-tokens: 112000
   tools:
     web-search:
       provider: bing
@@ -96,7 +96,10 @@ rag:
     enabled: true
     ttl-seconds: 86400
     context-window-tokens: 200000
-    recent-token-budget: 32000
+    compaction-trigger-tokens: 64000
+    protected-recent-turns: 6
+    oversized-turn-tokens: 16000
+    turn-summary-max-tokens: 2000
     summary-max-tokens: 4000
     summary-mode: llm
     semantic-memory-max-items: 4

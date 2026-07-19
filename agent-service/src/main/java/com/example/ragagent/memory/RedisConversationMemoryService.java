@@ -4,6 +4,7 @@ import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.ChatMessage;
 import com.example.ragagent.dto.ChatRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -71,7 +72,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         Boolean metaExists = redisTemplate.hasKey(metaKey);
         if (Boolean.FALSE.equals(metaExists) || metaExists == null) {
             if (request.normalizedHistory().isEmpty()) {
-                return new StoredMemory(List.of(), "", 0, 0, Map.of(), Instant.now());
+                return new StoredMemory(List.of(), "", 0, 0, Map.of(), Map.of(), Instant.now());
             }
             StoredMemory seed = StoredMemory.fromRequest(request);
             seedConversation(conversationId, seed);
@@ -82,12 +83,21 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         String summary = getStr(metaMap, "summary");
         int summaryVersion = getInt(metaMap, "summaryVersion");
         int summarizedMessageCount = getInt(metaMap, "summarizedMessageCount");
+        Map<String, TurnSummary> turnSummaries = deserializeTurnSummaries(getStr(metaMap, "turnSummaries"));
         Instant updatedAt = Instant.parse(getStr(metaMap, "updatedAt"));
 
         List<ChatMessage> allMessages = readAllMessages(messagesKey);
         Map<String, String> dialogState = readState(stateKey);
 
-        return new StoredMemory(allMessages, summary, summaryVersion, summarizedMessageCount, dialogState, updatedAt);
+        return new StoredMemory(
+                allMessages,
+                summary,
+                summaryVersion,
+                summarizedMessageCount,
+                dialogState,
+                turnSummaries,
+                updatedAt
+        );
     }
 
     @Override
@@ -95,8 +105,9 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         try {
             doPersist(conversationId, memory);
         } catch (Exception ex) {
-            log.warn("Redis memory persist failed, ignoring. conversation={} error={}",
+            log.warn("Redis memory persist failed. conversation={} error={}",
                     conversationId, ex.getMessage());
+            throw new IllegalStateException("Redis memory persist failed.", ex);
         }
     }
 
@@ -124,6 +135,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         meta.put("summaryVersion", Integer.toString(memory.summaryVersion()));
         meta.put("summarizedMessageCount", Integer.toString(memory.summarizedMessageCount()));
         meta.put("messageCount", Integer.toString(memory.summarizedMessageCount() + memory.messages().size()));
+        meta.put("turnSummaries", serializeTurnSummaries(memory.turnSummaries()));
         meta.put("updatedAt", memory.updatedAt().toString());
         redisTemplate.opsForHash().putAll(metaKey, meta);
 
@@ -153,6 +165,7 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
         meta.put("summaryVersion", Integer.toString(seed.summaryVersion()));
         meta.put("summarizedMessageCount", Integer.toString(seed.summarizedMessageCount()));
         meta.put("messageCount", Integer.toString(seed.messages().size()));
+        meta.put("turnSummaries", serializeTurnSummaries(seed.turnSummaries()));
         meta.put("updatedAt", seed.updatedAt().toString());
         redisTemplate.opsForHash().putAll(metaKey, meta);
 
@@ -197,6 +210,26 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
             return objectMapper.readValue(json, ChatMessage.class);
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to deserialize ChatMessage", e);
+        }
+    }
+
+    private String serializeTurnSummaries(Map<String, TurnSummary> turnSummaries) {
+        try {
+            return objectMapper.writeValueAsString(turnSummaries);
+        } catch (JsonProcessingException exception) {
+            throw new RuntimeException("Failed to serialize turn summaries", exception);
+        }
+    }
+
+    private Map<String, TurnSummary> deserializeTurnSummaries(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(json, new TypeReference<Map<String, TurnSummary>>() { });
+        } catch (JsonProcessingException exception) {
+            log.warn("Failed to deserialize turn summaries. error={}", exception.getMessage());
+            return Map.of();
         }
     }
 

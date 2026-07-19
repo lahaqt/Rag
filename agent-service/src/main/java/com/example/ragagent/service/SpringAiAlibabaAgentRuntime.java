@@ -425,7 +425,12 @@ public class SpringAiAlibabaAgentRuntime {
                     "prepare_context",
                     "graph=" + (context.multiAgent ? multiAgentGraphName() : ordinaryGraphName())
                             + "; memoryMessages=" + memory.rawMessageCount()
-                            + "; summaryVersion=" + memory.summaryVersion(),
+                            + "; summaryVersion=" + memory.summaryVersion()
+                            + "; effectiveHistoryTokens=" + memory.diagnostics().effectiveHistoryTokens()
+                            + "; recentTurns=" + memory.diagnostics().recentTurnCount()
+                            + "; protectedTurns=" + memory.diagnostics().protectedTurnCount()
+                            + "; oversizedTurns=" + memory.diagnostics().oversizedTurnCount()
+                            + "; summarizedMessages=" + memory.diagnostics().summarizedMessageCount(),
                     "ok",
                     durationMs(started)
             ));

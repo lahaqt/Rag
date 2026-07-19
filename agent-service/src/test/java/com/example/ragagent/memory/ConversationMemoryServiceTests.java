@@ -1,6 +1,11 @@
 package com.example.ragagent.memory;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.ChatMessage;
@@ -9,10 +14,18 @@ import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import com.example.ragagent.service.LlmGateway;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.ArrayList;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.redis.core.HashOperations;
+import org.springframework.data.redis.core.ListOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
+import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseType;
 
 class ConversationMemoryServiceTests {
 
@@ -50,7 +63,7 @@ class ConversationMemoryServiceTests {
                 null,
                 null,
                 null,
-                new RagProperties.Memory("in-memory", true, 4096, 20, 128, 16, 86400L)
+                memory(20, 1, 20, 16)
         );
         InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
                 properties,
@@ -158,7 +171,7 @@ class ConversationMemoryServiceTests {
     void compactsOnlyNewMessagesAfterTheSummaryCursor() {
         RagProperties properties = new RagProperties(
                 null, null, null, null, null, null, null, null,
-                new RagProperties.Memory("in-memory", true, 4096, 20, 128, 16, 86400L)
+                memory(20, 1, 20, 16)
         );
         List<List<ChatMessage>> summarizedSegments = new ArrayList<>();
         InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
@@ -186,10 +199,10 @@ class ConversationMemoryServiceTests {
     }
 
     @Test
-    void compactsAUsefulPrefixWhenOnlyTwoMessagesExceedTheTokenBudget() {
+    void preSummarizesAWholeOversizedTurnWithoutSplittingIt() {
         RagProperties properties = new RagProperties(
                 null, null, null, null, null, null, null, null,
-                new RagProperties.Memory("in-memory", true, 4096, 64, 128, 16, 86400L)
+                memory(2048, 6, 64, 128)
         );
         List<List<ChatMessage>> summarizedSegments = new ArrayList<>();
         InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
@@ -205,16 +218,20 @@ class ConversationMemoryServiceTests {
         memoryService.recordTurn(request, analysis(request), response("long-answer-" + "y".repeat(400)));
 
         assertThat(summarizedSegments).hasSize(1);
-        assertThat(summarizedSegments.get(0)).extracting(ChatMessage::role).containsExactly("user");
-        assertThat(TokenEstimator.estimateMessages(memoryService.load(request("follow up")).recentMessages()))
-                .isLessThanOrEqualTo(64);
+        assertThat(summarizedSegments.get(0)).extracting(ChatMessage::role)
+                .containsExactly("user", "assistant");
+        MemoryContext context = memoryService.load(request("follow up"));
+        assertThat(context.recentMessages()).extracting(ChatMessage::role)
+                .containsExactly("conversation_turn_summary");
+        assertThat(context.rawMessageCount()).isEqualTo(2);
+        assertThat(context.diagnostics().oversizedTurnCount()).isEqualTo(1);
     }
 
     @Test
     void doesNotCompactManyShortMessagesWhileTheyFitTheTokenBudget() {
         RagProperties properties = new RagProperties(
                 null, null, null, null, null, null, null, null,
-                new RagProperties.Memory("in-memory", true, 4096, 512, 128, 16, 86400L)
+                memory(512, 6, 512, 128)
         );
         List<List<ChatMessage>> summarizedSegments = new ArrayList<>();
         InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
@@ -233,6 +250,282 @@ class ConversationMemoryServiceTests {
 
         assertThat(summarizedSegments).isEmpty();
         assertThat(memoryService.load(request("follow up")).recentMessages()).hasSize(20);
+    }
+
+    @Test
+    void compactsOnlyThePrefixBeforeSixProtectedTurns() {
+        RagProperties properties = new RagProperties(
+                null, null, null, null, null, null, null, null,
+                memory(90, 6, 90, 64)
+        );
+        List<List<ChatMessage>> summarizedSegments = new ArrayList<>();
+        InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
+                properties,
+                (current, messages, maxTokens) -> {
+                    summarizedSegments.add(List.copyOf(messages));
+                    return new MemorySummary("rolling-summary", true);
+                },
+                new BusinessConversationStateExtractor()
+        );
+
+        for (int index = 0; index < 7; index++) {
+            ChatRequest request = request("question-" + index + "-" + "x".repeat(40));
+            memoryService.recordTurn(request, analysis(request), response("answer-" + index + "-" + "y".repeat(40)));
+        }
+
+        assertThat(summarizedSegments).hasSize(1);
+        assertThat(summarizedSegments.get(0)).extracting(ChatMessage::content)
+                .containsExactly("question-0-" + "x".repeat(40), "answer-0-" + "y".repeat(40));
+        MemoryContext context = memoryService.load(request("follow up"));
+        assertThat(context.recentMessages()).hasSize(12);
+        assertThat(context.recentMessages().get(0).content()).startsWith("question-1-");
+        assertThat(context.diagnostics().protectedTurnCount()).isEqualTo(6);
+    }
+
+    @Test
+    void keepsSixProtectedTurnsEvenWhenTheyExceedTheCompactionTrigger() {
+        RagProperties properties = new RagProperties(
+                null, null, null, null, null, null, null, null,
+                memory(60, 6, 60, 32)
+        );
+        List<List<ChatMessage>> summarizedSegments = new ArrayList<>();
+        InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
+                properties,
+                (current, messages, maxTokens) -> {
+                    summarizedSegments.add(List.copyOf(messages));
+                    return new MemorySummary("summary", true);
+                },
+                new BusinessConversationStateExtractor()
+        );
+
+        for (int index = 0; index < 6; index++) {
+            ChatRequest request = request("q" + index + "-" + "x".repeat(40));
+            memoryService.recordTurn(request, analysis(request), response("a" + index + "-" + "y".repeat(40)));
+        }
+
+        assertThat(summarizedSegments).isEmpty();
+        assertThat(memoryService.load(request("follow up")).recentMessages()).hasSize(12);
+    }
+
+    @Test
+    void preSummarizesOnlyWhenATurnStrictlyExceedsItsThreshold() {
+        String question = "question-" + "x".repeat(80);
+        String answer = "answer-" + "y".repeat(80);
+        int turnTokens = TokenEstimator.estimateMessages(List.of(
+                new ChatMessage("user", question),
+                new ChatMessage("assistant", answer)
+        ));
+        List<List<ChatMessage>> exactCalls = new ArrayList<>();
+        InMemoryConversationMemoryService exactService = serviceWithSummaryCapture(
+                memory(2048, 6, turnTokens, 64), exactCalls
+        );
+        ChatRequest exactRequest = request(question);
+        exactService.recordTurn(exactRequest, analysis(exactRequest), response(answer));
+
+        List<List<ChatMessage>> overCalls = new ArrayList<>();
+        InMemoryConversationMemoryService overService = serviceWithSummaryCapture(
+                memory(2048, 6, turnTokens - 1, 64), overCalls
+        );
+        ChatRequest overRequest = request(question);
+        overService.recordTurn(overRequest, analysis(overRequest), response(answer));
+
+        assertThat(exactCalls).isEmpty();
+        assertThat(exactService.load(request("follow up")).recentMessages())
+                .extracting(ChatMessage::role)
+                .containsExactly("user", "assistant");
+        assertThat(overCalls).hasSize(1);
+        assertThat(overService.load(request("follow up")).recentMessages())
+                .extracting(ChatMessage::role)
+                .containsExactly("conversation_turn_summary");
+    }
+
+    @Test
+    void groupsOrphanAndUnexpectedMessagesAsAtomicTurns() {
+        List<ConversationTurn> turns = ConversationTurn.group(List.of(
+                new ChatMessage("user", "orphan user"),
+                new ChatMessage("user", "paired user"),
+                new ChatMessage("assistant", "paired answer"),
+                new ChatMessage("tool", "orphan tool")
+        ), 10);
+
+        assertThat(turns).extracting(ConversationTurn::messageCount).containsExactly(1, 2, 1);
+        assertThat(turns).extracting(ConversationTurn::startMessageIndex).containsExactly(10, 11, 13);
+    }
+
+    @Test
+    void doesNotDuplicateACanonicalTurnWithABlankAssistantAnswer() {
+        RagProperties properties = new RagProperties(
+                null, null, null, null, null, null, null, null,
+                memory(512, 6, 512, 64)
+        );
+        InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(properties);
+        ChatRequest request = new ChatRequest(
+                "same question",
+                "kb-1",
+                "session-1",
+                List.of(
+                        new ChatMessage("user", "same question"),
+                        new ChatMessage("assistant", "")
+                ),
+                null
+        );
+
+        memoryService.recordTurn(request, analysis(request), response(""));
+
+        assertThat(memoryService.load(request("follow up")).recentMessages())
+                .extracting(ChatMessage::role)
+                .containsExactly("user", "assistant");
+    }
+
+    @Test
+    void postgresRestoresTurnSummariesWithoutChangingCanonicalHistory() {
+        EmbeddedDatabase database = new EmbeddedDatabaseBuilder()
+                .setName("turn-summary-persistence;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=false")
+                .setType(EmbeddedDatabaseType.H2)
+                .build();
+        try {
+            JdbcTemplate jdbcTemplate = new JdbcTemplate(database);
+            jdbcTemplate.execute("""
+                    CREATE TABLE chat_conversations (
+                        id VARCHAR(128) PRIMARY KEY,
+                        user_id VARCHAR(128) NOT NULL
+                    )
+                    """);
+            jdbcTemplate.execute("""
+                    CREATE TABLE chat_messages (
+                        conversation_id VARCHAR(128) NOT NULL,
+                        seq INT NOT NULL,
+                        role VARCHAR(32) NOT NULL,
+                        content TEXT NOT NULL
+                    )
+                    """);
+            String question = "large-question-" + "x".repeat(400);
+            String answer = "large-answer-" + "y".repeat(400);
+            jdbcTemplate.update("INSERT INTO chat_conversations (id, user_id) VALUES (?, ?)",
+                    "session-1", "local-user");
+            jdbcTemplate.update("INSERT INTO chat_messages (conversation_id, seq, role, content) VALUES (?, ?, ?, ?)",
+                    "session-1", 0, "user", question);
+            jdbcTemplate.update("INSERT INTO chat_messages (conversation_id, seq, role, content) VALUES (?, ?, ?, ?)",
+                    "session-1", 1, "assistant", answer);
+
+            RagProperties properties = new RagProperties(
+                    null, null, null, null, null, null, null, null,
+                    memory(2048, 6, 64, 128)
+            );
+            List<List<ChatMessage>> calls = new ArrayList<>();
+            ConversationSummarizer summarizer = (current, messages, maxTokens) -> {
+                calls.add(List.copyOf(messages));
+                return new MemorySummary("persisted-turn-summary", true);
+            };
+            PostgresConversationMemoryService first = new PostgresConversationMemoryService(
+                    jdbcTemplate,
+                    properties,
+                    summarizer,
+                    new BusinessConversationStateExtractor(),
+                    new InMemorySemanticMemoryStore(),
+                    new InMemoryUserProfileStore(),
+                    new BusinessLongTermMemoryExtractor()
+            );
+            ChatRequest request = request(question);
+            first.recordTurn(request, analysis(request), response(answer));
+
+            PostgresConversationMemoryService reloaded = new PostgresConversationMemoryService(
+                    jdbcTemplate,
+                    properties,
+                    summarizer,
+                    new BusinessConversationStateExtractor(),
+                    new InMemorySemanticMemoryStore(),
+                    new InMemoryUserProfileStore(),
+                    new BusinessLongTermMemoryExtractor()
+            );
+            MemoryContext context = reloaded.load(request("follow up"));
+
+            assertThat(calls).hasSize(1);
+            assertThat(context.recentMessages()).extracting(ChatMessage::role)
+                    .containsExactly("conversation_turn_summary");
+            assertThat(context.recentMessages().get(0).content()).contains("persisted-turn-summary");
+            assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM chat_messages", Integer.class))
+                    .isEqualTo(2);
+            assertThat(jdbcTemplate.queryForList(
+                    "SELECT content FROM chat_messages ORDER BY seq", String.class
+            )).containsExactly(question, answer);
+        } finally {
+            database.shutdown();
+        }
+    }
+
+    @Test
+    void redisRestoresTurnSummariesWithoutCallingTheSummarizerAgain() {
+        StringRedisTemplate redisTemplate = mock(StringRedisTemplate.class);
+        @SuppressWarnings("unchecked")
+        HashOperations<String, Object, Object> hashOperations = mock(HashOperations.class);
+        @SuppressWarnings("unchecked")
+        ListOperations<String, String> listOperations = mock(ListOperations.class);
+        Map<String, Map<Object, Object>> hashes = new LinkedHashMap<>();
+        Map<String, List<String>> lists = new LinkedHashMap<>();
+        when(redisTemplate.opsForHash()).thenReturn(hashOperations);
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+        when(redisTemplate.hasKey(anyString())).thenAnswer(invocation ->
+                hashes.containsKey(invocation.getArgument(0)));
+        when(hashOperations.entries(anyString())).thenAnswer(invocation ->
+                new LinkedHashMap<>(hashes.getOrDefault(invocation.getArgument(0), Map.of())));
+        doAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            Map<?, ?> values = invocation.getArgument(1);
+            hashes.computeIfAbsent(key, ignored -> new LinkedHashMap<>()).putAll(values);
+            return null;
+        }).when(hashOperations).putAll(anyString(), anyMap());
+        when(listOperations.range(anyString(), org.mockito.ArgumentMatchers.anyLong(),
+                org.mockito.ArgumentMatchers.anyLong())).thenAnswer(invocation ->
+                new ArrayList<>(lists.getOrDefault(invocation.getArgument(0), List.of())));
+        when(listOperations.rightPush(anyString(), anyString())).thenAnswer(invocation -> {
+            List<String> values = lists.computeIfAbsent(invocation.getArgument(0), ignored -> new ArrayList<>());
+            values.add(invocation.getArgument(1));
+            return (long) values.size();
+        });
+        doAnswer(invocation -> {
+            String key = invocation.getArgument(0);
+            hashes.remove(key);
+            lists.remove(key);
+            return true;
+        }).when(redisTemplate).delete(anyString());
+
+        RagProperties properties = new RagProperties(
+                null, null, null, null, null, null, null, null,
+                memory(2048, 6, 64, 128)
+        );
+        List<List<ChatMessage>> calls = new ArrayList<>();
+        ConversationSummarizer summarizer = (current, messages, maxTokens) -> {
+            calls.add(List.copyOf(messages));
+            return new MemorySummary("redis-turn-summary", true);
+        };
+        RedisConversationMemoryService first = new RedisConversationMemoryService(
+                redisTemplate,
+                properties,
+                summarizer,
+                new BusinessConversationStateExtractor(),
+                new InMemorySemanticMemoryStore(),
+                new InMemoryUserProfileStore(),
+                new BusinessLongTermMemoryExtractor()
+        );
+        ChatRequest request = request("large-question-" + "x".repeat(400));
+        first.recordTurn(request, analysis(request), response("large-answer-" + "y".repeat(400)));
+
+        RedisConversationMemoryService reloaded = new RedisConversationMemoryService(
+                redisTemplate,
+                properties,
+                summarizer,
+                new BusinessConversationStateExtractor(),
+                new InMemorySemanticMemoryStore(),
+                new InMemoryUserProfileStore(),
+                new BusinessLongTermMemoryExtractor()
+        );
+        MemoryContext context = reloaded.load(request("follow up"));
+
+        assertThat(calls).hasSize(1);
+        assertThat(context.recentMessages()).extracting(ChatMessage::role)
+                .containsExactly("conversation_turn_summary");
+        assertThat(context.recentMessages().get(0).content()).contains("redis-turn-summary");
     }
 
     @Test
@@ -290,6 +583,7 @@ class ConversationMemoryServiceTests {
         MemorySummary summary = summarizer.summarize("", messages, 128);
 
         assertThat(summary.content()).contains("ABC123456", "2026-08-01", "200000 tokens");
+        assertThat(summary.fallbackUsed()).isTrue();
         assertThat(gateway.lastPrompt)
                 .contains("Preserve every exact identifier")
                 .contains("ABC123456");
@@ -311,6 +605,30 @@ class ConversationMemoryServiceTests {
         )), 128);
 
         assertThat(summary.content()).isEqualTo(gateway.answer);
+        assertThat(summary.factCoverage()).isEqualTo(1.0);
+        assertThat(summary.fallbackUsed()).isFalse();
+    }
+
+    @Test
+    void requestsStructuredSectionsForAnOversizedTurnSummary() {
+        StubLlmGateway gateway = new StubLlmGateway(
+                "User goal: order ABC123456. Assistant result: due 2026-08-01."
+        );
+        LlmConversationSummarizer summarizer = new LlmConversationSummarizer(
+                gateway,
+                new WindowConversationSummarizer()
+        );
+
+        summarizer.summarizeTurn(List.of(new ChatMessage(
+                "user",
+                "Order ABC123456 is due on 2026-08-01."
+        )), 128);
+
+        assertThat(gateway.lastPrompt)
+                .contains("User goal")
+                .contains("Assistant result")
+                .contains("Decisions and constraints")
+                .contains("Unresolved items");
     }
 
     @Test
@@ -365,6 +683,48 @@ class ConversationMemoryServiceTests {
 
     private ChatRequest request(String query) {
         return new ChatRequest(query, "kb-1", "session-1", List.of(), null);
+    }
+
+    private InMemoryConversationMemoryService serviceWithSummaryCapture(
+            RagProperties.Memory memory,
+            List<List<ChatMessage>> calls
+    ) {
+        RagProperties properties = new RagProperties(
+                null, null, null, null, null, null, null, null, memory
+        );
+        return new InMemoryConversationMemoryService(
+                properties,
+                (current, messages, maxTokens) -> {
+                    calls.add(List.copyOf(messages));
+                    return new MemorySummary("turn-summary", true);
+                },
+                new BusinessConversationStateExtractor()
+        );
+    }
+
+    private RagProperties.Memory memory(
+            int compactionTriggerTokens,
+            int protectedRecentTurns,
+            int oversizedTurnTokens,
+            int turnSummaryMaxTokens
+    ) {
+        return new RagProperties.Memory(
+                "in-memory",
+                true,
+                4096,
+                null,
+                128,
+                16,
+                86400L,
+                "window",
+                4,
+                true,
+                null,
+                compactionTriggerTokens,
+                protectedRecentTurns,
+                oversizedTurnTokens,
+                turnSummaryMaxTokens
+        );
     }
 
     private static final class StubLlmGateway implements LlmGateway {

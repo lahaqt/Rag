@@ -4,7 +4,10 @@ import com.example.ragagent.config.RagProperties;
 import com.example.ragagent.dto.ChatMessage;
 import com.example.ragagent.dto.ChatRequest;
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -12,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 
@@ -27,6 +31,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
                 summarized_message_count INT   NOT NULL DEFAULT 0,
                 message_count    INT           NOT NULL DEFAULT 0,
                 dialog_state     JSONB         NOT NULL DEFAULT '{}',
+                turn_summaries   JSONB         NOT NULL DEFAULT '{}',
                 knowledge_base_id VARCHAR(64),
                 created_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
                 updated_at       TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
@@ -52,15 +57,20 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             """;
 
     private static final String SELECT_META_SQL = """
-            SELECT summary, summary_version, summarized_message_count, dialog_state
+            SELECT summary, summary_version, summarized_message_count, dialog_state, turn_summaries
             FROM conversation_memory
             WHERE id = ? AND expires_at > now()
             """;
 
     private static final String INSERT_MEMORY_SQL = """
             INSERT INTO conversation_memory (id, expires_at)
-            VALUES (?, now() + ? * interval '1 second')
-            ON CONFLICT (id) DO UPDATE SET expires_at = EXCLUDED.expires_at, updated_at = now()
+            VALUES (?, ?)
+            """;
+
+    private static final String TOUCH_MEMORY_SQL = """
+            UPDATE conversation_memory
+            SET expires_at = ?, updated_at = now()
+            WHERE id = ?
             """;
 
     private static final String SELECT_ALL_MESSAGES_SQL = """
@@ -86,8 +96,8 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             UPDATE conversation_memory
             SET summary = ?, summary_version = ?, message_count = ?,
                 summarized_message_count = ?,
-                dialog_state = ?::jsonb, updated_at = now(),
-                expires_at = now() + ? * interval '1 second'
+                dialog_state = ?::jsonb, turn_summaries = ?::jsonb, updated_at = now(),
+                expires_at = ?
             WHERE id = ?
             """;
 
@@ -132,6 +142,7 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             jdbcTemplate.execute(CREATE_MEMORY_TABLE_SQL);
             jdbcTemplate.execute(CREATE_MESSAGES_TABLE_SQL);
             jdbcTemplate.execute("ALTER TABLE conversation_memory ADD COLUMN IF NOT EXISTS summarized_message_count INT NOT NULL DEFAULT 0");
+            jdbcTemplate.execute("ALTER TABLE conversation_memory ADD COLUMN IF NOT EXISTS turn_summaries JSONB NOT NULL DEFAULT '{}'");
             jdbcTemplate.execute(CREATE_INDEX_SQL);
             cleanExpiredConversations();
         } catch (Exception ex) {
@@ -165,12 +176,13 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
     private StoredMemory doLoad(String conversationId, ChatRequest request) {
         List<Map<String, Object>> metaRows = jdbcTemplate.queryForList(SELECT_META_SQL, conversationId);
         if (metaRows.isEmpty()) {
-            jdbcTemplate.update(INSERT_MEMORY_SQL, conversationId, config.ttlSeconds());
+            ensureMemoryRow(conversationId);
             return new StoredMemory(
                     canonicalOrRequestMessages(conversationId, request, 0),
                     "",
                     0,
                     0,
+                    Map.of(),
                     Map.of(),
                     Instant.now()
             );
@@ -181,10 +193,19 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         int summaryVersion = ((Number) metaRow.get("summary_version")).intValue();
         int summarizedMessageCount = ((Number) metaRow.get("summarized_message_count")).intValue();
         Map<String, String> dialogState = parseDialogState(metaRow.get("dialog_state"));
+        Map<String, TurnSummary> turnSummaries = parseTurnSummaries(metaRow.get("turn_summaries"));
 
         List<ChatMessage> allMessages = canonicalOrLegacyMessages(conversationId, request, summarizedMessageCount);
 
-        return new StoredMemory(allMessages, summary, summaryVersion, summarizedMessageCount, dialogState, Instant.now());
+        return new StoredMemory(
+                allMessages,
+                summary,
+                summaryVersion,
+                summarizedMessageCount,
+                dialogState,
+                turnSummaries,
+                Instant.now()
+        );
     }
 
     @Override
@@ -192,8 +213,9 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         try {
             doPersist(conversationId, memory);
         } catch (Exception ex) {
-            log.warn("Postgres memory persist failed, ignoring. conversation={} error={}",
+            log.warn("Postgres memory persist failed. conversation={} error={}",
                     conversationId, ex.getMessage());
+            throw new IllegalStateException("Postgres memory persist failed.", ex);
         }
     }
 
@@ -208,15 +230,29 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
 
     private void doPersist(String conversationId, StoredMemory memory) {
         String dialogStateJson = serializeDialogState(memory.dialogState());
+        String turnSummariesJson = serializeTurnSummaries(memory.turnSummaries());
         jdbcTemplate.update(UPDATE_MEMORY_SQL,
                 memory.rollingSummary(),
                 memory.summaryVersion(),
                 memory.summarizedMessageCount() + memory.messages().size(),
                 memory.summarizedMessageCount(),
                 dialogStateJson,
-                config.ttlSeconds(),
+                turnSummariesJson,
+                Timestamp.from(Instant.now().plusSeconds(config.ttlSeconds())),
                 conversationId
         );
+    }
+
+    private void ensureMemoryRow(String conversationId) {
+        Timestamp expiresAt = Timestamp.from(Instant.now().plusSeconds(config.ttlSeconds()));
+        if (jdbcTemplate.update(TOUCH_MEMORY_SQL, expiresAt, conversationId) > 0) {
+            return;
+        }
+        try {
+            jdbcTemplate.update(INSERT_MEMORY_SQL, conversationId, expiresAt);
+        } catch (DuplicateKeyException exception) {
+            jdbcTemplate.update(TOUCH_MEMORY_SQL, expiresAt, conversationId);
+        }
     }
 
     private List<ChatMessage> canonicalOrRequestMessages(String storageKey, ChatRequest request, int summarizedMessageCount) {
@@ -276,12 +312,12 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         }
         try {
             @SuppressWarnings("unchecked")
-            Map<String, Object> raw = objectMapper.readValue(jsonbValue.toString(), Map.class);
+            Map<String, Object> raw = objectMapper.readValue(jsonText(jsonbValue), Map.class);
             Map<String, String> state = new LinkedHashMap<>(raw.size());
             raw.forEach((k, v) -> state.put(k, v == null ? "" : v.toString()));
             return state;
         } catch (JsonProcessingException e) {
-            log.warn("Failed to parse dialog_state JSONB. value={} error={}", jsonbValue, e.getMessage());
+            log.warn("Failed to parse dialog_state JSONB. error={}", e.getMessage());
             return Map.of();
         }
     }
@@ -292,5 +328,38 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         } catch (JsonProcessingException e) {
             throw new RuntimeException("Failed to serialize dialog_state", e);
         }
+    }
+
+    private Map<String, TurnSummary> parseTurnSummaries(Object jsonbValue) {
+        if (jsonbValue == null || jsonbValue.toString().isBlank()) {
+            return Map.of();
+        }
+        try {
+            return objectMapper.readValue(
+                    jsonText(jsonbValue),
+                    new TypeReference<Map<String, TurnSummary>>() { }
+            );
+        } catch (JsonProcessingException exception) {
+            log.warn("Failed to parse turn_summaries JSONB. error={}", exception.getMessage());
+            return Map.of();
+        }
+    }
+
+    private String serializeTurnSummaries(Map<String, TurnSummary> turnSummaries) {
+        try {
+            return objectMapper.writeValueAsString(turnSummaries);
+        } catch (JsonProcessingException exception) {
+            throw new RuntimeException("Failed to serialize turn_summaries", exception);
+        }
+    }
+
+    private String jsonText(Object jsonbValue) throws JsonProcessingException {
+        String text = jsonbValue instanceof byte[] bytes
+                ? new String(bytes, StandardCharsets.UTF_8)
+                : jsonbValue.toString();
+        if (text.length() >= 2 && text.charAt(0) == '"' && text.charAt(text.length() - 1) == '"') {
+            return objectMapper.readValue(text, String.class);
+        }
+        return text;
     }
 }

@@ -9,15 +9,21 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
-import java.util.HexFormat;
 import java.util.ArrayList;
+import java.util.HexFormat;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class AbstractConversationMemoryService implements ConversationMemoryService {
 
+    private static final Logger log = LoggerFactory.getLogger(AbstractConversationMemoryService.class);
     protected static final Pattern WHITESPACE = Pattern.compile("\\s+");
 
     protected final RagProperties.Memory config;
@@ -130,10 +136,10 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             ChatResponse response
     ) {
         List<ChatMessage> messages = new ArrayList<>(memory.messages());
-        ChatMessage userMessage = new ChatMessage("user", normalize(request.query()));
+        ChatMessage userMessage = new ChatMessage("user", promptContent(request.query()));
         ChatMessage assistantMessage = response == null || response.answer() == null || response.answer().isBlank()
                 ? null
-                : new ChatMessage("assistant", normalize(response.answer()));
+                : new ChatMessage("assistant", promptContent(response.answer()));
         if (!endsWithTurn(messages, userMessage, assistantMessage)) {
             appendIfNew(messages, userMessage);
             if (assistantMessage != null) {
@@ -144,19 +150,45 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         String rollingSummary = memory.rollingSummary();
         int summaryVersion = memory.summaryVersion();
         int summarizedMessageCount = memory.summarizedMessageCount();
-        int messagesToCompact = compactPrefixSize(messages, config.recentTokenBudget());
-        if (messagesToCompact > 0) {
+        Map<String, TurnSummary> turnSummaries = new LinkedHashMap<>(memory.turnSummaries());
+        List<ConversationTurn> turns = ConversationTurn.group(messages, summarizedMessageCount);
+        removeStaleTurnSummaries(turnSummaries, turns);
+        summarizeOversizedTurns(turns, turnSummaries);
+
+        int tokensBeforeCompaction = effectiveHistoryTokens(rollingSummary, turns, turnSummaries);
+        int turnsToCompact = tokensBeforeCompaction > config.compactionTriggerTokens()
+                ? Math.max(0, turns.size() - config.protectedRecentTurns())
+                : 0;
+        int compactedMessageCount = 0;
+        if (turnsToCompact > 0) {
+            List<ConversationTurn> compactedTurns = turns.subList(0, turnsToCompact);
+            List<ChatMessage> summaryInput = projectedMessages(compactedTurns, turnSummaries);
             MemorySummary summary = summarizer.summarize(
                     rollingSummary,
-                    messages.subList(0, messagesToCompact),
+                    summaryInput,
                     config.summaryMaxTokens()
             );
             rollingSummary = summary.content();
             if (summary.changed()) {
                 summaryVersion++;
             }
-            summarizedMessageCount += messagesToCompact;
-            messages = new ArrayList<>(messages.subList(messagesToCompact, messages.size()));
+            compactedMessageCount = compactedTurns.stream().mapToInt(ConversationTurn::messageCount).sum();
+            summarizedMessageCount += compactedMessageCount;
+            messages = new ArrayList<>(messages.subList(compactedMessageCount, messages.size()));
+            compactedTurns.forEach(turn -> turnSummaries.remove(turn.contentHash()));
+            turns = ConversationTurn.group(messages, summarizedMessageCount);
+            log.info(
+                    "Conversation memory compacted tokensBefore={} tokensAfter={} compactedTurns={} protectedTurns={} "
+                            + "oversizedTurns={} summaryVersion={} factCoverage={} fallbackUsed={}",
+                    tokensBeforeCompaction,
+                    effectiveHistoryTokens(rollingSummary, turns, turnSummaries),
+                    turnsToCompact,
+                    turns.size(),
+                    turnSummaries.size(),
+                    summaryVersion,
+                    summary.factCoverage(),
+                    summary.fallbackUsed()
+            );
         }
 
         Map<String, String> dialogState = stateExtractor.extract(
@@ -174,6 +206,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 summaryVersion,
                 summarizedMessageCount,
                 dialogState,
+                turnSummaries,
                 Instant.now()
         );
     }
@@ -183,59 +216,91 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         UserProfile userProfile = config.profileEnabled()
                 ? userProfileStore.load(userId)
                 : new UserProfile(userId, Map.of(), null);
+        List<ConversationTurn> turns = ConversationTurn.group(
+                stored.messages(),
+                stored.summarizedMessageCount()
+        );
+        List<ChatMessage> projectedMessages = projectedMessages(turns, stored.turnSummaries());
         return new MemoryContext(
                 conversationId,
-                fitRecentMessages(stored.messages(), config.recentTokenBudget()),
+                projectedMessages,
                 stored.rollingSummary(),
                 stored.dialogState(),
                 List.of(),
                 userProfile,
                 stored.summarizedMessageCount() + stored.messages().size(),
-                stored.summaryVersion()
+                stored.summaryVersion(),
+                new MemoryDiagnostics(
+                        TokenEstimator.estimate(stored.rollingSummary())
+                                + TokenEstimator.estimateMessages(projectedMessages),
+                        turns.size(),
+                        Math.min(turns.size(), config.protectedRecentTurns()),
+                        stored.turnSummaries().size(),
+                        stored.summarizedMessageCount()
+                )
         );
     }
 
-    private int compactPrefixSize(List<ChatMessage> messages, int tokenBudget) {
-        if (messages == null || messages.isEmpty()) {
-            return 0;
-        }
-        int suffixTokens = 0;
-        int keepFrom = messages.size();
-        while (keepFrom > 0) {
-            int messageTokens = TokenEstimator.estimate(messages.get(keepFrom - 1));
-            if (keepFrom < messages.size() && suffixTokens + messageTokens > tokenBudget) {
-                break;
-            }
-            suffixTokens += messageTokens;
-            keepFrom--;
-            if (suffixTokens >= tokenBudget) {
-                break;
-            }
-        }
-        return keepFrom;
-    }
-
-    private List<ChatMessage> fitRecentMessages(List<ChatMessage> messages, int tokenBudget) {
-        if (messages == null || messages.isEmpty()) {
-            return List.of();
-        }
-        List<ChatMessage> selected = new ArrayList<>();
-        int remaining = tokenBudget;
-        for (int index = messages.size() - 1; index >= 0; index--) {
-            ChatMessage message = messages.get(index);
-            int messageTokens = TokenEstimator.estimate(message);
-            if (messageTokens <= remaining) {
-                selected.add(0, message);
-                remaining -= messageTokens;
+    private void summarizeOversizedTurns(
+            List<ConversationTurn> turns,
+            Map<String, TurnSummary> turnSummaries
+    ) {
+        for (ConversationTurn turn : turns) {
+            if (turn.tokenCount() <= config.oversizedTurnTokens()
+                    || turnSummaries.containsKey(turn.contentHash())) {
                 continue;
             }
-            if (selected.isEmpty() && remaining > 8) {
-                int contentBudget = Math.max(1, remaining - 4 - TokenEstimator.estimate(message.role()));
-                selected.add(new ChatMessage(message.role(), TokenEstimator.truncate(message.content(), contentBudget)));
-            }
-            break;
+            MemorySummary summary = summarizer.summarizeTurn(turn.messages(), config.turnSummaryMaxTokens());
+            turnSummaries.put(turn.contentHash(), new TurnSummary(
+                    turn.tokenCount(),
+                    summary.content(),
+                    1,
+                    summary.factCoverage(),
+                    summary.fallbackUsed()
+            ));
+            log.info(
+                    "Oversized conversation turn summarized rawTokens={} summaryTokens={} factCoverage={} "
+                            + "fallbackUsed={}",
+                    turn.tokenCount(),
+                    TokenEstimator.estimate(summary.content()),
+                    summary.factCoverage(),
+                    summary.fallbackUsed()
+            );
         }
-        return List.copyOf(selected);
+    }
+
+    private void removeStaleTurnSummaries(
+            Map<String, TurnSummary> turnSummaries,
+            List<ConversationTurn> turns
+    ) {
+        Set<String> activeHashes = new LinkedHashSet<>();
+        for (ConversationTurn turn : turns) {
+            activeHashes.add(turn.contentHash());
+        }
+        turnSummaries.keySet().removeIf(hash -> !activeHashes.contains(hash));
+    }
+
+    private int effectiveHistoryTokens(
+            String rollingSummary,
+            List<ConversationTurn> turns,
+            Map<String, TurnSummary> turnSummaries
+    ) {
+        int tokens = TokenEstimator.estimate(rollingSummary);
+        for (ConversationTurn turn : turns) {
+            tokens += TokenEstimator.estimateMessages(turn.promptMessages(turnSummaries.get(turn.contentHash())));
+        }
+        return tokens;
+    }
+
+    private List<ChatMessage> projectedMessages(
+            List<ConversationTurn> turns,
+            Map<String, TurnSummary> turnSummaries
+    ) {
+        List<ChatMessage> projected = new ArrayList<>();
+        for (ConversationTurn turn : turns) {
+            projected.addAll(turn.promptMessages(turnSummaries.get(turn.contentHash())));
+        }
+        return List.copyOf(projected);
     }
 
     protected MemoryContext noOpContext(ChatRequest request) {
@@ -292,11 +357,22 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             return false;
         }
         ChatMessage storedUser = messages.get(messages.size() - required);
+        if (assistantMessage == null) {
+            if (storedUser.role().equals(userMessage.role()) && storedUser.content().equals(userMessage.content())) {
+                return true;
+            }
+            if (messages.size() < 2) {
+                return false;
+            }
+            ChatMessage possibleUser = messages.get(messages.size() - 2);
+            ChatMessage possibleBlankAssistant = messages.get(messages.size() - 1);
+            return possibleUser.role().equals(userMessage.role())
+                    && possibleUser.content().equals(userMessage.content())
+                    && "assistant".equalsIgnoreCase(possibleBlankAssistant.role())
+                    && possibleBlankAssistant.content().isBlank();
+        }
         if (!storedUser.role().equals(userMessage.role()) || !storedUser.content().equals(userMessage.content())) {
             return false;
-        }
-        if (assistantMessage == null) {
-            return true;
         }
         ChatMessage storedAssistant = messages.get(messages.size() - 1);
         return storedAssistant.role().equals(assistantMessage.role())
@@ -336,12 +412,17 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         return WHITESPACE.matcher(value == null ? "" : value.trim()).replaceAll(" ");
     }
 
+    private String promptContent(String value) {
+        return value == null ? "" : value.trim();
+    }
+
     protected record StoredMemory(
             List<ChatMessage> messages,
             String rollingSummary,
             int summaryVersion,
             int summarizedMessageCount,
             Map<String, String> dialogState,
+            Map<String, TurnSummary> turnSummaries,
             Instant updatedAt
     ) {
         public StoredMemory {
@@ -349,6 +430,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             rollingSummary = rollingSummary == null ? "" : rollingSummary;
             summarizedMessageCount = Math.max(0, summarizedMessageCount);
             dialogState = dialogState == null ? Map.of() : Map.copyOf(dialogState);
+            turnSummaries = turnSummaries == null ? Map.of() : Map.copyOf(turnSummaries);
         }
 
         public static StoredMemory fromRequest(ChatRequest request) {
@@ -357,6 +439,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                     "",
                     0,
                     0,
+                    Map.of(),
                     Map.of(),
                     Instant.now()
             );
