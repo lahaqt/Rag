@@ -19,6 +19,8 @@ management:
       endpoint: http://127.0.0.1:9/v1/traces
 
 rag:
+  hitl:
+    checkpoint-store: memory
   mcp:
     enabled: false
   memory:

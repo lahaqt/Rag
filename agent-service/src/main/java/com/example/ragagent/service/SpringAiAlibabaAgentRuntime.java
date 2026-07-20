@@ -105,6 +105,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final long multiAgentMaxExecutionNanos;
     private final List<String> singleCapabilityPriority;
     private final Map<String, AgentExecutionContext> activeContexts = new ConcurrentHashMap<>();
+    private final ThreadLocal<String> humanFeedbackSignal = new ThreadLocal<>();
     private final CompiledGraph ordinaryGraph;
     private final CompiledGraph multiAgentGraph;
 
@@ -261,6 +262,7 @@ public class SpringAiAlibabaAgentRuntime {
             throw new IllegalStateException("Write approval has already been resumed or is not executable.");
         }
         try {
+            humanFeedbackSignal.set(approval.id());
             ChatResponse response = answer(run.request(), ChatStreamSink.noop(), TraceContextSnapshot.empty(), null,
                     run.multiAgent(), run.runId(), true);
             approvalService.completeExecution(approval.id());
@@ -268,6 +270,8 @@ public class SpringAiAlibabaAgentRuntime {
         } catch (RuntimeException exception) {
             // Keep EXECUTING as a durable manual-recovery signal. Retrying blindly could repeat a side effect.
             throw exception;
+        } finally {
+            humanFeedbackSignal.remove();
         }
     }
 
@@ -409,8 +413,12 @@ public class SpringAiAlibabaAgentRuntime {
             }
         }
         try {
-            Optional<NodeOutput> output = graph.invokeAndGetOutput(
-                    Map.of(KEY_RUN_ID, runId), RunnableConfig.builder().threadId(runId).build());
+            RunnableConfig.Builder graphConfig = RunnableConfig.builder().threadId(runId);
+            String feedback = humanFeedbackSignal.get();
+            if (feedback != null && !feedback.isBlank()) {
+                graphConfig.addMetadata(RunnableConfig.HUMAN_FEEDBACK_METADATA_KEY, feedback);
+            }
+            Optional<NodeOutput> output = graph.invokeAndGetOutput(Map.of(KEY_RUN_ID, runId), graphConfig.build());
             if (output.isPresent() && output.get() instanceof InterruptionMetadata) {
                 context.response = pendingApprovalResponse(context);
                 return context.response;
