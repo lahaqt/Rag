@@ -55,4 +55,21 @@ class InMemorySemanticMemoryStoreTests {
                 "user-1", "conversation-1", "", "Java", java.util.Set.of(), 4
         ))).isEmpty();
     }
+
+    @Test
+    void excludesExpiredItemsUsingTheSameLifecyclePolicy() {
+        InMemorySemanticMemoryStore store = new InMemorySemanticMemoryStore();
+        Instant expired = Instant.now().minus(java.time.Duration.ofDays(181));
+        Instant current = Instant.now();
+        store.remember(List.of(
+                new MemoryItem("old-fact", "user", "user-1", "conversation-1", MemoryTypes.FACT,
+                        "Java 11 runtime", Map.of("status", "confirmed"), 0.9, expired, expired),
+                new MemoryItem("new-fact", "user", "user-1", "conversation-1", MemoryTypes.FACT,
+                        "Java 17 runtime", Map.of("status", "confirmed"), 0.9, current, current)
+        ));
+
+        assertThat(store.recall(new MemoryRecallRequest(
+                "user-1", "conversation-2", "", "Java runtime", java.util.Set.of(MemoryTypes.FACT), 4
+        ))).extracting(MemoryItem::id).containsExactly("new-fact");
+    }
 }

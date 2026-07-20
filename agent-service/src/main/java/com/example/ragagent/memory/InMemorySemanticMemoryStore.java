@@ -1,5 +1,6 @@
 package com.example.ragagent.memory;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -22,6 +23,7 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
         String normalizedConversationId = request.conversationId();
         Set<String> queryTokens = tokens(request.query());
         return items.values().stream()
+                .filter(item -> !MemoryExpirationPolicy.isExpired(item, Instant.now()))
                 .filter(item -> belongsToScope(item, normalizedUserId, normalizedConversationId))
                 .filter(item -> request.allowedTypes().contains(item.type()))
                 .filter(item -> belongsToKnowledgeBase(item, request.knowledgeBaseId()))
@@ -60,6 +62,7 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
     @Override
     public List<MemoryItem> listCandidates(String userId, int maxItems) {
         return items.values().stream()
+                .filter(item -> !MemoryExpirationPolicy.isExpired(item, Instant.now()))
                 .filter(item -> "user".equals(item.scope()) && userId != null && userId.equals(item.ownerId()))
                 .filter(item -> "candidate".equals(item.metadata().get("status")))
                 .sorted(Comparator.comparing(MemoryItem::updatedAt).reversed())

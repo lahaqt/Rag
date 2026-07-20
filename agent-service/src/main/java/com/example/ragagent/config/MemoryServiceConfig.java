@@ -1,13 +1,14 @@
 package com.example.ragagent.config;
 
 import com.example.ragagent.memory.BusinessConversationStateExtractor;
-import com.example.ragagent.memory.BusinessLongTermMemoryExtractor;
 import com.example.ragagent.memory.ConversationStateExtractor;
 import com.example.ragagent.memory.ConversationProfileCache;
 import com.example.ragagent.memory.ConversationSummarizer;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.DefaultMemoryRecallPolicy;
 import com.example.ragagent.memory.InMemoryConversationMemoryService;
+import com.example.ragagent.memory.InMemorySemanticMemoryStore;
+import com.example.ragagent.memory.HybridLongTermMemoryExtractor;
 import com.example.ragagent.memory.LlmConversationSummarizer;
 import com.example.ragagent.memory.LongTermMemoryExtractor;
 import com.example.ragagent.memory.MemoryEmbeddingClient;
@@ -20,6 +21,7 @@ import com.example.ragagent.memory.SemanticMemoryStore;
 import com.example.ragagent.memory.UserProfileStore;
 import com.example.ragagent.memory.WindowConversationSummarizer;
 import com.example.ragagent.service.LlmGateway;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
@@ -54,6 +56,9 @@ public class MemoryServiceConfig {
             RagProperties properties,
             ObjectProvider<MemoryEmbeddingClient> memoryEmbeddingClient
     ) {
+        if ("in-memory".equalsIgnoreCase(properties.memory().provider())) {
+            return new InMemorySemanticMemoryStore();
+        }
         return new PostgresSemanticMemoryStore(jdbcTemplate, properties, memoryEmbeddingClient.getIfAvailable());
     }
 
@@ -71,8 +76,12 @@ public class MemoryServiceConfig {
     }
 
     @Bean
-    public LongTermMemoryExtractor longTermMemoryExtractor() {
-        return new BusinessLongTermMemoryExtractor();
+    public LongTermMemoryExtractor longTermMemoryExtractor(
+            RagProperties properties,
+            LlmGateway llmGateway,
+            ObjectMapper objectMapper
+    ) {
+        return new HybridLongTermMemoryExtractor(properties.memory(), llmGateway, objectMapper);
     }
 
     @Bean

@@ -246,9 +246,10 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
         if (!ensureVectorSchema()) {
             return List.of();
         }
+        long started = System.nanoTime();
         try {
             float[] queryEmbedding = embeddingClient.embedOne(request.query());
-            return jdbcTemplate.query(
+            List<Map.Entry<MemoryItem, Double>> candidates = jdbcTemplate.query(
                             SELECT_VECTOR_CANDIDATES_SQL,
                             (rs, rowNum) -> Map.entry(mapItem(rs, rowNum), rs.getDouble("vector_score")),
                             toVectorLiteral(queryEmbedding),
@@ -263,13 +264,22 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                             embeddingConfig.similarityThreshold(),
                             toVectorLiteral(queryEmbedding),
                             Math.max(request.maxItems() * 4, request.maxItems())
-                    ).stream()
+                    );
+            List<MemoryItem> recalled = candidates.stream()
                     .map(entry -> Map.entry(entry.getKey(), fusedScore(entry.getKey(), entry.getValue())))
                     .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
                             .thenComparing(entry -> entry.getKey().updatedAt(), Comparator.reverseOrder()))
                     .limit(request.maxItems())
                     .map(Map.Entry::getKey)
                     .toList();
+            log.info(
+                    "Semantic memory recall mode=vector candidateCount={} returnedCount={} durationMs={} types={}",
+                    candidates.size(),
+                    recalled.size(),
+                    Duration.ofNanos(System.nanoTime() - started).toMillis(),
+                    request.allowedTypes()
+            );
+            return recalled;
         } catch (Exception exception) {
             log.warn("Postgres semantic memory vector recall failed. user={} conversation={} error={}",
                     request.userId(), request.conversationId(), exception.getMessage());
@@ -278,6 +288,7 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     }
 
     private List<MemoryItem> recallByTokens(MemoryRecallRequest request) {
+        long started = System.nanoTime();
         try {
             Set<String> queryTokens = tokens(request.query());
             List<MemoryItem> candidates = jdbcTemplate.query(
@@ -289,7 +300,7 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                     allowedTypes(request.allowedTypes()),
                     MAX_CANDIDATES
             );
-            return candidates.stream()
+            List<MemoryItem> recalled = candidates.stream()
                     .map(item -> Map.entry(item, score(queryTokens, item)))
                     .filter(entry -> entry.getValue() > 0.0)
                     .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
@@ -297,6 +308,14 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                     .limit(request.maxItems())
                     .map(Map.Entry::getKey)
                     .toList();
+            log.info(
+                    "Semantic memory recall mode=tokens candidateCount={} returnedCount={} durationMs={} types={}",
+                    candidates.size(),
+                    recalled.size(),
+                    Duration.ofNanos(System.nanoTime() - started).toMillis(),
+                    request.allowedTypes()
+            );
+            return recalled;
         } catch (Exception exception) {
             log.warn("Postgres semantic memory recall failed. user={} conversation={} error={}",
                     request.userId(), request.conversationId(), exception.getMessage());
@@ -601,19 +620,8 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     }
 
     private java.sql.Timestamp expiryFor(MemoryItem item) {
-        if (item == null) {
-            return null;
-        }
-        if (MemoryTypes.PREFERENCE.equals(item.type()) && "user".equals(item.scope())) {
-            return null;
-        }
-        long days = switch (item.type()) {
-            case MemoryTypes.FACT -> "user".equals(item.scope()) ? 180 : 30;
-            case MemoryTypes.GOAL, MemoryTypes.BUSINESS_CONTEXT, MemoryTypes.PREFERENCE -> 30;
-            case MemoryTypes.DECISION -> 90;
-            default -> 14;
-        };
-        return java.sql.Timestamp.from(item.updatedAt().plus(Duration.ofDays(days)));
+        Instant expiresAt = MemoryExpirationPolicy.expiresAt(item);
+        return expiresAt == null ? null : java.sql.Timestamp.from(expiresAt);
     }
 
     private String allowedTypes(Set<String> types) {
