@@ -54,6 +54,7 @@ import {
 } from './attachments'
 import type {
   AgentChatResponse,
+  ApprovalRequest,
   AgentTraceRecord,
   AgentTraceStep,
   ChatCitation,
@@ -558,6 +559,10 @@ function App() {
   const [previewError, setPreviewError] = useState('')
   const [traceReplay, setTraceReplay] = useState<TraceReplayState | null>(null)
   const [traceReplaySort, setTraceReplaySort] = useState<'sequence' | 'duration'>('sequence')
+  const [approvals, setApprovals] = useState<ApprovalRequest[]>([])
+  const [approvalDrawerOpen, setApprovalDrawerOpen] = useState(false)
+  const [approvalLoading, setApprovalLoading] = useState(false)
+  const [approvalError, setApprovalError] = useState('')
 
   const activeConversation = useMemo(
     () => conversationList.find((item) => item.id === activeId) ?? conversationList[0] ?? initialConversations[0],
@@ -610,6 +615,77 @@ function App() {
       return () => clearTimeout(timer)
     }
   }, [activeView, activeId, scrollToMessageId])
+
+  async function loadApprovals() {
+    try {
+      const response = await fetch(`/api/approvals?userId=${encodeURIComponent(USER_ID)}&limit=50`)
+      if (!response.ok) throw new Error(`GET /api/approvals ${response.status}`)
+      setApprovals((await response.json()) as ApprovalRequest[])
+      setApprovalError('')
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : '加载待审批操作失败')
+    }
+  }
+
+  useEffect(() => {
+    void loadApprovals()
+    const timer = window.setInterval(() => void loadApprovals(), 15_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  async function decideApproval(approval: ApprovalRequest, decision: 'APPROVE' | 'EDIT' | 'REJECT') {
+    let editedArguments: Record<string, unknown> | undefined
+    if (decision === 'EDIT') {
+      const original = approval.type === 'MEMORY_PREFERENCE'
+        ? String(approval.arguments.content ?? '')
+        : JSON.stringify(approval.arguments, null, 2)
+      const edited = window.prompt(approval.type === 'MEMORY_PREFERENCE' ? '编辑后确认偏好' : '编辑工具参数（JSON）', original)
+      if (edited === null) return
+      if (approval.type === 'MEMORY_PREFERENCE') {
+        editedArguments = { content: edited }
+      } else {
+        try {
+          editedArguments = JSON.parse(edited) as Record<string, unknown>
+        } catch {
+          setApprovalError('工具参数必须是有效 JSON')
+          return
+        }
+      }
+    }
+    setApprovalLoading(true)
+    try {
+      const response = await fetch(`/api/approvals/${encodeURIComponent(approval.id)}/decision?userId=${encodeURIComponent(USER_ID)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision, editedArguments, version: approval.version }),
+      })
+      if (!response.ok) throw new Error(`POST /api/approvals decision ${response.status}`)
+      const payload = (await response.json()) as { response?: AgentChatResponse }
+      if (payload.response?.answer) {
+        const resumed = payload.response
+        setMessagesByConversation((current) => ({
+          ...current,
+          [activeId]: [
+            ...(current[activeId] ?? []),
+            {
+              id: nextMessageId.current++,
+              role: 'assistant',
+              content: resumed.answer,
+              citations: resumed.citations,
+              agentTrace: resumed.agentTrace,
+              traceId: resumed.traceId,
+              spanId: resumed.spanId,
+            },
+          ],
+        }))
+      }
+      await loadApprovals()
+    } catch (error) {
+      setApprovalError(error instanceof Error ? error.message : '提交审批失败')
+    } finally {
+      setApprovalLoading(false)
+    }
+  }
 
   function handleChatStageScroll() {
     const stage = chatStageRef.current
@@ -2951,6 +3027,16 @@ function App() {
             </div>
             <div className="topbar-actions">
               <button
+                aria-pressed={approvalDrawerOpen}
+                className="icon-button approval-toggle"
+                onClick={() => setApprovalDrawerOpen((open) => !open)}
+                type="button"
+                title="待审批操作"
+              >
+                <CheckCircle2 size={18} />
+                {approvals.length > 0 && <span className="approval-count">{approvals.length}</span>}
+              </button>
+              <button
                 aria-pressed={inspectorOpen}
                 className="icon-button"
                 onClick={() => setInspectorOpen((open) => !open)}
@@ -2972,9 +3058,9 @@ function App() {
             </div>
           </header>
 
-        <div className="chat-stage" ref={chatStageRef} onScroll={handleChatStageScroll}>
-          <div className="conversation-title">
-            <div className="conversation-heading">
+          <div className="chat-stage" ref={chatStageRef} onScroll={handleChatStageScroll}>
+            <div className="conversation-title">
+              <div className="conversation-heading">
               <h1>{activeConversation.title}</h1>
               <div className="context-strip" aria-label="当前知识库状态">
                 <span>
@@ -2985,12 +3071,41 @@ function App() {
                 <span>引用优先</span>
                 <span>{vectorStatus ? `${vectorStatus.vectorCount} vectors` : '向量状态同步中'}</span>
               </div>
+              <button className="ghost-button" onClick={() => setActiveView('knowledge')} type="button">
+                <FolderKanban size={16} />
+                切换知识库
+              </button>
             </div>
-            <button className="ghost-button" onClick={() => setActiveView('knowledge')} type="button">
-              <FolderKanban size={16} />
-              切换知识库
-            </button>
-          </div>
+
+          {approvalDrawerOpen && (
+            <section className="approval-drawer" aria-label="待审批操作">
+              <div className="approval-drawer-heading">
+                <div>
+                  <strong>待审批操作</strong>
+                  <span>写操作会暂停执行；偏好确认不会中断当前聊天。</span>
+                </div>
+                <button className="icon-button" onClick={() => void loadApprovals()} type="button" title="刷新待审批列表">
+                  <RefreshCw size={16} />
+                </button>
+              </div>
+              {approvalError && <p className="approval-error">{approvalError}</p>}
+              {approvals.length === 0 ? <p className="approval-empty">暂无待确认项目。</p> : approvals.map((approval) => (
+                <article className="approval-card" key={approval.id}>
+                  <div>
+                    <strong>{approval.type === 'MEMORY_PREFERENCE' ? '记住跨会话偏好' : approval.toolName}</strong>
+                    <span>{approval.type === 'MEMORY_PREFERENCE'
+                      ? String(approval.arguments.content ?? '')
+                      : JSON.stringify(approval.arguments)}</span>
+                  </div>
+                  <div className="approval-actions">
+                    <button disabled={approvalLoading} onClick={() => void decideApproval(approval, 'APPROVE')} type="button">确认</button>
+                    <button disabled={approvalLoading} onClick={() => void decideApproval(approval, 'EDIT')} type="button">编辑</button>
+                    <button className="danger" disabled={approvalLoading} onClick={() => void decideApproval(approval, 'REJECT')} type="button">拒绝</button>
+                  </div>
+                </article>
+              ))}
+            </section>
+          )}
 
           <div className="message-list">
             {messages.map((message) => (

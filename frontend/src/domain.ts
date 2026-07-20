@@ -144,6 +144,26 @@ export type AgentChatResponse = {
   finishReason: string
 }
 
+export type ApprovalStatus = 'PENDING' | 'APPROVED' | 'EDITED' | 'REJECTED' | 'EXPIRED'
+export type ApprovalType = 'WRITE_TOOL' | 'MEMORY_PREFERENCE'
+export type ApprovalRequest = {
+  id: string
+  type: ApprovalType
+  userId: string
+  conversationId: string
+  runId: string
+  planStepId: string
+  toolName: string
+  arguments: Record<string, unknown>
+  editedArguments: Record<string, unknown>
+  riskLevel: string
+  status: ApprovalStatus
+  decisionComment: string
+  version: number
+  createdAt: string
+  expiresAt: string
+}
+
 export type AgentTraceStep = {
   step: number
   phase: string

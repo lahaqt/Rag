@@ -9670,6 +9670,101 @@ summary:focus-visible {
   }
 }
 
+/* Human approval stays close to the chat without blocking the conversation. */
+.approval-toggle {
+  position: relative;
+}
+
+.approval-count {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  min-width: 16px;
+  height: 16px;
+  place-items: center;
+  border-radius: 99px;
+  color: #fff;
+  background: #b74735;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.approval-drawer {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 13px;
+  border: 1px solid rgba(196, 126, 35, 0.28);
+  border-radius: 14px;
+  background: rgba(255, 250, 238, 0.9);
+}
+
+.approval-drawer-heading,
+.approval-card,
+.approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.approval-drawer-heading {
+  justify-content: space-between;
+}
+
+.approval-drawer-heading strong,
+.approval-card strong {
+  display: block;
+  color: var(--text-strong);
+}
+
+.approval-drawer-heading span,
+.approval-card span,
+.approval-empty,
+.approval-error {
+  display: block;
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.approval-error { color: #b74735; }
+
+.approval-card {
+  justify-content: space-between;
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.approval-card > div:first-child {
+  min-width: 0;
+}
+
+.approval-card span {
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.approval-actions { flex: 0 0 auto; }
+
+.approval-actions button {
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 7px;
+  color: #fff;
+  background: var(--brand-strong);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.approval-actions .danger { background: #b74735; }
+
+:root[data-theme='dark'] .approval-drawer { background: rgba(75, 57, 27, 0.42); }
+:root[data-theme='dark'] .approval-card { background: rgba(28, 42, 34, 0.85); }
+
 /* Composer: a single calm editing surface instead of a centered textarea inside another frame. */
 .composer-zone {
   padding-top: 12px;
