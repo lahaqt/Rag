@@ -24,6 +24,7 @@ import com.example.ragagent.dto.WebSearchResult;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.DefaultMemoryRecallPolicy;
 import com.example.ragagent.memory.MemoryContext;
+import com.example.ragagent.memory.MemoryRecallDecision;
 import com.example.ragagent.memory.NoopConversationMemoryService;
 import com.example.ragagent.mcp.McpToolDescriptor;
 import com.example.ragagent.mcp.ToolArgumentBinder;
@@ -52,7 +53,7 @@ class SpringAiAlibabaAgentRuntimeTests {
         );
         QueryAnalysisResponse analysis = knowledgeAnalysis("SINGLE_TOOL", List.of("rag_retrieval"));
         when(memoryService.loadWorkingContext(any())).thenReturn(workingContext);
-        when(memoryService.recallLongTerm(any(), any(), anyString())).thenReturn(workingContext);
+        when(memoryService.recallLongTerm(any(), any(), any(MemoryRecallDecision.class))).thenReturn(workingContext);
         when(queryAnalysisClient.analyze(any())).thenReturn(analysis);
         when(toolRouter.decide(any(), any())).thenReturn(ToolDecision.none());
         when(mcpToolGateway.decide(anyString())).thenReturn(Optional.empty());
@@ -69,7 +70,9 @@ class SpringAiAlibabaAgentRuntimeTests {
         InOrder order = inOrder(memoryService, queryAnalysisClient);
         order.verify(memoryService).loadWorkingContext(any());
         order.verify(queryAnalysisClient).analyze(any());
-        order.verify(memoryService).recallLongTerm(any(), any(), org.mockito.ArgumentMatchers.eq("refund"));
+        ArgumentCaptor<MemoryRecallDecision> recallDecision = ArgumentCaptor.forClass(MemoryRecallDecision.class);
+        order.verify(memoryService).recallLongTerm(any(), any(), recallDecision.capture());
+        assertThat(recallDecision.getValue().query()).isEqualTo("refund");
     }
 
     @Test

@@ -22,9 +22,17 @@ public interface ConversationMemoryService {
     default MemoryContext recallLongTerm(
             ChatRequest request,
             MemoryContext workingContext,
-            String recallQuery
+            MemoryRecallDecision decision
     ) {
         return workingContext;
+    }
+
+    default MemoryContext recallLongTerm(
+            ChatRequest request,
+            MemoryContext workingContext,
+            String recallQuery
+    ) {
+        return recallLongTerm(request, workingContext, MemoryRecallDecision.recall(recallQuery, "legacy_recall"));
     }
 
     void recordTurn(ChatRequest request, QueryAnalysisResponse analysis, ChatResponse response);

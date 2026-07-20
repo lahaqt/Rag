@@ -4,7 +4,18 @@ import java.util.List;
 import java.util.Optional;
 
 public interface SemanticMemoryStore {
-    List<MemoryItem> recall(String userId, String conversationId, String query, int maxItems);
+    List<MemoryItem> recall(MemoryRecallRequest request);
+
+    default List<MemoryItem> recall(String userId, String conversationId, String query, int maxItems) {
+        return recall(new MemoryRecallRequest(
+                userId,
+                conversationId,
+                "",
+                query,
+                MemoryTypes.ALL,
+                maxItems
+        ));
+    }
 
     default List<MemoryItem> recall(
             String userId,
@@ -13,7 +24,14 @@ public interface SemanticMemoryStore {
             String query,
             int maxItems
     ) {
-        return recall(userId, conversationId, query, maxItems);
+        return recall(new MemoryRecallRequest(
+                userId,
+                conversationId,
+                knowledgeBaseId,
+                query,
+                MemoryTypes.ALL,
+                maxItems
+        ));
     }
 
     void remember(List<MemoryItem> items);

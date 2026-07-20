@@ -3,6 +3,7 @@ package com.example.ragagent.config;
 import com.example.ragagent.memory.BusinessConversationStateExtractor;
 import com.example.ragagent.memory.BusinessLongTermMemoryExtractor;
 import com.example.ragagent.memory.ConversationStateExtractor;
+import com.example.ragagent.memory.ConversationProfileCache;
 import com.example.ragagent.memory.ConversationSummarizer;
 import com.example.ragagent.memory.ConversationMemoryService;
 import com.example.ragagent.memory.DefaultMemoryRecallPolicy;
@@ -62,6 +63,14 @@ public class MemoryServiceConfig {
     }
 
     @Bean
+    public ConversationProfileCache conversationProfileCache(
+            UserProfileStore userProfileStore,
+            RagProperties properties
+    ) {
+        return new ConversationProfileCache(userProfileStore, properties.memory());
+    }
+
+    @Bean
     public LongTermMemoryExtractor longTermMemoryExtractor() {
         return new BusinessLongTermMemoryExtractor();
     }
@@ -80,7 +89,8 @@ public class MemoryServiceConfig {
             ConversationStateExtractor conversationStateExtractor,
             SemanticMemoryStore semanticMemoryStore,
             UserProfileStore userProfileStore,
-            LongTermMemoryExtractor longTermMemoryExtractor
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache conversationProfileCache
     ) {
         return new RedisConversationMemoryService(
                 redisTemplate,
@@ -89,7 +99,8 @@ public class MemoryServiceConfig {
                 conversationStateExtractor,
                 semanticMemoryStore,
                 userProfileStore,
-                longTermMemoryExtractor
+                longTermMemoryExtractor,
+                conversationProfileCache
         );
     }
 
@@ -102,7 +113,8 @@ public class MemoryServiceConfig {
             ConversationStateExtractor conversationStateExtractor,
             SemanticMemoryStore semanticMemoryStore,
             UserProfileStore userProfileStore,
-            LongTermMemoryExtractor longTermMemoryExtractor
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache conversationProfileCache
     ) {
         return new PostgresConversationMemoryService(
                 jdbcTemplate,
@@ -111,7 +123,8 @@ public class MemoryServiceConfig {
                 conversationStateExtractor,
                 semanticMemoryStore,
                 userProfileStore,
-                longTermMemoryExtractor
+                longTermMemoryExtractor,
+                conversationProfileCache
         );
     }
 
@@ -124,7 +137,8 @@ public class MemoryServiceConfig {
             ConversationStateExtractor conversationStateExtractor,
             SemanticMemoryStore semanticMemoryStore,
             UserProfileStore userProfileStore,
-            LongTermMemoryExtractor longTermMemoryExtractor
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache conversationProfileCache
     ) {
         return new InMemoryConversationMemoryService(
                 properties,
@@ -132,7 +146,8 @@ public class MemoryServiceConfig {
                 conversationStateExtractor,
                 semanticMemoryStore,
                 userProfileStore,
-                longTermMemoryExtractor
+                longTermMemoryExtractor,
+                conversationProfileCache
         );
     }
 }

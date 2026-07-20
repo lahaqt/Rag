@@ -104,6 +104,11 @@ rag:
     summary-mode: llm
     semantic-memory-max-items: 4
     profile-enabled: true
+    profile-cache-ttl-seconds: 900
+    profile-cache-max-entries: 10000
+    long-term-extraction-mode: hybrid
+    long-term-extraction-max-items: 3
+    long-term-extraction-max-tokens: 600
     state-max-entries: 16
     semantic-embedding:
       enabled: true

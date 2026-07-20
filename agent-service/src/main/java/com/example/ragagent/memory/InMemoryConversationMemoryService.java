@@ -41,13 +41,34 @@ public class InMemoryConversationMemoryService extends AbstractConversationMemor
             UserProfileStore userProfileStore,
             LongTermMemoryExtractor longTermMemoryExtractor
     ) {
+        this(
+                properties,
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor,
+                new ConversationProfileCache(userProfileStore, properties.memory())
+        );
+    }
+
+    public InMemoryConversationMemoryService(
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache profileCache
+    ) {
         super(
                 properties.memory(),
                 summarizer,
                 stateExtractor,
                 semanticMemoryStore,
                 userProfileStore,
-                longTermMemoryExtractor
+                longTermMemoryExtractor,
+                profileCache
         );
     }
 

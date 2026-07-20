@@ -14,36 +14,29 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
     private final Map<String, MemoryItem> items = new ConcurrentHashMap<>();
 
     @Override
-    public List<MemoryItem> recall(String userId, String conversationId, String query, int maxItems) {
-        return recall(userId, conversationId, "", query, maxItems);
-    }
-
-    @Override
-    public List<MemoryItem> recall(
-            String userId,
-            String conversationId,
-            String knowledgeBaseId,
-            String query,
-            int maxItems
-    ) {
-        String normalizedUserId = userId == null ? "" : userId;
-        String normalizedConversationId = conversationId == null ? "" : conversationId;
-        Set<String> queryTokens = tokens(query);
+    public List<MemoryItem> recall(MemoryRecallRequest request) {
+        if (request == null || !request.shouldExecute()) {
+            return List.of();
+        }
+        String normalizedUserId = request.userId();
+        String normalizedConversationId = request.conversationId();
+        Set<String> queryTokens = tokens(request.query());
         return items.values().stream()
                 .filter(item -> belongsToScope(item, normalizedUserId, normalizedConversationId))
-                .filter(item -> belongsToKnowledgeBase(item, knowledgeBaseId))
+                .filter(item -> request.allowedTypes().contains(item.type()))
+                .filter(item -> belongsToKnowledgeBase(item, request.knowledgeBaseId()))
                 .filter(item -> !"candidate".equals(item.metadata().get("status")))
                 .map(item -> Map.entry(item, score(queryTokens, item)))
                 .filter(entry -> entry.getValue() > 0.0)
                 .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
                         .thenComparing(entry -> entry.getKey().updatedAt(), Comparator.reverseOrder()))
-                .limit(Math.max(0, maxItems))
+                .limit(request.maxItems())
                 .map(Map.Entry::getKey)
                 .toList();
     }
 
     private boolean belongsToKnowledgeBase(MemoryItem item, String knowledgeBaseId) {
-        if ("preference".equals(item.type())) {
+        if (MemoryTypes.PREFERENCE.equals(item.type()) || MemoryTypes.FACT.equals(item.type())) {
             return true;
         }
         String itemKnowledgeBaseId = item.metadata().getOrDefault("knowledgeBaseId", "");

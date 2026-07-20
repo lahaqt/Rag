@@ -135,7 +135,8 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
             WHERE (expires_at IS NULL OR expires_at > now())
               AND ((scope = 'user' AND owner_id = ?)
                    OR (scope = 'conversation' AND conversation_id = ?))
-              AND (type = 'preference' OR COALESCE(metadata->>'knowledgeBaseId', '') = ?)
+              AND (type IN ('preference', 'fact') OR COALESCE(metadata->>'knowledgeBaseId', '') = ?)
+              AND type = ANY(string_to_array(?, ','))
               AND COALESCE(metadata->>'status', 'confirmed') <> 'candidate'
             ORDER BY updated_at DESC
             LIMIT ?
@@ -153,7 +154,8 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
               AND embedding_dimensions = ?
               AND ((scope = 'user' AND owner_id = ?)
                    OR (scope = 'conversation' AND conversation_id = ?))
-              AND (type = 'preference' OR COALESCE(metadata->>'knowledgeBaseId', '') = ?)
+              AND (type IN ('preference', 'fact') OR COALESCE(metadata->>'knowledgeBaseId', '') = ?)
+              AND type = ANY(string_to_array(?, ','))
               AND COALESCE(metadata->>'status', 'confirmed') <> 'candidate'
               AND 1 - (embedding <=> ?::vector) >= ?
             ORDER BY embedding <=> ?::vector
@@ -223,42 +225,29 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     }
 
     @Override
-    public List<MemoryItem> recall(String userId, String conversationId, String query, int maxItems) {
-        return recall(userId, conversationId, "", query, maxItems);
-    }
-
-    @Override
-    public List<MemoryItem> recall(
-            String userId,
-            String conversationId,
-            String knowledgeBaseId,
-            String query,
-            int maxItems
-    ) {
-        if (maxItems <= 0) {
+    public List<MemoryItem> recall(MemoryRecallRequest request) {
+        if (request == null || !request.shouldExecute()) {
             return List.of();
         }
         if (!ensureSchema()) {
             return List.of();
         }
-        List<MemoryItem> vectorMatches = recallByVector(userId, conversationId, knowledgeBaseId, query, maxItems);
+        List<MemoryItem> vectorMatches = recallByVector(request);
         if (!vectorMatches.isEmpty()) {
             return vectorMatches;
         }
-        return recallByTokens(userId, conversationId, knowledgeBaseId, query, maxItems);
+        return recallByTokens(request);
     }
 
-    private List<MemoryItem> recallByVector(
-            String userId, String conversationId, String knowledgeBaseId, String query, int maxItems
-    ) {
-        if (!embeddingConfig.enabled() || embeddingClient == null || query == null || query.isBlank()) {
+    private List<MemoryItem> recallByVector(MemoryRecallRequest request) {
+        if (!embeddingConfig.enabled() || embeddingClient == null) {
             return List.of();
         }
         if (!ensureVectorSchema()) {
             return List.of();
         }
         try {
-            float[] queryEmbedding = embeddingClient.embedOne(query);
+            float[] queryEmbedding = embeddingClient.embedOne(request.query());
             return jdbcTemplate.query(
                             SELECT_VECTOR_CANDIDATES_SQL,
                             (rs, rowNum) -> Map.entry(mapItem(rs, rowNum), rs.getDouble("vector_score")),
@@ -266,38 +255,38 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                             embeddingClient.providerName(),
                             embeddingClient.modelName(),
                             embeddingClient.dimensions(),
-                            safe(userId),
-                            safe(conversationId),
-                            safe(knowledgeBaseId),
+                            request.userId(),
+                            request.conversationId(),
+                            request.knowledgeBaseId(),
+                            allowedTypes(request.allowedTypes()),
                             toVectorLiteral(queryEmbedding),
                             embeddingConfig.similarityThreshold(),
                             toVectorLiteral(queryEmbedding),
-                            Math.max(maxItems * 4, maxItems)
+                            Math.max(request.maxItems() * 4, request.maxItems())
                     ).stream()
                     .map(entry -> Map.entry(entry.getKey(), fusedScore(entry.getKey(), entry.getValue())))
                     .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
                             .thenComparing(entry -> entry.getKey().updatedAt(), Comparator.reverseOrder()))
-                    .limit(maxItems)
+                    .limit(request.maxItems())
                     .map(Map.Entry::getKey)
                     .toList();
         } catch (Exception exception) {
             log.warn("Postgres semantic memory vector recall failed. user={} conversation={} error={}",
-                    userId, conversationId, exception.getMessage());
+                    request.userId(), request.conversationId(), exception.getMessage());
             return List.of();
         }
     }
 
-    private List<MemoryItem> recallByTokens(
-            String userId, String conversationId, String knowledgeBaseId, String query, int maxItems
-    ) {
+    private List<MemoryItem> recallByTokens(MemoryRecallRequest request) {
         try {
-            Set<String> queryTokens = tokens(query);
+            Set<String> queryTokens = tokens(request.query());
             List<MemoryItem> candidates = jdbcTemplate.query(
                     SELECT_CANDIDATES_SQL,
                     this::mapItem,
-                    safe(userId),
-                    safe(conversationId),
-                    safe(knowledgeBaseId),
+                    request.userId(),
+                    request.conversationId(),
+                    request.knowledgeBaseId(),
+                    allowedTypes(request.allowedTypes()),
                     MAX_CANDIDATES
             );
             return candidates.stream()
@@ -305,12 +294,12 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                     .filter(entry -> entry.getValue() > 0.0)
                     .sorted(Map.Entry.<MemoryItem, Double>comparingByValue(Comparator.reverseOrder())
                             .thenComparing(entry -> entry.getKey().updatedAt(), Comparator.reverseOrder()))
-                    .limit(maxItems)
+                    .limit(request.maxItems())
                     .map(Map.Entry::getKey)
                     .toList();
         } catch (Exception exception) {
             log.warn("Postgres semantic memory recall failed. user={} conversation={} error={}",
-                    userId, conversationId, exception.getMessage());
+                    request.userId(), request.conversationId(), exception.getMessage());
             return List.of();
         }
     }
@@ -578,13 +567,22 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     }
 
     private double typeBoost(String type) {
-        if ("preference".equals(type)) {
+        if (MemoryTypes.PREFERENCE.equals(type)) {
             return 1.0;
         }
-        if ("business_context".equals(type)) {
+        if (MemoryTypes.BUSINESS_CONTEXT.equals(type)) {
             return 0.85;
         }
-        if ("topic".equals(type)) {
+        if (MemoryTypes.DECISION.equals(type)) {
+            return 0.80;
+        }
+        if (MemoryTypes.GOAL.equals(type)) {
+            return 0.75;
+        }
+        if (MemoryTypes.FACT.equals(type)) {
+            return 0.70;
+        }
+        if (MemoryTypes.TOPIC.equals(type)) {
             return 0.65;
         }
         return 0.50;
@@ -603,11 +601,23 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
     }
 
     private java.sql.Timestamp expiryFor(MemoryItem item) {
-        if (item == null || "preference".equals(item.type())) {
+        if (item == null) {
             return null;
         }
-        long days = "business_context".equals(item.type()) ? 30 : 14;
+        if (MemoryTypes.PREFERENCE.equals(item.type()) && "user".equals(item.scope())) {
+            return null;
+        }
+        long days = switch (item.type()) {
+            case MemoryTypes.FACT -> "user".equals(item.scope()) ? 180 : 30;
+            case MemoryTypes.GOAL, MemoryTypes.BUSINESS_CONTEXT, MemoryTypes.PREFERENCE -> 30;
+            case MemoryTypes.DECISION -> 90;
+            default -> 14;
+        };
         return java.sql.Timestamp.from(item.updatedAt().plus(Duration.ofDays(days)));
+    }
+
+    private String allowedTypes(Set<String> types) {
+        return String.join(",", types);
     }
 
     private String toVectorLiteralOrNull(float[] vector) {

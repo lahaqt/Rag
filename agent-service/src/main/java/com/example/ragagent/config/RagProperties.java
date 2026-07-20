@@ -57,7 +57,8 @@ public record RagProperties(
         if (memory == null) {
             memory = new Memory(
                     "in-memory", true, 200000, null, 4000, 16, 86400L,
-                    "llm", 4, true, null, 64000, 6, 16000, 2000
+                    "llm", 4, true, null, 64000, 6, 16000, 2000,
+                    null, null, null, null, null
             );
         }
     }
@@ -332,7 +333,12 @@ public record RagProperties(
             Integer compactionTriggerTokens,
             Integer protectedRecentTurns,
             Integer oversizedTurnTokens,
-            Integer turnSummaryMaxTokens
+            Integer turnSummaryMaxTokens,
+            String longTermExtractionMode,
+            Integer longTermExtractionMaxItems,
+            Integer longTermExtractionMaxTokens,
+            Long profileCacheTtlSeconds,
+            Integer profileCacheMaxEntries
     ) {
         public record SemanticEmbedding(
                 Boolean enabled,
@@ -381,6 +387,11 @@ public record RagProperties(
                     null,
                     null,
                     null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     null
             );
         }
@@ -405,6 +416,11 @@ public record RagProperties(
                     "llm",
                     4,
                     true,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     null,
                     null,
                     null,
@@ -440,6 +456,11 @@ public record RagProperties(
                     null,
                     null,
                     null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     null
             );
         }
@@ -469,6 +490,52 @@ public record RagProperties(
                     semanticMemoryMaxItems,
                     profileEnabled,
                     semanticEmbedding,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null
+            );
+        }
+
+        public Memory(
+                String provider,
+                Boolean enabled,
+                Integer contextWindowTokens,
+                Integer recentTokenBudget,
+                Integer summaryMaxTokens,
+                Integer stateMaxEntries,
+                Long ttlSeconds,
+                String summaryMode,
+                Integer semanticMemoryMaxItems,
+                Boolean profileEnabled,
+                SemanticEmbedding semanticEmbedding,
+                Integer compactionTriggerTokens,
+                Integer protectedRecentTurns,
+                Integer oversizedTurnTokens,
+                Integer turnSummaryMaxTokens
+        ) {
+            this(
+                    provider,
+                    enabled,
+                    contextWindowTokens,
+                    recentTokenBudget,
+                    summaryMaxTokens,
+                    stateMaxEntries,
+                    ttlSeconds,
+                    summaryMode,
+                    semanticMemoryMaxItems,
+                    profileEnabled,
+                    semanticEmbedding,
+                    compactionTriggerTokens,
+                    protectedRecentTurns,
+                    oversizedTurnTokens,
+                    turnSummaryMaxTokens,
+                    null,
                     null,
                     null,
                     null,
@@ -512,6 +579,21 @@ public record RagProperties(
             semanticEmbedding = semanticEmbedding == null
                     ? new SemanticEmbedding(true, "hash", "", "", "hash", 384, 0.20)
                     : semanticEmbedding;
+            longTermExtractionMode = longTermExtractionMode == null || longTermExtractionMode.isBlank()
+                    ? "hybrid"
+                    : longTermExtractionMode.trim().toLowerCase(java.util.Locale.ROOT);
+            longTermExtractionMaxItems = longTermExtractionMaxItems == null
+                    ? 3
+                    : Math.max(0, Math.min(longTermExtractionMaxItems, 10));
+            longTermExtractionMaxTokens = longTermExtractionMaxTokens == null
+                    ? 600
+                    : Math.max(128, Math.min(longTermExtractionMaxTokens, 2000));
+            profileCacheTtlSeconds = profileCacheTtlSeconds == null
+                    ? 900L
+                    : Math.max(30L, Math.min(profileCacheTtlSeconds, 86400L));
+            profileCacheMaxEntries = profileCacheMaxEntries == null
+                    ? 10000
+                    : Math.max(100, Math.min(profileCacheMaxEntries, 100000));
         }
     }
 

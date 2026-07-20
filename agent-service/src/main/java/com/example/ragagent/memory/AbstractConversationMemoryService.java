@@ -31,6 +31,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
     private final ConversationStateExtractor stateExtractor;
     private final SemanticMemoryStore semanticMemoryStore;
     private final UserProfileStore userProfileStore;
+    private final ConversationProfileCache profileCache;
     private final LongTermMemoryExtractor longTermMemoryExtractor;
 
     protected AbstractConversationMemoryService(RagProperties.Memory config) {
@@ -52,11 +53,34 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             UserProfileStore userProfileStore,
             LongTermMemoryExtractor longTermMemoryExtractor
     ) {
+        this(
+                config,
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor,
+                new ConversationProfileCache(userProfileStore, config)
+        );
+    }
+
+    protected AbstractConversationMemoryService(
+            RagProperties.Memory config,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache profileCache
+    ) {
         this.config = config;
         this.summarizer = summarizer == null ? new WindowConversationSummarizer() : summarizer;
         this.stateExtractor = stateExtractor == null ? new BusinessConversationStateExtractor() : stateExtractor;
         this.semanticMemoryStore = semanticMemoryStore == null ? new InMemorySemanticMemoryStore() : semanticMemoryStore;
         this.userProfileStore = userProfileStore == null ? new InMemoryUserProfileStore() : userProfileStore;
+        this.profileCache = profileCache == null
+                ? new ConversationProfileCache(this.userProfileStore, config)
+                : profileCache;
         this.longTermMemoryExtractor = longTermMemoryExtractor == null
                 ? new BusinessLongTermMemoryExtractor()
                 : longTermMemoryExtractor;
@@ -65,7 +89,24 @@ public abstract class AbstractConversationMemoryService implements ConversationM
     @Override
     public final MemoryContext load(ChatRequest request) {
         MemoryContext workingContext = loadWorkingContext(request);
-        return recallLongTerm(request, workingContext, request.query());
+        return recallLongTerm(
+                request,
+                workingContext,
+                MemoryRecallDecision.recall(
+                        request.query(),
+                        MemoryTypes.ALL,
+                        Set.of(
+                                "language",
+                                "response_style",
+                                "output_format",
+                                "technology_preference",
+                                "general_preference",
+                                "preference"
+                        ),
+                        config.semanticMemoryMaxItems(),
+                        "legacy_load"
+                )
+        );
     }
 
     @Override
@@ -83,23 +124,47 @@ public abstract class AbstractConversationMemoryService implements ConversationM
     public final MemoryContext recallLongTerm(
             ChatRequest request,
             MemoryContext workingContext,
-            String recallQuery
+            MemoryRecallDecision decision
     ) {
-        if (!config.enabled() || workingContext == null || config.semanticMemoryMaxItems() <= 0) {
+        if (!config.enabled() || workingContext == null || decision == null || !decision.shouldRecall()) {
             return workingContext;
         }
-        String normalizedQuery = normalize(recallQuery);
-        if (normalizedQuery.isBlank()) {
-            return workingContext;
-        }
-        List<MemoryItem> semanticMemories = semanticMemoryStore.recall(
-                normalizeUserId(request),
-                workingContext.conversationId(),
-                request.knowledgeBaseId(),
-                normalizedQuery,
-                config.semanticMemoryMaxItems()
+        int maxItems = Math.min(config.semanticMemoryMaxItems(), decision.maxItems());
+        String normalizedQuery = normalize(decision.query());
+        boolean executeSemanticRecall = maxItems > 0
+                && !normalizedQuery.isBlank()
+                && !decision.semanticTypes().isEmpty();
+        List<MemoryItem> semanticMemories = executeSemanticRecall
+                ? semanticMemoryStore.recall(new MemoryRecallRequest(
+                        normalizeUserId(request),
+                        workingContext.conversationId(),
+                        request.knowledgeBaseId(),
+                        normalizedQuery,
+                        decision.semanticTypes(),
+                        maxItems
+                ))
+                : List.of();
+        ConversationProfileCache.ProfileLookup profileLookup = config.profileEnabled()
+                ? profileCache.loadSelected(
+                        normalizeUserId(request),
+                        workingContext.conversationId(),
+                        decision.profileKeys()
+                )
+                : new ConversationProfileCache.ProfileLookup(
+                        new UserProfile(normalizeUserId(request), Map.of(), null),
+                        false
+                );
+        return workingContext.withLongTermMemory(
+                semanticMemories,
+                profileLookup.profile(),
+                new MemoryRecallDiagnostics(
+                        executeSemanticRecall,
+                        profileLookup.cacheHit(),
+                        semanticMemories.size(),
+                        decision.semanticTypes(),
+                        decision.profileKeys()
+                )
         );
-        return workingContext.withSemanticMemories(semanticMemories);
     }
 
     @Override
@@ -121,6 +186,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             return;
         }
         deleteStored(memoryStorageKey(userId, conversationId));
+        profileCache.invalidateConversation(conversationId);
     }
 
     protected abstract StoredMemory loadStored(String conversationId, ChatRequest request);
@@ -213,9 +279,6 @@ public abstract class AbstractConversationMemoryService implements ConversationM
 
     protected MemoryContext buildWorkingContext(String conversationId, StoredMemory stored, ChatRequest request) {
         String userId = normalizeUserId(request);
-        UserProfile userProfile = config.profileEnabled()
-                ? userProfileStore.load(userId)
-                : new UserProfile(userId, Map.of(), null);
         List<ConversationTurn> turns = ConversationTurn.group(
                 stored.messages(),
                 stored.summarizedMessageCount()
@@ -227,7 +290,7 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 stored.rollingSummary(),
                 stored.dialogState(),
                 List.of(),
-                userProfile,
+                new UserProfile(userId, Map.of(), null),
                 stored.summarizedMessageCount() + stored.messages().size(),
                 stored.summaryVersion(),
                 new MemoryDiagnostics(
@@ -237,7 +300,8 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                         Math.min(turns.size(), config.protectedRecentTurns()),
                         stored.turnSummaries().size(),
                         stored.summarizedMessageCount()
-                )
+                ),
+                MemoryRecallDiagnostics.empty()
         );
     }
 
@@ -334,10 +398,15 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         );
         semanticMemoryStore.remember(items);
         if (config.profileEnabled()) {
-            userProfileStore.merge(
+            Map<String, String> profileFacts = longTermMemoryExtractor.extractProfileFacts(
                     userId,
-                    longTermMemoryExtractor.extractProfileFacts(userId, request, dialogState)
+                    request,
+                    dialogState
             );
+            userProfileStore.merge(userId, profileFacts);
+            if (!profileFacts.isEmpty()) {
+                profileCache.invalidateUser(userId);
+            }
         }
     }
 

@@ -124,13 +124,36 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             UserProfileStore userProfileStore,
             LongTermMemoryExtractor longTermMemoryExtractor
     ) {
+        this(
+                jdbcTemplate,
+                properties,
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor,
+                new ConversationProfileCache(userProfileStore, properties.memory())
+        );
+    }
+
+    public PostgresConversationMemoryService(
+            JdbcTemplate jdbcTemplate,
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache profileCache
+    ) {
         super(
                 properties.memory(),
                 summarizer,
                 stateExtractor,
                 semanticMemoryStore,
                 userProfileStore,
-                longTermMemoryExtractor
+                longTermMemoryExtractor,
+                profileCache
         );
         this.jdbcTemplate = jdbcTemplate;
         this.objectMapper = new ObjectMapper();

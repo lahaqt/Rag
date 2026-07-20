@@ -483,6 +483,7 @@ public class SpringAiAlibabaAgentRuntime {
             String error = "";
             String reason = "policy_unavailable";
             int recalledItems = 0;
+            MemoryRecallDecision appliedDecision = MemoryRecallDecision.skip("policy_unavailable");
             try {
                 MemoryRecallDecision decision = memoryRecallPolicy == null
                         ? MemoryRecallDecision.skip("policy_unavailable")
@@ -490,12 +491,13 @@ public class SpringAiAlibabaAgentRuntime {
                 if (decision == null) {
                     decision = MemoryRecallDecision.skip("empty_policy_decision");
                 }
+                appliedDecision = decision;
                 reason = decision.reason();
                 if (decision.shouldRecall()) {
                     MemoryContext enriched = conversationMemoryService.recallLongTerm(
                             context.rawRequest,
                             context.memoryContext,
-                            decision.query()
+                            decision
                     );
                     if (enriched != null) {
                         context.memoryContext = enriched;
@@ -520,19 +522,34 @@ public class SpringAiAlibabaAgentRuntime {
                         context.memoryContext.promptMemory().messages()
                 );
             }
+            boolean semanticExecuted = context.memoryContext != null
+                    && context.memoryContext.recallDiagnostics().semanticRecallExecuted();
+            boolean profileCacheHit = context.memoryContext != null
+                    && context.memoryContext.recallDiagnostics().profileCacheHit();
             context.addTrace(new AgentTraceStep(
                     context.nextStep(),
                     "memory",
                     context.analysis == null ? "" : context.analysis.route(),
                     "",
                     "recall_long_term_memory",
-                    "decision=" + status + "; reason=" + reason + "; recalledItems=" + recalledItems,
+                    "decision=" + status
+                            + "; reason=" + reason
+                            + "; semanticExecuted=" + semanticExecuted
+                            + "; recalledItems=" + recalledItems
+                            + "; profileCacheHit=" + profileCacheHit,
                     status,
                     durationMs(started),
                     error,
                     "",
                     "",
-                    Map.of("graph", context.multiAgent ? multiAgentGraphName() : ordinaryGraphName())
+                    Map.of(
+                            "graph", context.multiAgent ? multiAgentGraphName() : ordinaryGraphName(),
+                            "semanticTypes", appliedDecision.semanticTypes(),
+                            "profileKeys", appliedDecision.profileKeys(),
+                            "semanticRecallExecuted", semanticExecuted,
+                            "profileCacheHit", profileCacheHit,
+                            "recalledItems", recalledItems
+                    )
             ));
             return stateUpdate(context);
         });

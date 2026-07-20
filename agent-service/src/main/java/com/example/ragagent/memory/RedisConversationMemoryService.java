@@ -41,13 +41,36 @@ public class RedisConversationMemoryService extends AbstractConversationMemorySe
             UserProfileStore userProfileStore,
             LongTermMemoryExtractor longTermMemoryExtractor
     ) {
+        this(
+                redisTemplate,
+                properties,
+                summarizer,
+                stateExtractor,
+                semanticMemoryStore,
+                userProfileStore,
+                longTermMemoryExtractor,
+                new ConversationProfileCache(userProfileStore, properties.memory())
+        );
+    }
+
+    public RedisConversationMemoryService(
+            StringRedisTemplate redisTemplate,
+            RagProperties properties,
+            ConversationSummarizer summarizer,
+            ConversationStateExtractor stateExtractor,
+            SemanticMemoryStore semanticMemoryStore,
+            UserProfileStore userProfileStore,
+            LongTermMemoryExtractor longTermMemoryExtractor,
+            ConversationProfileCache profileCache
+    ) {
         super(
                 properties.memory(),
                 summarizer,
                 stateExtractor,
                 semanticMemoryStore,
                 userProfileStore,
-                longTermMemoryExtractor
+                longTermMemoryExtractor,
+                profileCache
         );
         this.redisTemplate = redisTemplate;
         this.objectMapper = new ObjectMapper();

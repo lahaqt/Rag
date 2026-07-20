@@ -3,6 +3,7 @@ package com.example.ragagent.memory;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import com.example.ragagent.dto.ChatRequest;
+import com.example.ragagent.dto.ChatOptions;
 import com.example.ragagent.dto.QueryAnalysisResponse;
 import java.util.List;
 import java.util.Map;
@@ -48,10 +49,60 @@ class DefaultMemoryRecallPolicyTests {
 
         assertThat(decision.shouldRecall()).isTrue();
         assertThat(decision.reason()).isEqualTo("explicit_history_reference");
+        assertThat(decision.semanticTypes()).containsExactlyInAnyOrder(
+                MemoryTypes.FACT,
+                MemoryTypes.GOAL,
+                MemoryTypes.DECISION,
+                MemoryTypes.BUSINESS_CONTEXT,
+                MemoryTypes.TOPIC,
+                MemoryTypes.PREFERENCE
+        );
+        assertThat(decision.maxItems()).isEqualTo(4);
+    }
+
+    @Test
+    void knowledgeRequestUsesOnlyKnowledgeRelevantTypesAndProfileFields() {
+        QueryAnalysisResponse analysis = analysis(
+                "Implement this Java API as a table",
+                "Implement this Java API as a table",
+                "USER_QUESTION",
+                "knowledge"
+        );
+
+        MemoryRecallDecision decision = policy.decide(identifiedRequest("Implement this Java API as a table"), analysis);
+
+        assertThat(decision.semanticTypes()).containsExactlyInAnyOrder(
+                MemoryTypes.FACT,
+                MemoryTypes.DECISION,
+                MemoryTypes.TOPIC,
+                MemoryTypes.GOAL
+        );
+        assertThat(decision.semanticTypes()).doesNotContain(MemoryTypes.PREFERENCE);
+        assertThat(decision.profileKeys()).contains("language", "response_style", "output_format", "technology_preference");
+    }
+
+    @Test
+    void anonymousRequestAllowsConversationPreferenceRecall() {
+        MemoryRecallDecision decision = policy.decide(
+                request("Explain the implementation details"),
+                analysis("Explain the implementation details", "Explain the implementation details", "USER_QUESTION", "direct")
+        );
+
+        assertThat(decision.semanticTypes()).contains(MemoryTypes.PREFERENCE);
     }
 
     private ChatRequest request(String query) {
         return new ChatRequest(query, "kb-1", "conversation-1", List.of(), null);
+    }
+
+    private ChatRequest identifiedRequest(String query) {
+        return new ChatRequest(
+                query,
+                "kb-1",
+                "conversation-1",
+                List.of(),
+                new ChatOptions(null, null, null, null, null, false, "user-1")
+        );
     }
 
     private QueryAnalysisResponse analysis(String original, String rewritten, String requestType, String intent) {
