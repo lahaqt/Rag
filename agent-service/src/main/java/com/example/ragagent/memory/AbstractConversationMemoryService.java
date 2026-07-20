@@ -12,7 +12,6 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -218,17 +217,16 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         int summarizedMessageCount = memory.summarizedMessageCount();
         Map<String, TurnSummary> turnSummaries = new LinkedHashMap<>(memory.turnSummaries());
         List<ConversationTurn> turns = ConversationTurn.group(messages, summarizedMessageCount);
-        removeStaleTurnSummaries(turnSummaries, turns);
         summarizeOversizedTurns(turns, turnSummaries);
 
-        int tokensBeforeCompaction = effectiveHistoryTokens(rollingSummary, turns, turnSummaries);
+        int tokensBeforeCompaction = rawHistoryTokens(rollingSummary, turns);
         int turnsToCompact = tokensBeforeCompaction > config.compactionTriggerTokens()
                 ? Math.max(0, turns.size() - config.protectedRecentTurns())
                 : 0;
         int compactedMessageCount = 0;
         if (turnsToCompact > 0) {
             List<ConversationTurn> compactedTurns = turns.subList(0, turnsToCompact);
-            List<ChatMessage> summaryInput = projectedMessages(compactedTurns, turnSummaries);
+            List<ChatMessage> summaryInput = summaryInputMessages(compactedTurns, turnSummaries);
             MemorySummary summary = summarizer.summarize(
                     rollingSummary,
                     summaryInput,
@@ -241,13 +239,12 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             compactedMessageCount = compactedTurns.stream().mapToInt(ConversationTurn::messageCount).sum();
             summarizedMessageCount += compactedMessageCount;
             messages = new ArrayList<>(messages.subList(compactedMessageCount, messages.size()));
-            compactedTurns.forEach(turn -> turnSummaries.remove(turn.contentHash()));
             turns = ConversationTurn.group(messages, summarizedMessageCount);
             log.info(
                     "Conversation memory compacted tokensBefore={} tokensAfter={} compactedTurns={} protectedTurns={} "
                             + "oversizedTurns={} summaryVersion={} factCoverage={} fallbackUsed={}",
                     tokensBeforeCompaction,
-                    effectiveHistoryTokens(rollingSummary, turns, turnSummaries),
+                    activeHistoryTokens(rollingSummary, turns, turnSummaries),
                     turnsToCompact,
                     turns.size(),
                     turnSummaries.size(),
@@ -283,10 +280,16 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 stored.messages(),
                 stored.summarizedMessageCount()
         );
-        List<ChatMessage> projectedMessages = projectedMessages(turns, stored.turnSummaries());
+        List<ChatMessage> projectedMessages = activeContextMessages(
+                stored.rollingSummary(),
+                turns,
+                stored.turnSummaries()
+        );
+        List<ChatMessage> rawRecallMessages = recallHistoricalRaw(request, stored);
         return new MemoryContext(
                 conversationId,
                 projectedMessages,
+                rawRecallMessages,
                 stored.rollingSummary(),
                 stored.dialogState(),
                 List.of(),
@@ -295,7 +298,8 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                 stored.summaryVersion(),
                 new MemoryDiagnostics(
                         TokenEstimator.estimate(stored.rollingSummary())
-                                + TokenEstimator.estimateMessages(projectedMessages),
+                                + TokenEstimator.estimateMessages(projectedMessages)
+                                + TokenEstimator.estimateMessages(rawRecallMessages),
                         turns.size(),
                         Math.min(turns.size(), config.protectedRecentTurns()),
                         stored.turnSummaries().size(),
@@ -320,7 +324,9 @@ public abstract class AbstractConversationMemoryService implements ConversationM
                     summary.content(),
                     1,
                     summary.factCoverage(),
-                    summary.fallbackUsed()
+                    summary.fallbackUsed(),
+                    turn.startMessageIndex(),
+                    turn.startMessageIndex() + turn.messageCount()
             ));
             log.info(
                     "Oversized conversation turn summarized rawTokens={} summaryTokens={} factCoverage={} "
@@ -333,30 +339,31 @@ public abstract class AbstractConversationMemoryService implements ConversationM
         }
     }
 
-    private void removeStaleTurnSummaries(
-            Map<String, TurnSummary> turnSummaries,
-            List<ConversationTurn> turns
-    ) {
-        Set<String> activeHashes = new LinkedHashSet<>();
-        for (ConversationTurn turn : turns) {
-            activeHashes.add(turn.contentHash());
-        }
-        turnSummaries.keySet().removeIf(hash -> !activeHashes.contains(hash));
-    }
-
-    private int effectiveHistoryTokens(
+    /**
+     * Oversized-turn summaries are precomputed projections, not an automatic replacement for recent source text.
+     * The compaction trigger intentionally accounts for the original turn tokens.
+     */
+    private int rawHistoryTokens(
             String rollingSummary,
-            List<ConversationTurn> turns,
-            Map<String, TurnSummary> turnSummaries
+            List<ConversationTurn> turns
     ) {
         int tokens = TokenEstimator.estimate(rollingSummary);
         for (ConversationTurn turn : turns) {
-            tokens += TokenEstimator.estimateMessages(turn.promptMessages(turnSummaries.get(turn.contentHash())));
+            tokens += turn.tokenCount();
         }
         return tokens;
     }
 
-    private List<ChatMessage> projectedMessages(
+    private int activeHistoryTokens(
+            String rollingSummary,
+            List<ConversationTurn> turns,
+            Map<String, TurnSummary> turnSummaries
+    ) {
+        return TokenEstimator.estimate(rollingSummary)
+                + TokenEstimator.estimateMessages(activeContextMessages(rollingSummary, turns, turnSummaries));
+    }
+
+    private List<ChatMessage> summaryInputMessages(
             List<ConversationTurn> turns,
             Map<String, TurnSummary> turnSummaries
     ) {
@@ -365,6 +372,55 @@ public abstract class AbstractConversationMemoryService implements ConversationM
             projected.addAll(turn.promptMessages(turnSummaries.get(turn.contentHash())));
         }
         return List.copyOf(projected);
+    }
+
+    private List<ChatMessage> activeContextMessages(
+            String rollingSummary,
+            List<ConversationTurn> turns,
+            Map<String, TurnSummary> turnSummaries
+    ) {
+        int availableTurnTokens = Math.max(0, activeTurnTokenBudget() - TokenEstimator.estimate(rollingSummary));
+        List<List<ChatMessage>> selected = new ArrayList<>(turns.size());
+        int projectedTokens = 0;
+        for (ConversationTurn turn : turns) {
+            selected.add(turn.messages());
+            projectedTokens += turn.tokenCount();
+        }
+        // Only when the complete active history cannot fit do we replace the oldest oversized turns.
+        for (int index = 0; index < turns.size() && projectedTokens > availableTurnTokens; index++) {
+            ConversationTurn turn = turns.get(index);
+            TurnSummary summary = turnSummaries.get(turn.contentHash());
+            if (summary == null || turn.tokenCount() <= config.oversizedTurnTokens()) {
+                continue;
+            }
+            List<ChatMessage> summarized = turn.promptMessages(summary);
+            int summarizedTokens = TokenEstimator.estimateMessages(summarized);
+            projectedTokens -= TokenEstimator.estimateMessages(selected.get(index));
+            selected.set(index, summarized);
+            projectedTokens += summarizedTokens;
+        }
+        if (projectedTokens > availableTurnTokens) {
+            log.warn("Active conversation memory remains above its source-text budget tokens={} budget={}",
+                    projectedTokens, availableTurnTokens);
+        }
+        List<ChatMessage> projected = new ArrayList<>();
+        selected.forEach(projected::addAll);
+        return List.copyOf(projected);
+    }
+
+    private int activeTurnTokenBudget() {
+        // The prompt reserves tokens for output, tools, retrieval, and working state. Keep this independent from
+        // the 64k rolling-compaction trigger so protected recent turns stay verbatim whenever the 112k history
+        // budget can accommodate them.
+        return Math.min(112000, Math.max(config.compactionTriggerTokens(), config.contextWindowTokens() - 16000));
+    }
+
+    /**
+     * Providers with access to the immutable transcript can hydrate relevant source messages from compacted ranges.
+     * Other providers retain the safe summary-only projection.
+     */
+    protected List<ChatMessage> recallHistoricalRaw(ChatRequest request, StoredMemory stored) {
+        return List.of();
     }
 
     protected MemoryContext noOpContext(ChatRequest request) {

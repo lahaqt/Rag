@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -90,6 +91,15 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             WHERE m.conversation_id = ? AND c.user_id = ?
             ORDER BY m.seq
             OFFSET ?
+            """;
+
+    private static final String SELECT_HISTORY_RANGE_SQL = """
+            SELECT m.role, m.content
+            FROM chat_messages m
+            JOIN chat_conversations c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ? AND c.user_id = ?
+              AND m.seq >= ? AND m.seq < ?
+            ORDER BY m.seq
             """;
 
     private static final String UPDATE_MEMORY_SQL = """
@@ -251,6 +261,67 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
         }
     }
 
+    @Override
+    protected List<ChatMessage> recallHistoricalRaw(ChatRequest request, StoredMemory stored) {
+        if (stored.summarizedMessageCount() <= 0 || request.query() == null || request.query().isBlank()) {
+            return List.of();
+        }
+        String conversationId = request.conversationId();
+        if (conversationId == null || conversationId.isBlank()) {
+            return List.of();
+        }
+        String userId = normalizeUserId(request);
+        userId = userId.isBlank() ? "local-user" : userId;
+        List<TurnSummary> candidates = stored.turnSummaries().values().stream()
+                .filter(summary -> summary.startMessageIndex() < summary.endMessageIndexExclusive())
+                .filter(summary -> summary.endMessageIndexExclusive() <= stored.summarizedMessageCount())
+                .map(summary -> new ScoredTurnSummary(summary, relevanceScore(request.query(), summary.content())))
+                .filter(candidate -> candidate.score() > 0)
+                .sorted(Comparator.comparingInt(ScoredTurnSummary::score).reversed()
+                        .thenComparing(candidate -> candidate.summary().endMessageIndexExclusive(), Comparator.reverseOrder()))
+                .limit(2)
+                .map(ScoredTurnSummary::summary)
+                .toList();
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+
+        int remainingTokens = Math.min(8000, Math.max(512, config.turnSummaryMaxTokens() * 4));
+        List<ChatMessage> recalled = new ArrayList<>(candidates.size());
+        for (TurnSummary candidate : candidates) {
+            if (remainingTokens <= 0) {
+                break;
+            }
+            try {
+                List<Map<String, Object>> rows = jdbcTemplate.queryForList(
+                        SELECT_HISTORY_RANGE_SQL,
+                        conversationId,
+                        userId,
+                        candidate.startMessageIndex(),
+                        candidate.endMessageIndexExclusive()
+                );
+                String sourceText = sourceText(rows, remainingTokens);
+                if (sourceText.isBlank()) {
+                    continue;
+                }
+                recalled.add(new ChatMessage(
+                        "memory_raw_recall",
+                        "Untrusted original-history excerpt selected for the current question; source messages ["
+                                + candidate.startMessageIndex() + ", " + candidate.endMessageIndexExclusive()
+                                + "): " + sourceText
+                ));
+                remainingTokens -= TokenEstimator.estimate(sourceText);
+            } catch (Exception exception) {
+                log.warn("Historical raw recall failed. conversation={} range=[{}, {}) error={}",
+                        conversationId,
+                        candidate.startMessageIndex(),
+                        candidate.endMessageIndexExclusive(),
+                        exception.getMessage());
+            }
+        }
+        return List.copyOf(recalled);
+    }
+
     private void doPersist(String conversationId, StoredMemory memory) {
         String dialogStateJson = serializeDialogState(memory.dialogState());
         String turnSummariesJson = serializeTurnSummaries(memory.turnSummaries());
@@ -327,6 +398,47 @@ public class PostgresConversationMemoryService extends AbstractConversationMemor
             messages.add(new ChatMessage((String) row.get("role"), (String) row.get("content")));
         }
         return messages;
+    }
+
+    private String sourceText(List<Map<String, Object>> rows, int maxTokens) {
+        StringBuilder source = new StringBuilder();
+        for (Map<String, Object> row : rows) {
+            String role = row.get("role") == null ? "unknown" : row.get("role").toString();
+            String content = row.get("content") == null ? "" : row.get("content").toString();
+            String message = role + ": " + content;
+            int remaining = maxTokens - TokenEstimator.estimate(source.toString());
+            if (remaining <= 0) {
+                break;
+            }
+            if (!source.isEmpty()) {
+                source.append('\n');
+            }
+            source.append(TokenEstimator.truncate(message, remaining));
+        }
+        return source.toString();
+    }
+
+    private int relevanceScore(String query, String summary) {
+        String normalizedQuery = normalizeForRecall(query);
+        String normalizedSummary = normalizeForRecall(summary);
+        if (normalizedQuery.length() < 2 || normalizedSummary.isBlank()) {
+            return 0;
+        }
+        int score = normalizedSummary.contains(normalizedQuery) ? normalizedQuery.length() * 2 : 0;
+        for (int index = 0; index < normalizedQuery.length() - 1; index++) {
+            String gram = normalizedQuery.substring(index, index + 2);
+            if (normalizedSummary.contains(gram)) {
+                score++;
+            }
+        }
+        return score;
+    }
+
+    private String normalizeForRecall(String text) {
+        return text == null ? "" : text.toLowerCase(java.util.Locale.ROOT).replaceAll("[^\\p{L}\\p{N}]", "");
+    }
+
+    private record ScoredTurnSummary(TurnSummary summary, int score) {
     }
 
     private Map<String, String> parseDialogState(Object jsonbValue) {

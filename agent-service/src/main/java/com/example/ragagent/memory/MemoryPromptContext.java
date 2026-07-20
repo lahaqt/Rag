@@ -7,6 +7,7 @@ import java.util.Map;
 
 public record MemoryPromptContext(
         List<ChatMessage> recentMessages,
+        List<ChatMessage> rawRecallMessages,
         String rollingSummary,
         Map<String, String> dialogState,
         List<MemoryItem> semanticMemories,
@@ -19,11 +20,12 @@ public record MemoryPromptContext(
             String rollingSummary,
             Map<String, String> dialogState
     ) {
-        this(recentMessages, rollingSummary, dialogState, List.of(), new UserProfile("", Map.of(), null));
+        this(recentMessages, List.of(), rollingSummary, dialogState, List.of(), new UserProfile("", Map.of(), null));
     }
 
     public MemoryPromptContext {
         recentMessages = recentMessages == null ? List.of() : List.copyOf(recentMessages);
+        rawRecallMessages = rawRecallMessages == null ? List.of() : List.copyOf(rawRecallMessages);
         rollingSummary = rollingSummary == null ? "" : rollingSummary;
         dialogState = dialogState == null ? Map.of() : Map.copyOf(dialogState);
         semanticMemories = semanticMemories == null ? List.of() : List.copyOf(semanticMemories);
@@ -56,6 +58,7 @@ public record MemoryPromptContext(
                     UNTRUSTED_MEMORY_NOTICE + "Relevant long-term memories: " + semanticMemoryText()
             ));
         }
+        history.addAll(rawRecallMessages);
         history.addAll(recentMessages);
         return List.copyOf(history);
     }

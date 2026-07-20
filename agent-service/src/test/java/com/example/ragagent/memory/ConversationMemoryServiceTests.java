@@ -222,7 +222,7 @@ class ConversationMemoryServiceTests {
                 .containsExactly("user", "assistant");
         MemoryContext context = memoryService.load(request("follow up"));
         assertThat(context.recentMessages()).extracting(ChatMessage::role)
-                .containsExactly("conversation_turn_summary");
+                .containsExactly("user", "assistant");
         assertThat(context.rawMessageCount()).isEqualTo(2);
         assertThat(context.diagnostics().oversizedTurnCount()).isEqualTo(1);
     }
@@ -336,7 +336,29 @@ class ConversationMemoryServiceTests {
         assertThat(overCalls).hasSize(1);
         assertThat(overService.load(request("follow up")).recentMessages())
                 .extracting(ChatMessage::role)
+                .containsExactly("user", "assistant");
+    }
+
+    @Test
+    void substitutesAPrecomputedTurnSummaryOnlyWhenTheActiveSourceBudgetIsExceeded() {
+        RagProperties properties = new RagProperties(
+                null, null, null, null, null, null, null, null,
+                memory(2048, 6, 64, 128)
+        );
+        InMemoryConversationMemoryService memoryService = new InMemoryConversationMemoryService(
+                properties,
+                (current, messages, maxTokens) -> new MemorySummary("budget-safe summary", true),
+                new BusinessConversationStateExtractor()
+        );
+        ChatRequest request = request("large-source-question-" + "x".repeat(12000));
+        memoryService.recordTurn(request, analysis(request), response("large-source-answer-" + "y".repeat(12000)));
+
+        MemoryContext context = memoryService.load(request("follow up"));
+
+        assertThat(context.recentMessages()).extracting(ChatMessage::role)
                 .containsExactly("conversation_turn_summary");
+        assertThat(context.recentMessages().get(0).content())
+                .contains("original messages [0, 2)", "budget-safe summary");
     }
 
     @Test
@@ -442,8 +464,7 @@ class ConversationMemoryServiceTests {
 
             assertThat(calls).hasSize(1);
             assertThat(context.recentMessages()).extracting(ChatMessage::role)
-                    .containsExactly("conversation_turn_summary");
-            assertThat(context.recentMessages().get(0).content()).contains("persisted-turn-summary");
+                    .containsExactly("user", "assistant");
             assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM chat_messages", Integer.class))
                     .isEqualTo(2);
             assertThat(jdbcTemplate.queryForList(
@@ -524,8 +545,69 @@ class ConversationMemoryServiceTests {
 
         assertThat(calls).hasSize(1);
         assertThat(context.recentMessages()).extracting(ChatMessage::role)
-                .containsExactly("conversation_turn_summary");
-        assertThat(context.recentMessages().get(0).content()).contains("redis-turn-summary");
+                .containsExactly("user", "assistant");
+    }
+
+    @Test
+    void recallsOriginalMessagesFromTheMatchingCompactedTurnRange() {
+        EmbeddedDatabase database = new EmbeddedDatabaseBuilder()
+                .setName("historical-raw-recall;MODE=PostgreSQL;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=false")
+                .setType(EmbeddedDatabaseType.H2)
+                .build();
+        try {
+            JdbcTemplate jdbcTemplate = new JdbcTemplate(database);
+            jdbcTemplate.execute("""
+                    CREATE TABLE chat_conversations (
+                        id VARCHAR(128) PRIMARY KEY,
+                        user_id VARCHAR(128) NOT NULL
+                    )
+                    """);
+            jdbcTemplate.execute("""
+                    CREATE TABLE chat_messages (
+                        conversation_id VARCHAR(128) NOT NULL,
+                        seq INT NOT NULL,
+                        role VARCHAR(32) NOT NULL,
+                        content TEXT NOT NULL
+                    )
+                    """);
+            jdbcTemplate.update("INSERT INTO chat_conversations (id, user_id) VALUES (?, ?)",
+                    "session-1", "local-user");
+            for (int index = 0; index < 7; index++) {
+                String question = index == 0
+                        ? "refund reference ZX-2048 " + "x".repeat(400)
+                        : "other question " + index;
+                String answer = index == 0 ? "refund source detail " + "y".repeat(400) : "other answer " + index;
+                jdbcTemplate.update("INSERT INTO chat_messages (conversation_id, seq, role, content) VALUES (?, ?, ?, ?)",
+                        "session-1", index * 2, "user", question);
+                jdbcTemplate.update("INSERT INTO chat_messages (conversation_id, seq, role, content) VALUES (?, ?, ?, ?)",
+                        "session-1", index * 2 + 1, "assistant", answer);
+            }
+            RagProperties properties = new RagProperties(
+                    null, null, null, null, null, null, null, null,
+                    memory(100, 6, 64, 64)
+            );
+            PostgresConversationMemoryService memoryService = new PostgresConversationMemoryService(
+                    jdbcTemplate,
+                    properties,
+                    (current, messages, maxTokens) -> new MemorySummary("refund reference ZX-2048", true),
+                    new BusinessConversationStateExtractor(),
+                    new InMemorySemanticMemoryStore(),
+                    new InMemoryUserProfileStore(),
+                    new BusinessLongTermMemoryExtractor()
+            );
+            ChatRequest latest = request("other question 6");
+            memoryService.recordTurn(latest, analysis(latest), response("other answer 6"));
+
+            MemoryContext context = memoryService.load(request("Where is refund reference ZX-2048?"));
+
+            assertThat(context.rawRecallMessages()).hasSize(1);
+            assertThat(context.rawRecallMessages().get(0).content())
+                    .contains("source messages [0, 2)", "refund source detail");
+            assertThat(context.recentMessages()).extracting(ChatMessage::content)
+                    .doesNotContain("refund source detail " + "y".repeat(400));
+        } finally {
+            database.shutdown();
+        }
     }
 
     @Test

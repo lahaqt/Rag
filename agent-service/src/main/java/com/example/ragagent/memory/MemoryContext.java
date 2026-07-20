@@ -7,6 +7,7 @@ import java.util.Map;
 public record MemoryContext(
         String conversationId,
         List<ChatMessage> recentMessages,
+        List<ChatMessage> rawRecallMessages,
         String rollingSummary,
         Map<String, String> dialogState,
         List<MemoryItem> semanticMemories,
@@ -29,6 +30,7 @@ public record MemoryContext(
         this(
                 conversationId,
                 recentMessages,
+                List.of(),
                 rollingSummary,
                 dialogState,
                 semanticMemories,
@@ -51,6 +53,7 @@ public record MemoryContext(
         this(
                 conversationId,
                 recentMessages,
+                List.of(),
                 rollingSummary,
                 dialogState,
                 List.of(),
@@ -64,6 +67,7 @@ public record MemoryContext(
 
     public MemoryContext {
         recentMessages = recentMessages == null ? List.of() : List.copyOf(recentMessages);
+        rawRecallMessages = rawRecallMessages == null ? List.of() : List.copyOf(rawRecallMessages);
         rollingSummary = rollingSummary == null ? "" : rollingSummary;
         dialogState = dialogState == null ? Map.of() : Map.copyOf(dialogState);
         semanticMemories = semanticMemories == null ? List.of() : List.copyOf(semanticMemories);
@@ -77,7 +81,14 @@ public record MemoryContext(
     }
 
     public MemoryPromptContext promptMemory() {
-        return new MemoryPromptContext(recentMessages, rollingSummary, dialogState, semanticMemories, userProfile);
+        return new MemoryPromptContext(
+                recentMessages,
+                rawRecallMessages,
+                rollingSummary,
+                dialogState,
+                semanticMemories,
+                userProfile
+        );
     }
 
     public MemoryStateContext stateMemory() {
@@ -100,6 +111,7 @@ public record MemoryContext(
         return new MemoryContext(
                 conversationId,
                 recentMessages,
+                rawRecallMessages,
                 rollingSummary,
                 dialogState,
                 recalledMemories,
