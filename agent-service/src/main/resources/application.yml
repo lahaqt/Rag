@@ -75,7 +75,13 @@ rag:
   mcp:
     enabled: true
     timeout-seconds: 8
-    servers: []
+    servers:
+      - id: mcp-deepwiki-remote-test
+        name: DeepWiki Remote Test
+        transport: streamable_http
+        endpoint: https://mcp.deepwiki.com/mcp
+        enabled: true
+        read-only: true
   agent:
     planner-enabled: true
     capability-priority: [web_search, mcp_tool, rag_retrieval]

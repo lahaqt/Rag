@@ -189,6 +189,7 @@ export type McpServer = {
   environment: Record<string, string>
   workingDirectory: string
   enabled: boolean
+  readOnly: boolean
   status: string
   lastError: string
   updatedAt: string

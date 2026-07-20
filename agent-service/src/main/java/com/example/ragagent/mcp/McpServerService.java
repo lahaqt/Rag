@@ -48,7 +48,8 @@ public class McpServerService {
                     server.environment(),
                     server.workingDirectory(),
                     server.bearerToken(),
-                    server.enabled()
+                    server.enabled(),
+                    server.readOnly()
             );
             servers.put(definition.id(), new ManagedMcpServer(definition));
         }
@@ -63,6 +64,9 @@ public class McpServerService {
 
     public McpServerResponse upsert(McpServerRequest request) {
         ManagedMcpServer previous = request.id() == null || request.id().isBlank() ? null : servers.get(request.id());
+        if (previous != null && previous.definition().readOnly()) {
+            throw new IllegalStateException("Built-in MCP server cannot be modified: " + previous.definition().id());
+        }
         String bearerToken = request.bearerToken();
         if ((bearerToken == null || bearerToken.isBlank()) && previous != null) {
             bearerToken = previous.definition().bearerToken();
@@ -77,8 +81,13 @@ public class McpServerService {
                 request.environment(),
                 request.workingDirectory(),
                 bearerToken,
-                request.enabled()
+                request.enabled(),
+                false
         );
+        ManagedMcpServer existingByDefinitionId = servers.get(definition.id());
+        if (existingByDefinitionId != null && existingByDefinitionId.definition().readOnly()) {
+            throw new IllegalStateException("Built-in MCP server cannot be modified: " + definition.id());
+        }
         ManagedMcpServer next = new ManagedMcpServer(definition);
         if (definition.enabled()) {
             try {
@@ -101,6 +110,13 @@ public class McpServerService {
     }
 
     public void delete(String id) {
+        ManagedMcpServer existing = servers.get(id);
+        if (existing == null) {
+            throw new IllegalArgumentException("Unknown MCP server: " + id);
+        }
+        if (existing.definition().readOnly()) {
+            throw new IllegalStateException("Built-in MCP server cannot be deleted: " + id);
+        }
         ManagedMcpServer removed = servers.remove(id);
         if (removed == null) {
             throw new IllegalArgumentException("Unknown MCP server: " + id);

@@ -1659,6 +1659,9 @@ function App() {
   }
 
   function editMcpServer(server: McpServer) {
+    if (server.readOnly) {
+      return
+    }
     setMcpForm({
       id: server.id,
       name: server.name,
@@ -1678,6 +1681,9 @@ function App() {
   }
 
   async function toggleMcpServer(server: McpServer) {
+    if (server.readOnly) {
+      return
+    }
     setMcpError('')
     try {
       const response = await fetch(`/api/mcp/servers/${server.id}`, {
@@ -2792,23 +2798,29 @@ function App() {
                           <em>{server.tools.length}</em>
                         </button>
                         <div className="mcp-server-actions">
-                          <button
-                            className="mcp-icon-action"
-                            onClick={() => editMcpServer(server)}
-                            title="配置服务"
-                            type="button"
-                          >
-                            <Settings size={15} />
-                          </button>
-                          <button
-                            aria-pressed={server.enabled}
-                            className={server.enabled ? 'mcp-toggle on' : 'mcp-toggle'}
-                            onClick={() => toggleMcpServer(server)}
-                            title={server.enabled ? '停用服务' : '启用服务'}
-                            type="button"
-                          >
-                            <span />
-                          </button>
+                          {server.readOnly ? (
+                            <span className="mcp-read-only-badge">内置测试</span>
+                          ) : (
+                            <>
+                              <button
+                                className="mcp-icon-action"
+                                onClick={() => editMcpServer(server)}
+                                title="配置服务"
+                                type="button"
+                              >
+                                <Settings size={15} />
+                              </button>
+                              <button
+                                aria-pressed={server.enabled}
+                                className={server.enabled ? 'mcp-toggle on' : 'mcp-toggle'}
+                                onClick={() => toggleMcpServer(server)}
+                                title={server.enabled ? '停用服务' : '启用服务'}
+                                type="button"
+                              >
+                                <span />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -2831,18 +2843,22 @@ function App() {
                     <small>{activeMcpServer.status}{activeMcpServer.lastError ? ` · ${activeMcpServer.lastError}` : ''}</small>
                   </div>
                   <div className="mcp-tool-actions">
-                    <button onClick={() => editMcpServer(activeMcpServer)} type="button">
-                      <SlidersHorizontal size={15} />
-                      编辑
-                    </button>
+                    {!activeMcpServer.readOnly && (
+                      <button onClick={() => editMcpServer(activeMcpServer)} type="button">
+                        <SlidersHorizontal size={15} />
+                        编辑
+                      </button>
+                    )}
                     <button disabled={refreshingMcpId === activeMcpServer.id} onClick={() => refreshMcpServer(activeMcpServer)} type="button">
                       <RefreshCw size={15} />
                       {refreshingMcpId === activeMcpServer.id ? '刷新中' : '刷新工具'}
                     </button>
-                    <button className="danger" onClick={() => deleteMcpServer(activeMcpServer)} type="button">
-                      <Trash2 size={15} />
-                      删除
-                    </button>
+                    {!activeMcpServer.readOnly && (
+                      <button className="danger" onClick={() => deleteMcpServer(activeMcpServer)} type="button">
+                        <Trash2 size={15} />
+                        删除
+                      </button>
+                    )}
                   </div>
                 </div>
 

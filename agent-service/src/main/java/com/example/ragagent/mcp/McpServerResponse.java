@@ -14,6 +14,7 @@ public record McpServerResponse(
         Map<String, String> environment,
         String workingDirectory,
         boolean enabled,
+        boolean readOnly,
         String status,
         String lastError,
         Instant updatedAt,

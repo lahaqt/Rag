@@ -615,7 +615,8 @@ public record RagProperties(
             java.util.Map<String, String> environment,
             String workingDirectory,
             String bearerToken,
-            Boolean enabled
+            Boolean enabled,
+            Boolean readOnly
     ) {
         public McpServer {
             if (id == null) {
@@ -642,6 +643,7 @@ public record RagProperties(
                 bearerToken = "";
             }
             enabled = enabled == null || enabled;
+            readOnly = readOnly != null && readOnly;
         }
     }
 }

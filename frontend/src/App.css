@@ -1440,6 +1440,17 @@ button {
   padding-left: 14px;
 }
 
+.mcp-read-only-badge {
+  padding: 4px 8px;
+  border: 1px solid rgba(54, 116, 181, 0.2);
+  border-radius: 999px;
+  color: #245ca2;
+  background: rgba(54, 116, 181, 0.09);
+  font-size: 11px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
 .mcp-icon-action {
   display: inline-grid;
   place-items: center;

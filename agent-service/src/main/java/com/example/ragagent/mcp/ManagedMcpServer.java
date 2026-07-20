@@ -79,6 +79,7 @@ public final class ManagedMcpServer {
                 definition.environment(),
                 definition.workingDirectory(),
                 definition.enabled(),
+                definition.readOnly(),
                 status,
                 lastError,
                 updatedAt,

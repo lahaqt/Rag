@@ -17,7 +17,8 @@ public record McpServerDefinition(
         Map<String, String> environment,
         String workingDirectory,
         String bearerToken,
-        boolean enabled
+        boolean enabled,
+        boolean readOnly
 ) {
     private static final Pattern SAFE_ID = Pattern.compile("[a-zA-Z0-9_-]{1,64}");
     public static final String TRANSPORT_HTTP = "streamable_http";
@@ -33,7 +34,8 @@ public record McpServerDefinition(
             Map<String, String> environment,
             String workingDirectory,
             String bearerToken,
-            Boolean enabled
+            Boolean enabled,
+            Boolean readOnly
     ) {
         String normalizedId = normalizeId(id == null || id.isBlank() ? name : id);
         String normalizedTransport = normalizeTransport(transport, endpoint, command);
@@ -66,7 +68,8 @@ public record McpServerDefinition(
                 environment == null ? Map.of() : Map.copyOf(environment),
                 normalizedWorkingDirectory,
                 bearerToken == null ? "" : bearerToken.trim(),
-                enabled == null || enabled
+                enabled == null || enabled,
+                readOnly != null && readOnly
         );
     }
 
