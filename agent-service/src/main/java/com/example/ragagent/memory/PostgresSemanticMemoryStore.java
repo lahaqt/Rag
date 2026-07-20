@@ -193,6 +193,15 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
                       confidence, created_at, updated_at
             """;
 
+    private static final String EDIT_CONFIRM_CANDIDATE_SQL = """
+            UPDATE semantic_memories
+            SET content = ?, metadata = jsonb_set(metadata, '{status}', '"confirmed"'::jsonb, true), updated_at = now()
+            WHERE id = ? AND owner_id = ? AND scope = 'user'
+              AND COALESCE(metadata->>'status', 'confirmed') = 'candidate'
+            RETURNING id, scope, owner_id, conversation_id, type, content, metadata,
+                      confidence, created_at, updated_at
+            """;
+
     private static final String REJECT_CANDIDATE_SQL = """
             DELETE FROM semantic_memories
             WHERE id = ? AND owner_id = ? AND scope = 'user'
@@ -433,6 +442,19 @@ public class PostgresSemanticMemoryStore implements SemanticMemoryStore {
         } catch (Exception exception) {
             log.warn("Postgres semantic memory candidate confirmation failed. memory={} user={} error={}",
                     memoryId, userId, exception.getMessage());
+            return java.util.Optional.empty();
+        }
+    }
+
+    @Override
+    public java.util.Optional<MemoryItem> editAndConfirmCandidate(String memoryId, String userId, String content) {
+        if (memoryId == null || memoryId.isBlank() || userId == null || userId.isBlank() || content == null || content.isBlank() || !ensureSchema()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            return jdbcTemplate.query(EDIT_CONFIRM_CANDIDATE_SQL, this::mapItem, content.trim(), memoryId, userId).stream().findFirst();
+        } catch (Exception exception) {
+            log.warn("Postgres semantic memory candidate edit confirmation failed. memory={} user={} error={}", memoryId, userId, exception.getMessage());
             return java.util.Optional.empty();
         }
     }

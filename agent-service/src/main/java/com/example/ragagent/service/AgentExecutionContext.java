@@ -9,6 +9,7 @@ import com.example.ragagent.observability.AgentTracePersistenceService;
 import com.example.ragagent.observability.AgentStageTracer;
 import com.example.ragagent.observability.TraceContextSnapshot;
 import com.example.ragagent.observability.TraceDataSanitizer;
+import com.example.ragagent.approval.ApprovalRequest;
 import io.micrometer.tracing.Span;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -75,6 +76,7 @@ final class AgentExecutionContext {
     volatile boolean reflectionReplan;
     volatile String routingObservation = "";
     volatile ChatResponse response;
+    volatile ApprovalRequest pendingApproval;
 
     AgentExecutionContext(
             String runId,

@@ -2,6 +2,15 @@ package com.example.ragagent.service;
 
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.OverAllState;
+import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.NodeOutput;
+import com.alibaba.cloud.ai.graph.action.InterruptableAction;
+import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
+import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
+import com.alibaba.cloud.ai.graph.checkpoint.savers.MemorySaver;
+import com.example.ragagent.approval.ApprovalRequest;
+import com.example.ragagent.approval.ApprovalService;
+import com.example.ragagent.approval.ApprovalStatus;
 import com.example.ragagent.a2a.A2aArtifact;
 import com.example.ragagent.a2a.A2aMessage;
 import com.example.ragagent.a2a.A2aPart;
@@ -35,12 +44,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import io.micrometer.tracing.Span;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
 
 /**
  * Stable application-facing facade for the Spring AI Alibaba graphs.
@@ -62,6 +73,10 @@ public class SpringAiAlibabaAgentRuntime {
     private static final Logger log = LoggerFactory.getLogger(SpringAiAlibabaAgentRuntime.class);
 
     private static final String KEY_RUN_ID = "runId";
+    private static final String KEY_REQUEST = "request";
+    private static final String KEY_MULTI_AGENT = "multiAgent";
+    private static final String KEY_PLAN = "executionPlan";
+    private static final String KEY_PENDING_APPROVAL = "pendingApproval";
     private static final String MULTI_AGENT_COMMAND = "/multi-agent";
 
     private final QueryAnalysisClient queryAnalysisClient;
@@ -79,6 +94,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final ExecutionPlanFactory executionPlanFactory;
     private final PlanScheduler planScheduler;
     private final ToolSafetyPolicy toolSafetyPolicy = new ToolSafetyPolicy();
+    private final ApprovalService approvalService;
     private final TraceContextProvider traceContextProvider;
     private final int maxToolIterations;
     private final int maxReflectionRetries;
@@ -92,6 +108,7 @@ public class SpringAiAlibabaAgentRuntime {
     private final CompiledGraph ordinaryGraph;
     private final CompiledGraph multiAgentGraph;
 
+    @Autowired
     public SpringAiAlibabaAgentRuntime(
             QueryAnalysisClient queryAnalysisClient,
             ToolRouter toolRouter,
@@ -108,6 +125,8 @@ public class SpringAiAlibabaAgentRuntime {
             TraceContextProvider traceContextProvider,
             AgentStageTracer stageTracer,
             AgentTracePersistenceService tracePersistenceService,
+            SaverConfig agentGraphSaverConfig,
+            ApprovalService approvalService,
             RagProperties properties
     ) {
         this.queryAnalysisClient = queryAnalysisClient;
@@ -126,6 +145,7 @@ public class SpringAiAlibabaAgentRuntime {
         this.conversationMemoryService = conversationMemoryService;
         this.memoryRecallPolicy = memoryRecallPolicy;
         this.tracePersistenceService = tracePersistenceService;
+        this.approvalService = approvalService;
         this.stageTracer = stageTracer;
         this.executionPlanFactory = new ExecutionPlanFactory(planLlmClient,
                 properties == null || properties.agent() == null || properties.agent().planLlmFallbackEnabled());
@@ -163,6 +183,7 @@ public class SpringAiAlibabaAgentRuntime {
         AgentGraphFactory.Graphs graphs = AgentGraphFactory.compile(
                 maxToolIterations,
                 maxReflectionRetries,
+                agentGraphSaverConfig,
                 new AgentGraphFactory.Nodes(
                         this::prepareContext,
                         this::analyze,
@@ -176,7 +197,8 @@ public class SpringAiAlibabaAgentRuntime {
                         this::replanMultiAgent,
                         this::generate,
                         this::reflect,
-                        this::finalizeResponse
+                        this::finalizeResponse,
+                        this::interruptExecution
                 ),
                 new AgentGraphFactory.Edges(
                         this::ordinaryReplanEdge,
@@ -188,6 +210,21 @@ public class SpringAiAlibabaAgentRuntime {
         );
         this.ordinaryGraph = graphs.ordinary();
         this.multiAgentGraph = graphs.multiAgent();
+    }
+
+    /** Test/backward-compatible constructor; production injection uses the durable saver constructor above. */
+    public SpringAiAlibabaAgentRuntime(
+            QueryAnalysisClient queryAnalysisClient, ToolRouter toolRouter, RagRetrievalTool ragRetrievalTool,
+            WebSearchTool webSearchTool, McpToolGateway mcpToolGateway, FunctionToolRegistry functionToolRegistry,
+            PlanLlmClient planLlmClient, AnswerGenerator answerGenerator, ReflectionCritic reflectionCritic,
+            ConversationMemoryService conversationMemoryService, MemoryRecallPolicy memoryRecallPolicy,
+            ConversationHistoryService conversationHistoryService, TraceContextProvider traceContextProvider,
+            AgentStageTracer stageTracer, AgentTracePersistenceService tracePersistenceService, RagProperties properties
+    ) {
+        this(queryAnalysisClient, toolRouter, ragRetrievalTool, webSearchTool, mcpToolGateway, functionToolRegistry,
+                planLlmClient, answerGenerator, reflectionCritic, conversationMemoryService, memoryRecallPolicy,
+                conversationHistoryService, traceContextProvider, stageTracer, tracePersistenceService,
+                SaverConfig.builder().register(new MemorySaver()).build(), null, properties);
     }
 
     public ChatResponse answer(ChatRequest request) {
@@ -209,6 +246,29 @@ public class SpringAiAlibabaAgentRuntime {
         }
         return answer(run.request(), ChatStreamSink.noop(), TraceContextSnapshot.empty(), null,
                 run.multiAgent(), run.runId(), true);
+    }
+
+    /** Restarts a durable run after its write approval has been recorded. */
+    public ChatResponse resumeApprovedWrite(ApprovalRequest approval) {
+        if (approval == null || approval.runId() == null || approval.runId().isBlank()) {
+            throw new IllegalArgumentException("A write approval with runId is required.");
+        }
+        RecoverableAgentRun run = tracePersistenceService == null ? null : tracePersistenceService.findRecoverableRun(approval.runId());
+        if (run == null || run.request() == null) {
+            throw new IllegalStateException("The original run is unavailable for approval resume.");
+        }
+        if (approvalService == null || !approvalService.claimExecution(approval.id())) {
+            throw new IllegalStateException("Write approval has already been resumed or is not executable.");
+        }
+        try {
+            ChatResponse response = answer(run.request(), ChatStreamSink.noop(), TraceContextSnapshot.empty(), null,
+                    run.multiAgent(), run.runId(), true);
+            approvalService.completeExecution(approval.id());
+            return response;
+        } catch (RuntimeException exception) {
+            // Keep EXECUTING as a durable manual-recovery signal. Retrying blindly could repeat a side effect.
+            throw exception;
+        }
     }
 
     public ChatResponse answer(
@@ -349,8 +409,12 @@ public class SpringAiAlibabaAgentRuntime {
             }
         }
         try {
-            graph.invoke(Map.of(KEY_RUN_ID, runId))
-                    .orElseThrow(() -> new IllegalStateException("Spring AI Alibaba graph returned empty state."));
+            Optional<NodeOutput> output = graph.invokeAndGetOutput(
+                    Map.of(KEY_RUN_ID, runId), RunnableConfig.builder().threadId(runId).build());
+            if (output.isPresent() && output.get() instanceof InterruptionMetadata) {
+                context.response = pendingApprovalResponse(context);
+                return context.response;
+            }
         } catch (Exception exception) {
             if (tracePersistenceService != null) {
                 tracePersistenceService.failRun(
@@ -368,6 +432,81 @@ public class SpringAiAlibabaAgentRuntime {
         }
         return context.response;
     }
+
+    private Optional<InterruptionMetadata> interruptExecution(String nodeId, OverAllState state, RunnableConfig config) {
+        if (approvalService == null) return Optional.empty();
+        AgentExecutionContext context = context(state);
+        PendingWrite pending = pendingWrite(context);
+        if (pending == null) return Optional.empty();
+        ApprovalRequest approval = approvalService.createWriteApproval(userId(context), context.request.conversationId(), context.runId,
+                pending.planStepId(), pending.tool().toolKey(), pending.tool().arguments());
+        context.pendingApproval = approval;
+        if (approval.status() == ApprovalStatus.EDITED || approval.status() == ApprovalStatus.APPROVED || approval.status() == ApprovalStatus.EXECUTING) {
+            Map<String, Object> approvedArguments = new LinkedHashMap<>(approval.status() == ApprovalStatus.EDITED
+                    ? approval.editedArguments() : pending.tool().arguments());
+            approvedArguments.put("_approvalId", approval.id());
+            approvedArguments.put("_idempotencyKey", approval.idempotencyKey());
+            ToolPlan approved = new ToolPlan(pending.tool().capability(), pending.tool().toolKey(), pending.tool().query(),
+                    approvedArguments, pending.tool().reason());
+            applyEditedTool(context, pending.planStepId(), approved);
+            return Optional.empty();
+        }
+        if (approval.status() == ApprovalStatus.REJECTED) return Optional.empty();
+        InterruptionMetadata.ToolFeedback feedback = InterruptionMetadata.ToolFeedback.builder()
+                .id(approval.id()).name(pending.tool().toolKey()).arguments(String.valueOf(pending.tool().arguments()))
+                .description("写操作需要用户审批，approvalId=" + approval.id()).build();
+        context.addTrace(AgentTraceStep.timed(context.nextStep(), "human_in_the_loop", context.analysis == null ? "" : context.analysis.route(),
+                pending.tool().toolKey(), "approval_required", "approvalId=" + approval.id(), "pending", 0));
+        return Optional.of(InterruptionMetadata.builder(nodeId, state).addToolFeedback(feedback)
+                .addMetadata("approvalId", approval.id()).addMetadata("approvalType", "WRITE_TOOL").build());
+    }
+
+    private PendingWrite pendingWrite(AgentExecutionContext context) {
+        if (context.executionPlan != null) {
+            PlanStep step = context.executionPlan.steps().stream().filter(value -> value.status() == PlanStepStatus.RUNNING).findFirst().orElse(null);
+            if (step != null) {
+                ToolPlan tool = step.actualTool() == null ? step.plannedTool : step.actualTool();
+                if (tool != null && requiresWriteApproval(step, tool)) return new PendingWrite(step.stepId, tool);
+            }
+        }
+        ToolPlan tool = context.pendingToolPlan;
+        if (tool != null && ("mcp_tool".equals(tool.capability()) || toolSafetyPolicy.requiresConfirmation(
+                new PlanStep("direct", "", tool.capability(), Set.of(), "", "", tool), tool))) {
+            return new PendingWrite("direct", tool);
+        }
+        if (context.capabilities.contains("mcp_tool")) {
+            return new PendingWrite("direct", new ToolPlan("mcp_tool", "mcp_tool", context.request.query(), Map.of(), "direct_mcp"));
+        }
+        return null;
+    }
+
+    private boolean requiresWriteApproval(PlanStep step, ToolPlan tool) {
+        return "mcp_tool".equals(tool.capability()) || toolSafetyPolicy.requiresConfirmation(step, tool);
+    }
+
+    private void applyEditedTool(AgentExecutionContext context, String stepId, ToolPlan tool) {
+        if (context.executionPlan != null) {
+            context.executionPlan.step(stepId).ifPresent(step -> step.overrideTool(tool));
+            context.pendingPlanTools.put(stepId, tool);
+        } else {
+            context.pendingToolPlan = tool;
+        }
+    }
+
+    private ChatResponse pendingApprovalResponse(AgentExecutionContext context) {
+        String approvalId = context.pendingApproval == null ? "" : context.pendingApproval.id();
+        return new ChatResponse(context.request.conversationId(), "操作已暂停，等待确认。", context.analysis == null ? "" : context.analysis.intent(),
+                context.analysis == null ? 0 : context.analysis.confidence(), context.analysis == null ? "" : context.analysis.route(),
+                context.request.query(), context.analysis == null ? context.request.query() : context.analysis.rewrittenQuery(), List.of(), List.of(), List.of(),
+                false, "approval_required", context.pendingApproval == null ? "" : context.pendingApproval.toolName(), List.of(), "", "", List.of(),
+                "请在待审批列表确认操作。approvalId=" + approvalId, "", "", context.trace);
+    }
+
+    private String userId(AgentExecutionContext context) {
+        return context.rawRequest.options() == null || context.rawRequest.options().userId() == null ? "" : context.rawRequest.options().userId().trim();
+    }
+
+    private record PendingWrite(String planStepId, ToolPlan tool) { }
 
     private String ordinaryReplanEdge(OverAllState state) {
         return context(state).replanCapability ? "execute_next" : "generate";
@@ -620,6 +759,11 @@ public class SpringAiAlibabaAgentRuntime {
         return context.inStage("capability_dispatch", () -> {
             String capability = firstSupported(context.capabilities);
             context.replanCapability = false;
+            if (context.pendingApproval != null && context.pendingApproval.status() == ApprovalStatus.REJECTED) {
+                context.lastToolResult = AgentToolResult.failure(capability, context.request.query(), "approval_rejected", "approval_rejected");
+                context.results.put(capability, context.lastToolResult);
+                return stateUpdate(context);
+            }
             switch (capability) {
                 case "web_search" -> {
                     runWebSearch(context);
@@ -784,6 +928,12 @@ public class SpringAiAlibabaAgentRuntime {
             if (!context.multiAgent) {
                 PlanStep step = steps.get(0);
                 context.currentPlanStepId = step.stepId;
+                if (context.pendingApproval != null && context.pendingApproval.status() == ApprovalStatus.REJECTED) {
+                    AgentToolResult rejected = AgentToolResult.failure(step.capability, context.request.query(), "approval_rejected", "approval_rejected");
+                    context.recordPlanResult(step.stepId, rejected);
+                    context.lastToolResult = rejected;
+                    return stateUpdate(context);
+                }
                 capabilityExecutor.runPlanStep(context, step);
                 context.lastToolResult = context.planResults.get(step.stepId);
                 return stateUpdate(context);
@@ -1350,7 +1500,15 @@ public class SpringAiAlibabaAgentRuntime {
     }
 
     private Map<String, Object> stateUpdate(AgentExecutionContext context) {
-        return Map.of(KEY_RUN_ID, context.runId);
+        Map<String, Object> update = new LinkedHashMap<>();
+        update.put(KEY_RUN_ID, context.runId);
+        // Graph Core's default polymorphic serializer accepts scalar checkpoint metadata reliably.
+        // The full request is durably retained in agent_runs; keep only its stable reference here.
+        update.put(KEY_REQUEST, context.rawRequest.conversationId() == null ? "" : context.rawRequest.conversationId());
+        update.put(KEY_MULTI_AGENT, context.multiAgent);
+        if (context.executionPlan != null) update.put(KEY_PLAN, context.executionPlan.snapshot().toString());
+        if (context.pendingApproval != null) update.put(KEY_PENDING_APPROVAL, context.pendingApproval.id());
+        return Map.copyOf(update);
     }
 
     private long durationMs(long startedNanos) {

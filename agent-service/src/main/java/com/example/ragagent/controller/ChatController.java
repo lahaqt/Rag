@@ -134,6 +134,13 @@ public class ChatController {
         emitter.send(SseEmitter.event()
                 .name("metadata")
                 .data(metadata(response)));
+        if ("approval_required".equals(response.finishReason())) {
+            emitter.send(SseEmitter.event().name("approval_required").data(Map.of(
+                    "approvalId", approvalId(response.clarificationQuestion()),
+                    "toolName", response.toolName(),
+                    "message", response.clarificationQuestion()
+            )));
+        }
         if (!streamSink.answerEmitted()) {
             for (String chunk : chunks(response.answer(), 64)) {
                 emitter.send(SseEmitter.event().name("answer_delta").data(Map.of("content", chunk)));
@@ -142,6 +149,12 @@ public class ChatController {
         emitter.send(SseEmitter.event().name("citations").data(response.citations()));
         emitter.send(SseEmitter.event().name("done").data(response));
         emitter.complete();
+    }
+
+    private String approvalId(String clarificationQuestion) {
+        if (clarificationQuestion == null) return "";
+        int marker = clarificationQuestion.indexOf("approvalId=");
+        return marker < 0 ? "" : clarificationQuestion.substring(marker + "approvalId=".length()).trim();
     }
 
     private void completeWithError(SseEmitter emitter, Exception exception) {

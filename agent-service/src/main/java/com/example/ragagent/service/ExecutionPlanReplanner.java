@@ -8,13 +8,11 @@ import java.util.Optional;
 final class PlanScheduler {
     private final McpToolGateway mcpToolGateway;
     private final FunctionToolRegistry functionToolRegistry;
-    private final ToolSafetyPolicy toolSafetyPolicy;
     private final PlanLlmClient planLlmClient;
 
     PlanScheduler(McpToolGateway mcpToolGateway, FunctionToolRegistry functionToolRegistry, PlanLlmClient planLlmClient) {
         this.mcpToolGateway = mcpToolGateway;
         this.functionToolRegistry = functionToolRegistry;
-        this.toolSafetyPolicy = new ToolSafetyPolicy();
         this.planLlmClient = planLlmClient;
     }
 
@@ -90,10 +88,6 @@ final class PlanScheduler {
         if ("function_call".equals(step.capability) && tool == null) {
             plan.finish(ExecutionPlanStatus.CLARIFYING);
             return ReplanDecision.clarify("请补充调用业务功能所需的标识信息，例如订单号。", List.of("required_business_identifier"));
-        }
-        if (toolSafetyPolicy.requiresConfirmation(step, tool)) {
-            plan.finish(ExecutionPlanStatus.CLARIFYING);
-            return ReplanDecision.clarify("该操作会修改业务状态，请确认后再执行。", List.of("user_confirmation"));
         }
         step.markRunning(tool);
         return ReplanDecision.continueWith(step.stepId, tool, reason);

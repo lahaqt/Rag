@@ -96,6 +96,19 @@ public class MemoryGovernanceService {
         String owner = requiredUserId(userId);
         MemoryItem memory = semanticMemoryStore.confirmCandidate(memoryId, owner)
                 .orElseThrow(() -> new IllegalArgumentException("Memory candidate not found."));
+        applyConfirmedPreference(owner, memory);
+        return memory;
+    }
+
+    public MemoryItem editAndConfirmCandidate(String userId, String memoryId, String content) {
+        String owner = requiredUserId(userId);
+        MemoryItem memory = semanticMemoryStore.editAndConfirmCandidate(memoryId, owner, content)
+                .orElseThrow(() -> new IllegalArgumentException("Memory candidate not found."));
+        applyConfirmedPreference(owner, memory);
+        return memory;
+    }
+
+    private void applyConfirmedPreference(String owner, MemoryItem memory) {
         if ("preference".equals(memory.type())) {
             preferenceValue(memory.content()).ifPresent(value -> {
                 String profileKey = memory.metadata().getOrDefault("profileKey", "preference");
@@ -103,7 +116,6 @@ public class MemoryGovernanceService {
                 invalidateUser(owner);
             });
         }
-        return memory;
     }
 
     public void rejectCandidate(String userId, String memoryId) {

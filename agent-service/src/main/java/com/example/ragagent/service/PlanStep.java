@@ -45,6 +45,7 @@ final class PlanStep {
     synchronized ToolPlan actualTool() { return actualTool; }
     synchronized void markReady() { if (status == PlanStepStatus.PENDING) status = PlanStepStatus.READY; }
     synchronized void markRunning(ToolPlan tool) { status = PlanStepStatus.RUNNING; actualTool = tool; executionAttempts++; }
+    synchronized void overrideTool(ToolPlan tool) { actualTool = tool; }
     synchronized void complete(boolean success, String reason) {
         status = success ? PlanStepStatus.SUCCEEDED : PlanStepStatus.FAILED;
         resultReason = reason == null ? "" : reason;

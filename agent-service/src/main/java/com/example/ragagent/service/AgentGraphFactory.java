@@ -7,8 +7,15 @@ import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.StateGraph;
 import com.alibaba.cloud.ai.graph.action.AsyncEdgeAction;
 import com.alibaba.cloud.ai.graph.action.AsyncNodeAction;
+import com.alibaba.cloud.ai.graph.action.AsyncNodeActionWithConfig;
 import com.alibaba.cloud.ai.graph.action.EdgeAction;
+import com.alibaba.cloud.ai.graph.action.InterruptableAction;
+import com.alibaba.cloud.ai.graph.action.InterruptionMetadata;
 import com.alibaba.cloud.ai.graph.action.NodeAction;
+import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.alibaba.cloud.ai.graph.checkpoint.config.SaverConfig;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.Map;
 
 /**
@@ -45,10 +52,11 @@ final class AgentGraphFactory {
     private AgentGraphFactory() {
     }
 
-    static Graphs compile(int maxToolIterations, int maxReflectionRetries, Nodes nodes, Edges edges) {
+    static Graphs compile(int maxToolIterations, int maxReflectionRetries, SaverConfig saverConfig, Nodes nodes, Edges edges) {
         CompileConfig config = CompileConfig.builder()
                 .recursionLimit(Math.max(24, 10 + maxToolIterations * 3 + maxReflectionRetries * 4))
                 .releaseThread(false)
+                .saverConfig(saverConfig)
                 .build();
         return new Graphs(compileOrdinary(nodes, edges, config), compileMultiAgent(nodes, edges, config));
     }
@@ -61,9 +69,9 @@ final class AgentGraphFactory {
             graph.addNode(NODE_RECALL_MEMORY, AsyncNodeAction.node_async(nodes.recallLongTermMemory()));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(nodes.route()));
             graph.addNode(NODE_CREATE_PLAN, AsyncNodeAction.node_async(nodes.createPlan()));
-            graph.addNode(NODE_EXECUTE, AsyncNodeAction.node_async(nodes.executeOrdinary()));
-            graph.addNode(NODE_EXECUTE_PLAN, AsyncNodeAction.node_async(nodes.executePlanSteps()));
-            graph.addNode(NODE_EXECUTE_MULTI_READY, AsyncNodeAction.node_async(nodes.executeMultiReady()));
+            graph.addNode(NODE_EXECUTE, interruptible(nodes.executeOrdinary(), nodes.executionInterrupt()));
+            graph.addNode(NODE_EXECUTE_PLAN, interruptible(nodes.executePlanSteps(), nodes.executionInterrupt()));
+            graph.addNode(NODE_EXECUTE_MULTI_READY, interruptible(nodes.executeMultiReady(), nodes.executionInterrupt()));
             graph.addNode(NODE_REPLAN, AsyncNodeAction.node_async(nodes.replanOrdinary()));
             graph.addNode(NODE_GENERATE, AsyncNodeAction.node_async(nodes.generate()));
             graph.addNode(NODE_REFLECT, AsyncNodeAction.node_async(nodes.reflect()));
@@ -101,8 +109,8 @@ final class AgentGraphFactory {
             graph.addNode(NODE_RECALL_MEMORY, AsyncNodeAction.node_async(nodes.recallLongTermMemory()));
             graph.addNode(NODE_ROUTE, AsyncNodeAction.node_async(nodes.route()));
             graph.addNode(NODE_CREATE_PLAN, AsyncNodeAction.node_async(nodes.createPlan()));
-            graph.addNode(NODE_EXECUTE_PLAN, AsyncNodeAction.node_async(nodes.executePlanSteps()));
-            graph.addNode(NODE_EXECUTE_MULTI_READY, AsyncNodeAction.node_async(nodes.executeMultiReady()));
+            graph.addNode(NODE_EXECUTE_PLAN, interruptible(nodes.executePlanSteps(), nodes.executionInterrupt()));
+            graph.addNode(NODE_EXECUTE_MULTI_READY, interruptible(nodes.executeMultiReady(), nodes.executionInterrupt()));
             graph.addNode(NODE_MULTI_AGENT_REPLAN, AsyncNodeAction.node_async(nodes.replanMultiAgent()));
             graph.addNode(NODE_GENERATE, AsyncNodeAction.node_async(nodes.generate()));
             graph.addNode(NODE_REFLECT, AsyncNodeAction.node_async(nodes.reflect()));
@@ -149,6 +157,34 @@ final class AgentGraphFactory {
         return new StateGraph(name, KeyStrategy.builder().defaultStrategy(KeyStrategy.REPLACE).build());
     }
 
+    private static AsyncNodeActionWithConfig interruptible(NodeAction delegate, InterruptableAction interrupt) {
+        return new InterruptibleNode(delegate, interrupt);
+    }
+
+    private static final class InterruptibleNode implements AsyncNodeActionWithConfig, InterruptableAction {
+        private final NodeAction delegate;
+        private final InterruptableAction interrupt;
+
+        private InterruptibleNode(NodeAction delegate, InterruptableAction interrupt) {
+            this.delegate = delegate;
+            this.interrupt = interrupt;
+        }
+
+            @Override
+        public CompletableFuture<Map<String, Object>> apply(OverAllState state, RunnableConfig config) {
+            try {
+                return CompletableFuture.completedFuture(delegate.apply(state));
+            } catch (Exception exception) {
+                return CompletableFuture.failedFuture(exception);
+            }
+        }
+
+        @Override
+        public Optional<InterruptionMetadata> interrupt(String nodeId, OverAllState state, RunnableConfig config) {
+            return interrupt.interrupt(nodeId, state, config);
+        }
+    }
+
     record Graphs(CompiledGraph ordinary, CompiledGraph multiAgent) {
     }
 
@@ -165,7 +201,8 @@ final class AgentGraphFactory {
             NodeAction replanMultiAgent,
             NodeAction generate,
             NodeAction reflect,
-            NodeAction finalizeResponse
+            NodeAction finalizeResponse,
+            InterruptableAction executionInterrupt
     ) {
     }
 

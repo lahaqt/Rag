@@ -44,6 +44,10 @@ public interface SemanticMemoryStore {
         return Optional.empty();
     }
 
+    default Optional<MemoryItem> editAndConfirmCandidate(String memoryId, String userId, String content) {
+        return Optional.empty();
+    }
+
     default boolean rejectCandidate(String memoryId, String userId) {
         return false;
     }

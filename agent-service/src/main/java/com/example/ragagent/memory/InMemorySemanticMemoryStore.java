@@ -93,6 +93,21 @@ public class InMemorySemanticMemoryStore implements SemanticMemoryStore {
     }
 
     @Override
+    public java.util.Optional<MemoryItem> editAndConfirmCandidate(String memoryId, String userId, String content) {
+        if (content == null || content.isBlank()) return java.util.Optional.empty();
+        for (Map.Entry<String, MemoryItem> entry : items.entrySet()) {
+            MemoryItem item = entry.getValue();
+            if (!memoryId.equals(item.id()) || !userId.equals(item.ownerId()) || !"candidate".equals(item.metadata().get("status"))) continue;
+            Map<String, String> metadata = new LinkedHashMap<>(item.metadata());
+            metadata.put("status", "confirmed");
+            MemoryItem confirmed = new MemoryItem(item.id(), item.scope(), item.ownerId(), item.conversationId(), item.type(),
+                    content.trim(), metadata, item.confidence(), item.createdAt(), java.time.Instant.now());
+            if (items.replace(entry.getKey(), item, confirmed)) return java.util.Optional.of(confirmed);
+        }
+        return java.util.Optional.empty();
+    }
+
+    @Override
     public boolean rejectCandidate(String memoryId, String userId) {
         for (Map.Entry<String, MemoryItem> entry : items.entrySet()) {
             MemoryItem item = entry.getValue();
