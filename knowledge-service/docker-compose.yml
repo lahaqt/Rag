@@ -33,9 +33,9 @@ services:
   redis:
     image: redis:7-alpine
     container_name: rag-storage-redis
-    command: ["redis-server", "--appendonly", "yes"]
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${RAG_REDIS_PASSWORD:?Set RAG_REDIS_PASSWORD before starting storage}"]
     ports:
-      - "26380:6379"
+      - "127.0.0.1:26380:6379"
     volumes:
       - redis-data:/data
 
@@ -44,14 +44,16 @@ services:
     container_name: rag-storage-elasticsearch
     environment:
       discovery.type: single-node
-      xpack.security.enabled: "false"
+      xpack.security.enabled: "true"
+      xpack.security.http.ssl.enabled: "false"
+      ELASTIC_PASSWORD: ${RAG_ELASTIC_PASSWORD:?Set RAG_ELASTIC_PASSWORD before starting storage}
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
     ports:
-      - "29200:9200"
+      - "127.0.0.1:29200:9200"
     volumes:
       - elasticsearch-data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl -fsS -u elastic:${RAG_ELASTIC_PASSWORD:?Set RAG_ELASTIC_PASSWORD before starting storage} http://localhost:9200/_cluster/health >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 20

@@ -13,6 +13,7 @@ spring:
     redis:
       host: localhost
       port: 26380
+      password: ${RAG_REDIS_PASSWORD:}
   servlet:
     multipart:
       max-file-size: 20MB
@@ -75,8 +76,8 @@ rag:
   lexical:
     provider: elasticsearch
     endpoint: http://localhost:29200
-    username: ${ELASTICSEARCH_USERNAME:}
-    password: ${ELASTICSEARCH_PASSWORD:}
+    username: ${ELASTICSEARCH_USERNAME:elastic}
+    password: ${ELASTICSEARCH_PASSWORD:${RAG_ELASTIC_PASSWORD:}}
     index-name: rag_chunks_lexical
   cors:
     allowed-origins:
