@@ -49,7 +49,7 @@ public record RagProperties(
             metadata = new Metadata("postgres");
         }
         if (objectStorage == null) {
-            objectStorage = new ObjectStorage("rustfs", "http://localhost:29100", "rustfsadmin", "rustfsadmin", "rag-documents");
+            objectStorage = new ObjectStorage("rustfs", "http://127.0.0.1:29100", "", "", "rag-documents");
         }
         if (queue == null) {
             queue = new Queue("redis", "document-tasks", "storage-indexers", "knowledge-service-1");
@@ -184,14 +184,10 @@ public record RagProperties(
                 provider = "rustfs";
             }
             if (endpoint == null || endpoint.isBlank()) {
-                endpoint = "http://localhost:29100";
+                endpoint = "http://127.0.0.1:29100";
             }
-            if (accessKey == null || accessKey.isBlank()) {
-                accessKey = "rustfsadmin";
-            }
-            if (secretKey == null || secretKey.isBlank()) {
-                secretKey = "rustfsadmin";
-            }
+            accessKey = accessKey == null ? "" : accessKey.trim();
+            secretKey = secretKey == null ? "" : secretKey.trim();
             if (bucket == null || bucket.isBlank()) {
                 bucket = "rag-documents";
             }

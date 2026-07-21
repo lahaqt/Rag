@@ -22,9 +22,9 @@ spring:
           discovery:
             enabled: false
   datasource:
-    url: jdbc:postgresql://localhost:25432/rag
-    username: rag
-    password: rag
+    url: ${RAG_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:25432/rag}
+    username: ${RAG_POSTGRES_USER:}
+    password: ${RAG_POSTGRES_PASSWORD:}
     driver-class-name: org.postgresql.Driver
     hikari:
       initialization-fail-timeout: -1

@@ -4,10 +4,10 @@ services:
     container_name: rag-storage-postgres
     environment:
       POSTGRES_DB: rag
-      POSTGRES_USER: rag
-      POSTGRES_PASSWORD: rag
+      POSTGRES_USER: ${RAG_POSTGRES_USER:?Set RAG_POSTGRES_USER before starting storage}
+      POSTGRES_PASSWORD: ${RAG_POSTGRES_PASSWORD:?Set RAG_POSTGRES_PASSWORD before starting storage}
     ports:
-      - "25432:5432"
+      - "127.0.0.1:${RAG_POSTGRES_PORT:-25432}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -19,14 +19,14 @@ services:
   rustfs:
     image: rustfs/rustfs:latest
     container_name: rag-storage-rustfs
-    command: ["--address", ":9000", "--console-enable", "--access-key", "rustfsadmin", "--secret-key", "rustfsadmin", "/data"]
+    command: ["--address", ":9000", "--console-enable", "--access-key", "${RAG_RUSTFS_ACCESS_KEY:?Set RAG_RUSTFS_ACCESS_KEY before starting storage}", "--secret-key", "${RAG_RUSTFS_SECRET_KEY:?Set RAG_RUSTFS_SECRET_KEY before starting storage}", "/data"]
     environment:
-      RUSTFS_ACCESS_KEY: rustfsadmin
-      RUSTFS_SECRET_KEY: rustfsadmin
+      RUSTFS_ACCESS_KEY: ${RAG_RUSTFS_ACCESS_KEY:?Set RAG_RUSTFS_ACCESS_KEY before starting storage}
+      RUSTFS_SECRET_KEY: ${RAG_RUSTFS_SECRET_KEY:?Set RAG_RUSTFS_SECRET_KEY before starting storage}
       RUSTFS_CONSOLE_ENABLE: "true"
     ports:
-      - "29100:9000"
-      - "29101:9001"
+      - "127.0.0.1:${RAG_RUSTFS_PORT:-29100}:9000"
+      - "127.0.0.1:${RAG_RUSTFS_CONSOLE_PORT:-29101}:9001"
     volumes:
       - rustfs-data:/data
 

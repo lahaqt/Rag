@@ -22,6 +22,9 @@ public class RustFsObjectStorage implements ObjectStoragePort {
 
     public RustFsObjectStorage(RagProperties properties) {
         RagProperties.ObjectStorage objectStorage = properties.objectStorage();
+        if (objectStorage.accessKey().isBlank() || objectStorage.secretKey().isBlank()) {
+            throw new IllegalStateException("RAG_RUSTFS_ACCESS_KEY and RAG_RUSTFS_SECRET_KEY are required when rag.object-storage.provider=rustfs");
+        }
         this.client = MinioClient.builder()
                 .endpoint(objectStorage.endpoint())
                 .credentials(objectStorage.accessKey(), objectStorage.secretKey())

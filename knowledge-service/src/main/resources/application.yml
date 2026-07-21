@@ -5,9 +5,9 @@ spring:
   application:
     name: rag-knowledge-service
   datasource:
-    url: jdbc:postgresql://localhost:25432/rag
-    username: rag
-    password: rag
+    url: ${RAG_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:25432/rag}
+    username: ${RAG_POSTGRES_USER:}
+    password: ${RAG_POSTGRES_PASSWORD:}
     driver-class-name: org.postgresql.Driver
   data:
     redis:
@@ -52,9 +52,9 @@ rag:
     provider: postgres
   object-storage:
     provider: rustfs
-    endpoint: http://localhost:29100
-    access-key: rustfsadmin
-    secret-key: rustfsadmin
+    endpoint: ${RAG_RUSTFS_ENDPOINT:http://127.0.0.1:29100}
+    access-key: ${RAG_RUSTFS_ACCESS_KEY:}
+    secret-key: ${RAG_RUSTFS_SECRET_KEY:}
     bucket: rag-documents
   queue:
     provider: redis
