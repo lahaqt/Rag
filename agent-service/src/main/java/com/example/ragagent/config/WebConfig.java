@@ -1,7 +1,9 @@
 package com.example.ragagent.config;
 
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -19,7 +21,14 @@ public class WebConfig implements WebMvcConfigurer {
 
     @Bean(destroyMethod = "shutdown")
     public ExecutorService chatExecutor() {
-        return Executors.newCachedThreadPool();
+        return new ThreadPoolExecutor(
+                4,
+                8,
+                60,
+                TimeUnit.SECONDS,
+                new ArrayBlockingQueue<>(100),
+                new ThreadPoolExecutor.AbortPolicy()
+        );
     }
 
     @Override

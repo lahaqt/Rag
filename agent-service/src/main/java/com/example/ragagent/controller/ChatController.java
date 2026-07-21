@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import io.micrometer.tracing.Span;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -23,6 +24,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 @RestController
 @RequestMapping("/api/chat")
 public class ChatController {
+    private static final long STREAM_TIMEOUT_MILLIS = 120_000L;
     private final ChatOrchestrator chatOrchestrator;
     private final ExecutorService chatExecutor;
     private final TraceContextProvider traceContextProvider;
@@ -57,36 +59,47 @@ public class ChatController {
 
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter stream(@Valid @RequestBody ChatRequest request) {
-        SseEmitter emitter = new SseEmitter(0L);
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         TraceContextSnapshot traceContext = currentTraceContext();
         Span parentSpan = currentSpan();
-        chatExecutor.execute(() -> {
-            try {
-                SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-                ChatResponse response = answer(request, streamSink, traceContext, parentSpan);
-                sendResponse(emitter, response, streamSink);
-            } catch (Exception exception) {
-                completeWithError(emitter, exception);
-            }
+        executeStream(emitter, () -> {
+            SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
+            ChatResponse response = answer(request, streamSink, traceContext, parentSpan);
+            sendResponse(emitter, response, streamSink);
         });
         return emitter;
     }
 
     @PostMapping(path = "/multi-agent/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter multiAgentStream(@Valid @RequestBody ChatRequest request) {
-        SseEmitter emitter = new SseEmitter(0L);
+        SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         TraceContextSnapshot traceContext = currentTraceContext();
         Span parentSpan = currentSpan();
-        chatExecutor.execute(() -> {
-            try {
-                SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-                ChatResponse response = answerMultiAgent(request, streamSink, traceContext, parentSpan);
-                sendResponse(emitter, response, streamSink);
-            } catch (Exception exception) {
-                completeWithError(emitter, exception);
-            }
+        executeStream(emitter, () -> {
+            SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
+            ChatResponse response = answerMultiAgent(request, streamSink, traceContext, parentSpan);
+            sendResponse(emitter, response, streamSink);
         });
         return emitter;
+    }
+
+    private void executeStream(SseEmitter emitter, ThrowingRunnable streamTask) {
+        try {
+            chatExecutor.execute(() -> {
+                try {
+                    streamTask.run();
+                } catch (Exception exception) {
+                    completeWithError(emitter, exception);
+                }
+            });
+        } catch (RejectedExecutionException exception) {
+            completeWithError(emitter, new IllegalStateException("chat stream capacity is exhausted", exception));
+        }
+    }
+
+    @FunctionalInterface
+    private interface ThrowingRunnable {
+        void run() throws Exception;
     }
 
     private ChatResponse answer(ChatRequest request, ChatStreamSink streamSink, TraceContextSnapshot traceContext) {

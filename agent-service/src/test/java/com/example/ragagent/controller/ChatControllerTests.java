@@ -16,6 +16,7 @@ import java.util.concurrent.Executors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
@@ -64,6 +65,17 @@ class ChatControllerTests {
                 .andExpect(jsonPath("$.answer").value("multi-agent answer"));
 
         verify(chatOrchestrator).answerMultiAgent(any());
+    }
+
+    @Test
+    void streamingEndpointsHaveFiniteServerSideTimeouts() {
+        ChatController controller = new ChatController(chatOrchestrator, executor);
+
+        SseEmitter ordinary = controller.stream(new com.example.ragagent.dto.ChatRequest("hello", null, null, null, null));
+        SseEmitter multiAgent = controller.multiAgentStream(new com.example.ragagent.dto.ChatRequest("hello", null, null, null, null));
+
+        org.assertj.core.api.Assertions.assertThat(ordinary.getTimeout()).isEqualTo(120_000L);
+        org.assertj.core.api.Assertions.assertThat(multiAgent.getTimeout()).isEqualTo(120_000L);
     }
 
     private ChatResponse response(String answer) {
