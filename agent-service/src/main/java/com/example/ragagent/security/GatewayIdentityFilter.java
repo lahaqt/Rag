@@ -51,6 +51,8 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
         return !(path.startsWith("/api/approvals")
                 || path.startsWith("/api/memories")
                 || path.startsWith("/api/conversations")
+                || path.startsWith("/api/feedback")
+                || path.startsWith("/api/traces")
                 || path.startsWith(MCP_PREFIX));
     }
 
