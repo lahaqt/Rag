@@ -6,9 +6,9 @@ import type { ProxyOptions } from 'vite'
 const identitySigningSecret = process.env.RAG_IDENTITY_SIGNING_SECRET
 const developmentUserId = process.env.RAG_DEV_USER_ID
 
-function agentProxy(): ProxyOptions {
+function signedProxy(target: string): ProxyOptions {
   return {
-    target: 'http://127.0.0.1:28083',
+    target,
     changeOrigin: true,
     configure(proxy) {
       proxy.on('proxyReq', (request) => {
@@ -32,29 +32,28 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api/chat': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api/mcp': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api/conversations': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api/approvals': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api/memories': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api/feedback': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api/traces': {
-        ...agentProxy(),
+        ...signedProxy('http://127.0.0.1:28083'),
       },
       '/api': {
-        target: 'http://127.0.0.1:28081',
-        changeOrigin: true,
+        ...signedProxy('http://127.0.0.1:28081'),
       },
     },
   },

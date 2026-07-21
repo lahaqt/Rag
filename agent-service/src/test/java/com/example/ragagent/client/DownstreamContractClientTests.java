@@ -88,7 +88,7 @@ class DownstreamContractClientTests {
                 """));
 
         HttpStorageRetrievalClient client = new HttpStorageRetrievalClient(
-                properties(), RestClient.builder(), traceInterceptor()
+                properties(), RestClient.builder(), traceInterceptor(), "test-signing-secret", "agent-service"
         );
 
         VectorSearchResponse response = client.search(new VectorSearchRequest(

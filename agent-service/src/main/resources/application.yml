@@ -44,6 +44,7 @@ management:
 rag:
   security:
     identity-signing-secret: ${RAG_IDENTITY_SIGNING_SECRET:}
+    service-identity: ${RAG_SERVICE_IDENTITY:agent-service}
     admin-user-ids: ${RAG_ADMIN_USER_IDS:}
     # JSON-RPC A2A is a service-to-service entry point; browser user identities are not accepted.
     a2a-caller-ids: ${RAG_A2A_CALLER_IDS:}
