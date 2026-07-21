@@ -53,6 +53,12 @@ Override it with `--agent-base-url` or `AGENT_BASE_URL`.
 uvicorn evaluation_service.api:app --host 127.0.0.1 --port 28084 --reload
 ```
 
+The evaluation API is fail-closed. Set `EVAL_API_KEY` and send it as
+`X-Eval-Api-Key` for every run creation or run lookup request. The health
+endpoint remains unauthenticated for local orchestration checks. Resource
+limits are configured with `EVAL_MAX_CASES_PER_RUN`,
+`EVAL_MAX_CONCURRENT_RUNS`, and `EVAL_MAX_STORED_RUNS`.
+
 ```txt
 GET  /api/evaluations/health
 POST /api/evaluations/runs

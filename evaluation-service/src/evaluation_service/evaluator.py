@@ -58,8 +58,9 @@ async def run_dataset(
     agent_base_url: str,
     timeout_seconds: float = 120.0,
     run_ragas: bool = False,
+    max_cases: int | None = None,
 ) -> EvaluationRun:
-    cases = load_jsonl_dataset(dataset_path)
+    cases = load_jsonl_dataset(dataset_path, max_cases=max_cases)
     runner = EvaluationRunner(AgentClient(agent_base_url, timeout_seconds=timeout_seconds))
     return await runner.run_cases(cases, dataset_path=str(dataset_path), run_ragas=run_ragas)
 
@@ -69,8 +70,9 @@ def run_dataset_sync(
     agent_base_url: str,
     timeout_seconds: float = 120.0,
     run_ragas: bool = False,
+    max_cases: int | None = None,
 ) -> EvaluationRun:
-    return asyncio.run(run_dataset(dataset_path, agent_base_url, timeout_seconds, run_ragas))
+    return asyncio.run(run_dataset(dataset_path, agent_base_url, timeout_seconds, run_ragas, max_cases))
 
 
 def write_run(run: EvaluationRun, output_path: str | Path) -> Path:
@@ -81,4 +83,3 @@ def write_run(run: EvaluationRun, output_path: str | Path) -> Path:
         encoding="utf-8",
     )
     return path
-
