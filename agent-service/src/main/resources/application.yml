@@ -42,6 +42,9 @@ management:
       endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
 
 rag:
+  security:
+    identity-signing-secret: ${RAG_IDENTITY_SIGNING_SECRET:}
+    admin-user-ids: ${RAG_ADMIN_USER_IDS:}
   downstream:
     query-rewrite-base-url: http://127.0.0.1:28082
     query-analysis-timeout-seconds: 8

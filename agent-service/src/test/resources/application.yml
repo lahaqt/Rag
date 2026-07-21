@@ -19,6 +19,9 @@ management:
       endpoint: http://127.0.0.1:9/v1/traces
 
 rag:
+  security:
+    identity-signing-secret: test-gateway-signing-secret
+    admin-user-ids: test-admin
   hitl:
     checkpoint-store: memory
   mcp:

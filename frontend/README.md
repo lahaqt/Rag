@@ -35,6 +35,12 @@ http://127.0.0.1:5173
 /api/*      -> http://127.0.0.1:28081
 ```
 
+The agent control-plane routes use a gateway-signed identity. For local Vite
+development, set `RAG_IDENTITY_SIGNING_SECRET` to the same value as the
+agent-service and set `RAG_DEV_USER_ID`; the dev proxy signs the identity
+server-side. Production traffic must be signed by the deployed identity
+gateway, not by browser code.
+
 配置文件：
 
 ```txt

@@ -8,6 +8,8 @@ import com.example.ragagent.service.SpringAiAlibabaAgentRuntime;
 import com.example.ragagent.memory.MemoryGovernanceService;
 import com.example.ragagent.memory.MemoryItem;
 import com.example.ragagent.memory.MemoryTypes;
+import com.example.ragagent.security.RequestIdentity;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.Map;
@@ -34,7 +36,8 @@ public class ApprovalController {
     }
 
     @GetMapping
-    public List<ApprovalRequest> pending(@RequestParam String userId, @RequestParam(defaultValue = "20") int limit) {
+    public List<ApprovalRequest> pending(HttpServletRequest httpRequest, @RequestParam String userId, @RequestParam(defaultValue = "20") int limit) {
+        userId = RequestIdentity.requireMatchingUser(httpRequest, userId);
         for (MemoryItem item : memoryGovernanceService.listCandidates(userId, 100)) {
             if (MemoryTypes.PREFERENCE.equals(item.type())) {
                 approvalService.createMemoryPreferenceApproval(userId, item.conversationId(), item.id(), item.content(), new java.util.LinkedHashMap<>(item.metadata()));
@@ -44,13 +47,15 @@ public class ApprovalController {
     }
 
     @GetMapping("/{approvalId}")
-    public ApprovalRequest get(@PathVariable String approvalId, @RequestParam String userId) {
+    public ApprovalRequest get(HttpServletRequest httpRequest, @PathVariable String approvalId, @RequestParam String userId) {
+        userId = RequestIdentity.requireMatchingUser(httpRequest, userId);
         return approvalService.get(approvalId, userId);
     }
 
     @PostMapping("/{approvalId}/decision")
-    public Map<String, Object> decide(@PathVariable String approvalId, @RequestParam String userId,
+    public Map<String, Object> decide(HttpServletRequest httpRequest, @PathVariable String approvalId, @RequestParam String userId,
                                       @Valid @RequestBody ApprovalDecisionRequest request) {
+        userId = RequestIdentity.requireMatchingUser(httpRequest, userId);
         ApprovalRequest approval = approvalService.decide(approvalId, userId, request);
         if (approval.type() == com.example.ragagent.approval.ApprovalType.MEMORY_PREFERENCE) {
             String memoryId = String.valueOf(approval.arguments().get("memoryId"));
