@@ -29,6 +29,7 @@ import org.springframework.web.filter.OncePerRequestFilter;
 public class GatewayIdentityFilter extends OncePerRequestFilter {
     private static final String USER_ID_HEADER = "X-Rag-User-Id";
     private static final String SIGNATURE_HEADER = "X-Rag-Identity-Signature";
+    private static final String CHAT_PREFIX = "/api/chat";
     private static final String MCP_PREFIX = "/api/mcp/servers";
     private static final String A2A_PREFIX = "/api/chat/multi-agent/a2a";
 
@@ -61,7 +62,9 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        return !(path.startsWith("/api/approvals")
+        return "OPTIONS".equalsIgnoreCase(request.getMethod())
+                || !(path.startsWith(CHAT_PREFIX)
+                || path.startsWith("/api/approvals")
                 || path.startsWith("/api/memories")
                 || path.startsWith("/api/conversations")
                 || path.startsWith("/api/feedback")

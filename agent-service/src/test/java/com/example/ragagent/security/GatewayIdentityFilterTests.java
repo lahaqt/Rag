@@ -77,6 +77,20 @@ class GatewayIdentityFilterTests {
         assertThat(serviceResponse.getStatus()).isEqualTo(200);
     }
 
+    @Test
+    void protectsChatRoutesAndSkipsCorsPreflight() throws Exception {
+        GatewayIdentityFilter filter = new GatewayIdentityFilter(SECRET, "admin");
+        MockHttpServletRequest chatRequest = new MockHttpServletRequest("POST", "/api/chat");
+        MockHttpServletResponse chatResponse = new MockHttpServletResponse();
+
+        filter.doFilter(chatRequest, chatResponse, new MockFilterChain());
+
+        assertThat(chatResponse.getStatus()).isEqualTo(401);
+
+        MockHttpServletRequest preflight = new MockHttpServletRequest("OPTIONS", "/api/conversations");
+        assertThat(filter.shouldNotFilter(preflight)).isTrue();
+    }
+
     private static MockHttpServletRequest protectedRequest(String userId, String signature) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/approvals");
         request.addHeader("X-Rag-User-Id", userId);

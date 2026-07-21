@@ -4,8 +4,10 @@ import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
 import com.example.ragagent.observability.TraceContextProvider;
 import com.example.ragagent.observability.TraceContextSnapshot;
+import com.example.ragagent.security.RequestIdentity;
 import com.example.ragagent.service.ChatStreamSink;
 import com.example.ragagent.service.ChatOrchestrator;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -48,39 +50,62 @@ public class ChatController {
     }
 
     @PostMapping
-    public ChatResponse chat(@Valid @RequestBody ChatRequest request) {
-        return chatOrchestrator.answer(request);
+    public ChatResponse chat(HttpServletRequest httpRequest, @Valid @RequestBody ChatRequest request) {
+        return chatOrchestrator.answer(withAuthenticatedUser(httpRequest, request));
     }
 
     @PostMapping("/multi-agent")
-    public ChatResponse multiAgentChat(@Valid @RequestBody ChatRequest request) {
-        return chatOrchestrator.answerMultiAgent(request);
+    public ChatResponse multiAgentChat(HttpServletRequest httpRequest, @Valid @RequestBody ChatRequest request) {
+        return chatOrchestrator.answerMultiAgent(withAuthenticatedUser(httpRequest, request));
     }
 
     @PostMapping(path = "/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@Valid @RequestBody ChatRequest request) {
+    public SseEmitter stream(HttpServletRequest httpRequest, @Valid @RequestBody ChatRequest request) {
+        ChatRequest authenticatedRequest = withAuthenticatedUser(httpRequest, request);
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         TraceContextSnapshot traceContext = currentTraceContext();
         Span parentSpan = currentSpan();
         executeStream(emitter, () -> {
             SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-            ChatResponse response = answer(request, streamSink, traceContext, parentSpan);
+            ChatResponse response = answer(authenticatedRequest, streamSink, traceContext, parentSpan);
             sendResponse(emitter, response, streamSink);
         });
         return emitter;
     }
 
     @PostMapping(path = "/multi-agent/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter multiAgentStream(@Valid @RequestBody ChatRequest request) {
+    public SseEmitter multiAgentStream(HttpServletRequest httpRequest, @Valid @RequestBody ChatRequest request) {
+        ChatRequest authenticatedRequest = withAuthenticatedUser(httpRequest, request);
         SseEmitter emitter = new SseEmitter(STREAM_TIMEOUT_MILLIS);
         TraceContextSnapshot traceContext = currentTraceContext();
         Span parentSpan = currentSpan();
         executeStream(emitter, () -> {
             SseChatStreamSink streamSink = new SseChatStreamSink(emitter);
-            ChatResponse response = answerMultiAgent(request, streamSink, traceContext, parentSpan);
+            ChatResponse response = answerMultiAgent(authenticatedRequest, streamSink, traceContext, parentSpan);
             sendResponse(emitter, response, streamSink);
         });
         return emitter;
+    }
+
+    private ChatRequest withAuthenticatedUser(HttpServletRequest httpRequest, ChatRequest request) {
+        String authenticatedUserId = RequestIdentity.requiredUserId(httpRequest);
+        com.example.ragagent.dto.ChatOptions options = request.options();
+        return new ChatRequest(
+                request.query(),
+                request.knowledgeBaseId(),
+                request.conversationId(),
+                request.history(),
+                new com.example.ragagent.dto.ChatOptions(
+                        options == null ? null : options.topK(),
+                        options == null ? null : options.similarityThreshold(),
+                        options == null ? null : options.retrievalMode(),
+                        options == null ? null : options.queryExpansionEnabled(),
+                        options == null ? null : options.queryExpansionCount(),
+                        options == null ? null : options.includeRetrievalDebug(),
+                        authenticatedUserId
+                ),
+                request.attachments()
+        );
     }
 
     private void executeStream(SseEmitter emitter, ThrowingRunnable streamTask) {

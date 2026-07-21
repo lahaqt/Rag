@@ -11,6 +11,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import com.example.ragagent.dto.ChatAttachment;
 import com.example.ragagent.dto.ChatRequest;
 import com.example.ragagent.dto.ChatResponse;
+import com.example.ragagent.security.RequestIdentity;
 import com.example.ragagent.service.ChatOrchestrator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.List;
@@ -53,6 +54,7 @@ class ChatControllerAttachmentsTest {
         ), org.mockito.ArgumentMatchers.any())).thenReturn(response());
 
         MvcResult result = mockMvc.perform(post("/api/chat/stream")
+                        .requestAttr(RequestIdentity.USER_ID_ATTRIBUTE, "authenticated-user")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(request)))
                 .andExpect(request().asyncStarted())

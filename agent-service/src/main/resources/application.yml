@@ -32,6 +32,7 @@ spring:
     redis:
       host: localhost
       port: 26380
+      password: ${RAG_REDIS_PASSWORD:}
 
 management:
   tracing:
