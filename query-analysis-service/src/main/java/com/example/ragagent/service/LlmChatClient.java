@@ -6,6 +6,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
 
 @Component
@@ -26,15 +27,25 @@ public class LlmChatClient {
     ) {
         this.llm = properties.llm();
         RestClient.Builder openAiBuilder = restClientBuilder.clone()
-                .baseUrl(llm.openaiCompatible().baseUrl());
+                .baseUrl(llm.openaiCompatible().baseUrl())
+                .requestFactory(requestFactory(llm.timeoutSeconds()));
         RestClient.Builder anthropicBuilder = restClientBuilder.clone()
-                .baseUrl(llm.anthropicCompatible().baseUrl());
+                .baseUrl(llm.anthropicCompatible().baseUrl())
+                .requestFactory(requestFactory(llm.timeoutSeconds()));
         if (tracePropagationInterceptor != null) {
             openAiBuilder.requestInterceptor(tracePropagationInterceptor);
             anthropicBuilder.requestInterceptor(tracePropagationInterceptor);
         }
         this.openAiRestClient = openAiBuilder.build();
         this.anthropicRestClient = anthropicBuilder.build();
+    }
+
+    private SimpleClientHttpRequestFactory requestFactory(int timeoutSeconds) {
+        int timeoutMillis = timeoutSeconds * 1_000;
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(timeoutMillis);
+        factory.setReadTimeout(timeoutMillis);
+        return factory;
     }
 
     public boolean isConfigured() {

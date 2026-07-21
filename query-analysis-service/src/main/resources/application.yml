@@ -18,6 +18,7 @@ rag:
     provider: volcengine-ark
     model: ark-code-latest
     api-key: ${ARK_API_KEY:}
+    timeout-seconds: ${RAG_LLM_TIMEOUT_SECONDS:30}
     openai-compatible:
       base-url: https://ark.cn-beijing.volces.com/api/plan/v3
     anthropic-compatible:

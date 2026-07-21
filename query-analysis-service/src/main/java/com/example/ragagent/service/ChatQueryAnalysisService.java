@@ -112,7 +112,7 @@ public class ChatQueryAnalysisService {
 
         long latencyMs = Duration.between(startedAt, Instant.now()).toMillis();
         log.info(
-                "Chat query analysis session={} knowledgeBase={} intent={} route={} rewritten={} historyLength={} latencyMs={} originalQuery=\"{}\" rewrittenQuery=\"{}\" retrievalQueries={}",
+                "Chat query analysis session={} knowledgeBase={} intent={} route={} rewritten={} historyLength={} latencyMs={} queryLength={} rewrittenQueryLength={} retrievalQueryCount={}",
                 analysis.sessionId(),
                 analysis.knowledgeBaseId(),
                 analysis.intent().value(),
@@ -120,9 +120,9 @@ public class ChatQueryAnalysisService {
                 analysis.rewritten(),
                 analysis.historyLength(),
                 latencyMs,
-                analysis.originalQuery(),
-                analysis.rewrittenQuery(),
-                analysis.retrievalQueries()
+                analysis.originalQuery().length(),
+                analysis.rewrittenQuery().length(),
+                analysis.retrievalQueries().size()
         );
 
         return analysis;

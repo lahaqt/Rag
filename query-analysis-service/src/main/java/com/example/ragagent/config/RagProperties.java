@@ -18,7 +18,8 @@ public record RagProperties(
                     "ark-code-latest",
                     "",
                     new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan/v3"),
-                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan")
+                    new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan"),
+                    30
             );
         }
     }
@@ -38,7 +39,8 @@ public record RagProperties(
             String model,
             String apiKey,
             CompatibleEndpoint openaiCompatible,
-            CompatibleEndpoint anthropicCompatible
+            CompatibleEndpoint anthropicCompatible,
+            Integer timeoutSeconds
     ) {
         public Llm {
             if (provider == null || provider.isBlank()) {
@@ -56,6 +58,7 @@ public record RagProperties(
             if (anthropicCompatible == null) {
                 anthropicCompatible = new CompatibleEndpoint("https://ark.cn-beijing.volces.com/api/plan");
             }
+            timeoutSeconds = timeoutSeconds == null ? 30 : Math.max(2, Math.min(timeoutSeconds, 120));
         }
     }
 
