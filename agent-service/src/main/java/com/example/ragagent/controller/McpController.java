@@ -3,6 +3,7 @@ package com.example.ragagent.controller;
 import com.example.ragagent.mcp.McpServerRequest;
 import com.example.ragagent.mcp.McpServerResponse;
 import com.example.ragagent.mcp.McpServerService;
+import com.example.ragagent.mcp.McpAccessPolicy;
 import com.example.ragagent.mcp.McpToolCallRequest;
 import com.example.ragagent.mcp.McpToolCallResponse;
 import jakarta.validation.Valid;
@@ -22,9 +23,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/mcp/servers")
 public class McpController {
     private final McpServerService mcpServerService;
+    private final McpAccessPolicy mcpAccessPolicy;
 
-    public McpController(McpServerService mcpServerService) {
+    public McpController(McpServerService mcpServerService, McpAccessPolicy mcpAccessPolicy) {
         this.mcpServerService = mcpServerService;
+        this.mcpAccessPolicy = mcpAccessPolicy;
     }
 
     @GetMapping
@@ -71,6 +74,7 @@ public class McpController {
             @PathVariable String toolName,
             @RequestBody(required = false) McpToolCallRequest request
     ) {
+        mcpAccessPolicy.requireDirectToolCallsAllowed();
         return mcpServerService.callTool(id, toolName, request == null ? null : request.arguments());
     }
 }

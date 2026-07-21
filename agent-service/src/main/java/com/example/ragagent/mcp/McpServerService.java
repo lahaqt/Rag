@@ -23,16 +23,19 @@ public class McpServerService {
     private final RagProperties properties;
     private final McpSdkClient mcpSdkClient;
     private final ObjectMapper objectMapper;
+    private final McpAccessPolicy mcpAccessPolicy;
     private final Map<String, ManagedMcpServer> servers = new ConcurrentHashMap<>();
 
     public McpServerService(
             RagProperties properties,
             McpSdkClient mcpSdkClient,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            McpAccessPolicy mcpAccessPolicy
     ) {
         this.properties = properties;
         this.mcpSdkClient = mcpSdkClient;
         this.objectMapper = objectMapper;
+        this.mcpAccessPolicy = mcpAccessPolicy;
     }
 
     @PostConstruct
@@ -88,6 +91,7 @@ public class McpServerService {
         if (existingByDefinitionId != null && existingByDefinitionId.definition().readOnly()) {
             throw new IllegalStateException("Built-in MCP server cannot be modified: " + definition.id());
         }
+        mcpAccessPolicy.requireRuntimeRegistrationAllowed(definition);
         ManagedMcpServer next = new ManagedMcpServer(definition);
         if (definition.enabled()) {
             try {

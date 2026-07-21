@@ -78,6 +78,11 @@ rag:
   mcp:
     enabled: true
     timeout-seconds: 8
+    # Dynamic MCP registration and direct calls are admin-only and disabled by default.
+    # If registration is needed, permit only explicitly trusted remote HTTP hosts.
+    runtime-registration-enabled: false
+    runtime-allowed-http-hosts: ${RAG_MCP_RUNTIME_ALLOWED_HTTP_HOSTS:}
+    direct-tool-call-enabled: false
     servers:
       - id: mcp-deepwiki-remote-test
         name: DeepWiki Remote Test
