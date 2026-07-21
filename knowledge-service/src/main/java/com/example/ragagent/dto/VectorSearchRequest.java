@@ -1,10 +1,11 @@
 package com.example.ragagent.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 
 public record VectorSearchRequest(
         @NotBlank String knowledgeBaseId,
-        @NotBlank String query,
+        @NotBlank @Size(max = 4096) String query,
         Integer topK,
         Double similarityThreshold,
         String retrievalMode,
@@ -12,7 +13,7 @@ public record VectorSearchRequest(
         Integer queryExpansionCount
 ) {
     public int normalizedTopK() {
-        return topK == null ? 6 : topK;
+        return topK == null ? 6 : Math.max(1, Math.min(topK, 20));
     }
 
     public double normalizedSimilarityThreshold() {
