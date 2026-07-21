@@ -30,16 +30,29 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
     private static final String USER_ID_HEADER = "X-Rag-User-Id";
     private static final String SIGNATURE_HEADER = "X-Rag-Identity-Signature";
     private static final String MCP_PREFIX = "/api/mcp/servers";
+    private static final String A2A_PREFIX = "/api/chat/multi-agent/a2a";
 
     private final String signingSecret;
     private final Set<String> adminUserIds;
+    private final Set<String> a2aCallerIds;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public GatewayIdentityFilter(
             @Value("${rag.security.identity-signing-secret:}") String signingSecret,
-            @Value("${rag.security.admin-user-ids:}") String adminUserIds
+            @Value("${rag.security.admin-user-ids:}") String adminUserIds,
+            @Value("${rag.security.a2a-caller-ids:}") String a2aCallerIds
     ) {
         this.signingSecret = signingSecret == null ? "" : signingSecret.trim();
-        this.adminUserIds = Arrays.stream((adminUserIds == null ? "" : adminUserIds).split(","))
+        this.adminUserIds = identities(adminUserIds);
+        this.a2aCallerIds = identities(a2aCallerIds);
+    }
+
+    public GatewayIdentityFilter(String signingSecret, String adminUserIds) {
+        this(signingSecret, adminUserIds, "");
+    }
+
+    private Set<String> identities(String configuredIdentities) {
+        return Arrays.stream((configuredIdentities == null ? "" : configuredIdentities).split(","))
                 .map(String::trim)
                 .filter(value -> !value.isEmpty())
                 .collect(Collectors.toUnmodifiableSet());
@@ -53,6 +66,7 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/conversations")
                 || path.startsWith("/api/feedback")
                 || path.startsWith("/api/traces")
+                || path.startsWith(A2A_PREFIX)
                 || path.startsWith(MCP_PREFIX));
     }
 
@@ -71,6 +85,10 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
         }
         if (request.getRequestURI().startsWith(MCP_PREFIX) && !adminUserIds.contains(userId.trim())) {
             response.sendError(HttpServletResponse.SC_FORBIDDEN, "MCP administration requires an admin identity");
+            return;
+        }
+        if (request.getRequestURI().startsWith(A2A_PREFIX) && !a2aCallerIds.contains(userId.trim())) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "A2A access requires a configured service identity");
             return;
         }
         request.setAttribute(RequestIdentity.USER_ID_ATTRIBUTE, userId.trim());

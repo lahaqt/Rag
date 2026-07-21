@@ -55,6 +55,28 @@ class GatewayIdentityFilterTests {
         assertThat(response.getStatus()).isEqualTo(403);
     }
 
+    @Test
+    void limitsA2aJsonRpcToConfiguredServiceIdentities() throws Exception {
+        GatewayIdentityFilter filter = new GatewayIdentityFilter(SECRET, "admin", "a2a-gateway");
+        MockHttpServletRequest userRequest = new MockHttpServletRequest("POST", "/api/chat/multi-agent/a2a");
+        userRequest.addHeader("X-Rag-User-Id", "user-1");
+        userRequest.addHeader("X-Rag-Identity-Signature", signature("user-1"));
+        MockHttpServletResponse userResponse = new MockHttpServletResponse();
+
+        filter.doFilter(userRequest, userResponse, new MockFilterChain());
+
+        assertThat(userResponse.getStatus()).isEqualTo(403);
+
+        MockHttpServletRequest serviceRequest = new MockHttpServletRequest("POST", "/api/chat/multi-agent/a2a");
+        serviceRequest.addHeader("X-Rag-User-Id", "a2a-gateway");
+        serviceRequest.addHeader("X-Rag-Identity-Signature", signature("a2a-gateway"));
+        MockHttpServletResponse serviceResponse = new MockHttpServletResponse();
+
+        filter.doFilter(serviceRequest, serviceResponse, new MockFilterChain());
+
+        assertThat(serviceResponse.getStatus()).isEqualTo(200);
+    }
+
     private static MockHttpServletRequest protectedRequest(String userId, String signature) {
         MockHttpServletRequest request = new MockHttpServletRequest("GET", "/api/approvals");
         request.addHeader("X-Rag-User-Id", userId);
