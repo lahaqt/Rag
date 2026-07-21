@@ -5,6 +5,7 @@ import hmac
 from collections import OrderedDict
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
@@ -36,7 +37,7 @@ async def create_run(request: RunEvaluationRequest, _: None = Depends(require_ap
     except TimeoutError as exc:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Evaluation capacity is exhausted") from exc
     try:
-        agent_base_url = (request.agentBaseUrl or settings.agent_base_url).rstrip("/")
+        agent_base_url = resolve_agent_base_url(request.agentBaseUrl)
         try:
             run = await run_dataset(
                 request.datasetPath,
@@ -59,6 +60,18 @@ async def create_run(request: RunEvaluationRequest, _: None = Depends(require_ap
         return run
     finally:
         _run_semaphore.release()
+
+
+def resolve_agent_base_url(requested_url: str | None) -> str:
+    if not requested_url:
+        return settings.agent_base_url.rstrip("/")
+    if not settings.allow_agent_url_override:
+        raise HTTPException(status_code=400, detail="Per-run agentBaseUrl overrides are disabled")
+    parsed = urlparse(requested_url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme not in {"http", "https"} or not host or host not in settings.allowed_agent_hosts:
+        raise HTTPException(status_code=400, detail="agentBaseUrl must use an explicitly allowed http(s) host")
+    return requested_url.rstrip("/")
 
 
 @app.get("/api/evaluations/runs/{run_id}")

@@ -16,6 +16,8 @@ class EvaluationSettings(BaseModel):
     max_cases_per_run: int = Field(default=100, ge=1, le=1_000)
     max_concurrent_runs: int = Field(default=1, ge=1, le=8)
     max_stored_runs: int = Field(default=100, ge=1, le=10_000)
+    allow_agent_url_override: bool = Field(default=False)
+    allowed_agent_hosts: set[str] = Field(default_factory=set)
 
 
 def load_settings() -> EvaluationSettings:
@@ -29,4 +31,10 @@ def load_settings() -> EvaluationSettings:
         max_cases_per_run=int(os.getenv("EVAL_MAX_CASES_PER_RUN", "100")),
         max_concurrent_runs=int(os.getenv("EVAL_MAX_CONCURRENT_RUNS", "1")),
         max_stored_runs=int(os.getenv("EVAL_MAX_STORED_RUNS", "100")),
+        allow_agent_url_override=os.getenv("EVAL_ALLOW_AGENT_URL_OVERRIDE", "false").lower() == "true",
+        allowed_agent_hosts={
+            host.strip().lower()
+            for host in os.getenv("EVAL_ALLOWED_AGENT_HOSTS", "").split(",")
+            if host.strip()
+        },
     )
