@@ -15,6 +15,7 @@ import org.xml.sax.SAXException;
 
 @Component
 public class TikaDocumentParser {
+    private static final int MAX_EXTRACTED_CHARACTERS = 5_000_000;
     private final AutoDetectParser parser = new AutoDetectParser();
     private final FrontmatterExtractor frontmatterExtractor;
 
@@ -24,7 +25,7 @@ public class TikaDocumentParser {
 
     public ParsedDocumentContent parse(Path path, String fileName) {
         try (TikaInputStream stream = TikaInputStream.get(path)) {
-            BodyContentHandler handler = new BodyContentHandler(-1);
+            BodyContentHandler handler = new BodyContentHandler(MAX_EXTRACTED_CHARACTERS);
             Metadata metadata = new Metadata();
             ParseContext context = new ParseContext();
             parser.parse(stream, handler, metadata, context);
@@ -32,7 +33,9 @@ public class TikaDocumentParser {
             Map<String, String> tikaMetadata = toMap(metadata);
             return enrichForTextFormats(fileName, rawText, tikaMetadata);
         } catch (Exception exception) {
-            String message = exception instanceof TikaException
+            String message = exception instanceof org.apache.tika.exception.WriteLimitReachedException
+                    ? "Extracted document text exceeds the maximum allowed size: " + path.getFileName()
+                    : exception instanceof TikaException
                     || exception instanceof SAXException
                     || exception instanceof java.io.IOException
                     ? "Tika failed to parse document: " + path.getFileName()
