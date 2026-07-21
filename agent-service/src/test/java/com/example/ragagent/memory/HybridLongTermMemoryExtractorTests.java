@@ -138,6 +138,17 @@ class HybridLongTermMemoryExtractorTests {
     }
 
     @Test
+    void filtersStandaloneAndNaturalLanguageCredentials() {
+        assertThat(new BusinessLongTermMemoryExtractor().extractMemories(
+                "user-1", "conversation-1", request("My GitHub token is ghp_1234567890abcdefghijklmnop"), null, null, Map.of()
+        )).isEmpty();
+
+        assertThat(new BusinessLongTermMemoryExtractor().extractMemories(
+                "user-1", "conversation-1", request("My database password is correct-horse-battery-staple"), null, null, Map.of()
+        )).isEmpty();
+    }
+
+    @Test
     void llmFailureDoesNotDiscardRuleMemories() {
         LlmGateway llm = mock(LlmGateway.class);
         when(llm.isConfigured()).thenReturn(true);
