@@ -7,6 +7,7 @@ import org.springframework.web.server.ResponseStatusException;
 /** Reads the identity asserted by the authenticated gateway filter. */
 public final class RequestIdentity {
     public static final String USER_ID_ATTRIBUTE = RequestIdentity.class.getName() + ".userId";
+    public static final String ADMIN_ATTRIBUTE = RequestIdentity.class.getName() + ".admin";
 
     private RequestIdentity() {
     }
@@ -25,5 +26,17 @@ public final class RequestIdentity {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Requested user does not match the authenticated identity");
         }
         return authenticatedUserId;
+    }
+
+    public static boolean isAdmin(HttpServletRequest request) {
+        return request != null && Boolean.TRUE.equals(request.getAttribute(ADMIN_ATTRIBUTE));
+    }
+
+    public static String requireAdmin(HttpServletRequest request) {
+        String userId = requiredUserId(request);
+        if (!isAdmin(request)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Administrator access is required");
+        }
+        return userId;
     }
 }

@@ -1,0 +1,27 @@
+openapi: 3.0.3
+info:
+  title: Engineering Authoring Coach Administration API
+  version: v1
+paths:
+  /api/admin/models:
+    get: {summary: List masked model profiles, responses: {'200': {description: Profiles}}}
+    post: {summary: Create an encrypted model profile, responses: {'200': {description: Profile}}}
+  /api/admin/models/{modelId}/test:
+    post: {summary: Validate a model profile before activation, responses: {'200': {description: Test result}}}
+  /api/admin/models/{modelId}/activate:
+    post: {summary: Activate a model profile for new requests, responses: {'200': {description: Profile}}}
+  /api/admin/mcp/servers:
+    get: {summary: List MCP servers with masked secrets, responses: {'200': {description: Servers}}}
+    post: {summary: Register a persistent MCP server, responses: {'200': {description: Server}}}
+  /api/admin/courses:
+    get: {summary: List courses, responses: {'200': {description: Courses}}}
+    post: {summary: Create a course and its internal knowledge base, responses: {'200': {description: Course}}}
+  /api/admin/courses/{courseId}/materials:
+    post: {summary: Upload a course material through the agent facade, responses: {'200': {description: Material}}}
+  /api/admin/courses/{courseId}/mcp-bindings:
+    get: {summary: List course-specific read-only MCP bindings, responses: {'200': {description: Bindings}}}
+    put: {summary: Replace course-specific MCP bindings, responses: {'200': {description: Bindings}}}
+  /api/admin/health:
+    get: {summary: Return administration health summary, responses: {'200': {description: Health}}}
+  /api/admin/audit-events:
+    get: {summary: List administrator audit events, responses: {'200': {description: Events}}}

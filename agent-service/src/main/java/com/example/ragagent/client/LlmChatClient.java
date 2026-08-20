@@ -1,6 +1,7 @@
 package com.example.ragagent.client;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.config.RuntimeModelConfigurationService;
 import com.example.ragagent.observability.TracePropagationInterceptor;
 import com.example.ragagent.service.LlmGateway;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -17,31 +18,27 @@ import org.springframework.web.client.RestClient;
 
 @Component
 public class LlmChatClient implements LlmGateway {
-    private final RestClient openAiRestClient;
-    private final RestClient anthropicRestClient;
-    private final RagProperties.Llm llm;
+    private final RestClient.Builder restClientBuilder;
+    private final TracePropagationInterceptor tracePropagationInterceptor;
+    private final RuntimeModelConfigurationService runtimeModelConfigurationService;
     private final ObjectMapper objectMapper;
 
     public LlmChatClient(
             RagProperties properties,
             RestClient.Builder restClientBuilder,
             TracePropagationInterceptor tracePropagationInterceptor,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            RuntimeModelConfigurationService runtimeModelConfigurationService
     ) {
-        this.llm = properties.llm();
         this.objectMapper = objectMapper;
-        this.openAiRestClient = restClientBuilder.clone()
-                .baseUrl(llm.openaiCompatible().baseUrl())
-                .requestInterceptor(tracePropagationInterceptor)
-                .build();
-        this.anthropicRestClient = restClientBuilder.clone()
-                .baseUrl(llm.anthropicCompatible().baseUrl())
-                .requestInterceptor(tracePropagationInterceptor)
-                .build();
+        this.restClientBuilder = restClientBuilder;
+        this.tracePropagationInterceptor = tracePropagationInterceptor;
+        this.runtimeModelConfigurationService = runtimeModelConfigurationService;
     }
 
     @Override
     public boolean isConfigured() {
+        RagProperties.Llm llm = configuration();
         return llm != null
                 && llm.apiKey() != null
                 && !llm.apiKey().isBlank()
@@ -51,17 +48,18 @@ public class LlmChatClient implements LlmGateway {
 
     @Override
     public String complete(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
-        if (!isConfigured()) {
+        RagProperties.Llm llm = configuration();
+        if (!configured(llm)) {
             throw new IllegalStateException("rag.llm.api-key is required for answer generation.");
         }
 
         try {
-            return completeOpenAiCompatible(systemPrompt, userPrompt, temperature, maxTokens);
+            return completeOpenAiCompatible(llm, systemPrompt, userPrompt, temperature, maxTokens);
         } catch (Exception openAiException) {
             if (llm.anthropicCompatible() == null || llm.anthropicCompatible().baseUrl().isBlank()) {
                 throw openAiException;
             }
-            return completeAnthropicCompatible(systemPrompt, userPrompt, maxTokens);
+            return completeAnthropicCompatible(llm, systemPrompt, userPrompt, maxTokens);
         }
     }
 
@@ -73,22 +71,23 @@ public class LlmChatClient implements LlmGateway {
             int maxTokens,
             Consumer<String> onDelta
     ) {
-        if (!isConfigured()) {
+        RagProperties.Llm llm = configuration();
+        if (!configured(llm)) {
             throw new IllegalStateException("rag.llm.api-key is required for answer generation.");
         }
 
         try {
-            return streamOpenAiCompatible(systemPrompt, userPrompt, temperature, maxTokens, onDelta);
+            return streamOpenAiCompatible(llm, systemPrompt, userPrompt, temperature, maxTokens, onDelta);
         } catch (Exception openAiException) {
             if (llm.anthropicCompatible() == null || llm.anthropicCompatible().baseUrl().isBlank()) {
                 throw openAiException;
             }
-            return streamAnthropicCompatible(systemPrompt, userPrompt, maxTokens, onDelta);
+            return streamAnthropicCompatible(llm, systemPrompt, userPrompt, maxTokens, onDelta);
         }
     }
 
-    private String completeOpenAiCompatible(String systemPrompt, String userPrompt, double temperature, int maxTokens) {
-        ResponsesApiResponse response = openAiRestClient.post()
+    private String completeOpenAiCompatible(RagProperties.Llm llm, String systemPrompt, String userPrompt, double temperature, int maxTokens) {
+        ResponsesApiResponse response = openAiClient(llm).post()
                 .uri("/responses")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("Authorization", "Bearer " + llm.apiKey())
@@ -112,8 +111,8 @@ public class LlmChatClient implements LlmGateway {
         return content.trim();
     }
 
-    private String completeAnthropicCompatible(String systemPrompt, String userPrompt, int maxTokens) {
-        AnthropicMessageResponse response = anthropicRestClient.post()
+    private String completeAnthropicCompatible(RagProperties.Llm llm, String systemPrompt, String userPrompt, int maxTokens) {
+        AnthropicMessageResponse response = anthropicClient(llm).post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
                 .header("x-api-key", llm.apiKey())
@@ -145,13 +144,14 @@ public class LlmChatClient implements LlmGateway {
     }
 
     private String streamOpenAiCompatible(
+            RagProperties.Llm llm,
             String systemPrompt,
             String userPrompt,
             double temperature,
             int maxTokens,
             Consumer<String> onDelta
     ) {
-        return openAiRestClient.post()
+        return openAiClient(llm).post()
                 .uri("/responses")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
@@ -179,12 +179,13 @@ public class LlmChatClient implements LlmGateway {
     }
 
     private String streamAnthropicCompatible(
+            RagProperties.Llm llm,
             String systemPrompt,
             String userPrompt,
             int maxTokens,
             Consumer<String> onDelta
     ) {
-        return anthropicRestClient.post()
+        return anthropicClient(llm).post()
                 .uri("/v1/messages")
                 .contentType(MediaType.APPLICATION_JSON)
                 .accept(MediaType.TEXT_EVENT_STREAM)
@@ -310,6 +311,28 @@ public class LlmChatClient implements LlmGateway {
             }
         }
         return text.toString();
+    }
+
+    private RagProperties.Llm configuration() {
+        return runtimeModelConfigurationService.activeConfiguration();
+    }
+
+    private boolean configured(RagProperties.Llm llm) {
+        return llm != null
+                && llm.apiKey() != null
+                && !llm.apiKey().isBlank()
+                && ((llm.openaiCompatible() != null && !llm.openaiCompatible().baseUrl().isBlank())
+                || (llm.anthropicCompatible() != null && !llm.anthropicCompatible().baseUrl().isBlank()));
+    }
+
+    private RestClient openAiClient(RagProperties.Llm llm) {
+        return restClientBuilder.clone().baseUrl(llm.openaiCompatible().baseUrl())
+                .requestInterceptor(tracePropagationInterceptor).build();
+    }
+
+    private RestClient anthropicClient(RagProperties.Llm llm) {
+        return restClientBuilder.clone().baseUrl(llm.anthropicCompatible().baseUrl())
+                .requestInterceptor(tracePropagationInterceptor).build();
     }
 
     private record ResponsesApiRequest(

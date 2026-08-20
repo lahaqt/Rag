@@ -1,6 +1,7 @@
 package com.example.ragagent.mcp;
 
 import com.example.ragagent.config.RagProperties;
+import com.example.ragagent.config.ConfigSecretCipher;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,9 +15,14 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Service
 public class McpServerService {
+    private static final Logger log = LoggerFactory.getLogger(McpServerService.class);
     private static final TypeReference<Map<String, Object>> MAP_TYPE = new TypeReference<>() {
     };
 
@@ -24,18 +30,37 @@ public class McpServerService {
     private final McpSdkClient mcpSdkClient;
     private final ObjectMapper objectMapper;
     private final McpAccessPolicy mcpAccessPolicy;
+    private final JdbcTemplate jdbcTemplate;
+    private final ConfigSecretCipher secretCipher;
     private final Map<String, ManagedMcpServer> servers = new ConcurrentHashMap<>();
 
+    @Autowired
     public McpServerService(
             RagProperties properties,
             McpSdkClient mcpSdkClient,
             ObjectMapper objectMapper,
-            McpAccessPolicy mcpAccessPolicy
+            McpAccessPolicy mcpAccessPolicy,
+            JdbcTemplate jdbcTemplate,
+            ConfigSecretCipher secretCipher
     ) {
         this.properties = properties;
         this.mcpSdkClient = mcpSdkClient;
         this.objectMapper = objectMapper;
         this.mcpAccessPolicy = mcpAccessPolicy;
+        this.jdbcTemplate = jdbcTemplate;
+        this.secretCipher = secretCipher;
+        initializeSchema();
+    }
+
+    /** Compatibility constructor retained for focused unit tests that exercise only in-memory built-in servers. */
+    public McpServerService(RagProperties properties, McpSdkClient mcpSdkClient, ObjectMapper objectMapper,
+                            McpAccessPolicy mcpAccessPolicy) {
+        this.properties = properties;
+        this.mcpSdkClient = mcpSdkClient;
+        this.objectMapper = objectMapper;
+        this.mcpAccessPolicy = mcpAccessPolicy;
+        this.jdbcTemplate = null;
+        this.secretCipher = null;
     }
 
     @PostConstruct
@@ -56,6 +81,7 @@ public class McpServerService {
             );
             servers.put(definition.id(), new ManagedMcpServer(definition));
         }
+        loadRuntimeServers();
     }
 
     public List<McpServerResponse> listServers() {
@@ -110,6 +136,7 @@ public class McpServerService {
         if (previous != null) {
             previous.close();
         }
+        persistRuntimeServer(definition);
         return next.toResponse();
     }
 
@@ -126,6 +153,7 @@ public class McpServerService {
             throw new IllegalArgumentException("Unknown MCP server: " + id);
         }
         removed.close();
+        if (jdbcTemplate != null) jdbcTemplate.update("DELETE FROM runtime_mcp_servers WHERE id=?", id);
     }
 
     public McpServerResponse refresh(String id) {
@@ -410,5 +438,56 @@ public class McpServerService {
             current = current.getCause();
         }
         return message.isEmpty() ? throwable.getClass().getSimpleName() : message.toString();
+    }
+
+    private void initializeSchema() {
+        if (jdbcTemplate == null) return;
+        jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS runtime_mcp_servers (
+                    id VARCHAR(128) PRIMARY KEY, name VARCHAR(200) NOT NULL, transport VARCHAR(64) NOT NULL,
+                    endpoint TEXT NOT NULL DEFAULT '', command TEXT NOT NULL DEFAULT '', args_json TEXT NOT NULL DEFAULT '[]',
+                    environment_ciphertext TEXT NOT NULL DEFAULT '', working_directory TEXT NOT NULL DEFAULT '',
+                    bearer_token_ciphertext TEXT NOT NULL DEFAULT '', enabled BOOLEAN NOT NULL DEFAULT true,
+                    created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now())
+                """);
+    }
+
+    private void loadRuntimeServers() {
+        if (jdbcTemplate == null || secretCipher == null) return;
+        jdbcTemplate.query("SELECT * FROM runtime_mcp_servers", rs -> {
+            try {
+                List<String> args = objectMapper.readValue(rs.getString("args_json"), new TypeReference<List<String>>() {});
+                Map<String, String> environment = rs.getString("environment_ciphertext").isBlank() ? Map.of()
+                        : objectMapper.readValue(secretCipher.decrypt(rs.getString("environment_ciphertext")), new TypeReference<Map<String, String>>() {});
+                McpServerDefinition definition = McpServerDefinition.of(rs.getString("id"), rs.getString("name"), rs.getString("transport"),
+                        rs.getString("endpoint"), rs.getString("command"), args, environment, rs.getString("working_directory"),
+                        secretCipher.decrypt(rs.getString("bearer_token_ciphertext")), rs.getBoolean("enabled"), false);
+                servers.putIfAbsent(definition.id(), new ManagedMcpServer(definition));
+            } catch (Exception exception) {
+                log.warn("Runtime MCP server could not be restored. id={} error={}", rs.getString("id"), exception.getMessage());
+            }
+        });
+    }
+
+    private void persistRuntimeServer(McpServerDefinition definition) {
+        if (jdbcTemplate == null || secretCipher == null) return;
+        if (definition.readOnly()) return;
+        try {
+            String args = objectMapper.writeValueAsString(definition.args());
+            String environment = definition.environment().isEmpty() ? "" : secretCipher.encrypt(objectMapper.writeValueAsString(definition.environment()));
+            String bearer = secretCipher.encrypt(definition.bearerToken());
+            int updated = jdbcTemplate.update("""
+                    UPDATE runtime_mcp_servers SET name=?, transport=?, endpoint=?, command=?, args_json=?, environment_ciphertext=?,
+                        working_directory=?, bearer_token_ciphertext=?, enabled=?, updated_at=now() WHERE id=?
+                    """, definition.name(), definition.transport(), definition.endpointText(), definition.command(), args, environment,
+                    definition.workingDirectory(), bearer, definition.enabled(), definition.id());
+            if (updated == 0) jdbcTemplate.update("""
+                    INSERT INTO runtime_mcp_servers (id, name, transport, endpoint, command, args_json, environment_ciphertext,
+                        working_directory, bearer_token_ciphertext, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, definition.id(), definition.name(), definition.transport(), definition.endpointText(), definition.command(), args,
+                    environment, definition.workingDirectory(), bearer, definition.enabled());
+        } catch (Exception exception) {
+            throw new IllegalStateException("Runtime MCP configuration could not be persisted", exception);
+        }
     }
 }

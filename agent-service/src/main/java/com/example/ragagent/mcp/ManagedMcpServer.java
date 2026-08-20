@@ -2,6 +2,9 @@ package com.example.ragagent.mcp;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Locale;
+import java.util.Map;
 import io.modelcontextprotocol.client.McpSyncClient;
 
 public final class ManagedMcpServer {
@@ -76,7 +79,7 @@ public final class ManagedMcpServer {
                 definition.endpointText(),
                 definition.command(),
                 definition.args(),
-                definition.environment(),
+                maskedEnvironment(),
                 definition.workingDirectory(),
                 definition.enabled(),
                 definition.readOnly(),
@@ -85,5 +88,16 @@ public final class ManagedMcpServer {
                 updatedAt,
                 tools
         );
+    }
+
+    private Map<String, String> maskedEnvironment() {
+        Map<String, String> values = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : definition.environment().entrySet()) {
+            String key = entry.getKey() == null ? "" : entry.getKey();
+            String normalized = key.toLowerCase(Locale.ROOT);
+            boolean secret = normalized.contains("token") || normalized.contains("secret") || normalized.contains("password") || normalized.endsWith("key");
+            values.put(key, secret && entry.getValue() != null && !entry.getValue().isBlank() ? "•••• configured" : entry.getValue());
+        }
+        return Map.copyOf(values);
     }
 }

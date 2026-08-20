@@ -31,6 +31,9 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
     private static final String SIGNATURE_HEADER = "X-Rag-Identity-Signature";
     private static final String CHAT_PREFIX = "/api/chat";
     private static final String MCP_PREFIX = "/api/mcp/servers";
+    private static final String ADMIN_PREFIX = "/api/admin";
+    private static final String AUTHORING_PREFIX = "/api/authoring";
+    private static final String SESSION_PATH = "/api/session";
     private static final String A2A_PREFIX = "/api/chat/multi-agent/a2a";
 
     private final String signingSecret;
@@ -70,7 +73,10 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
                 || path.startsWith("/api/feedback")
                 || path.startsWith("/api/traces")
                 || path.startsWith(A2A_PREFIX)
-                || path.startsWith(MCP_PREFIX));
+                || path.startsWith(MCP_PREFIX)
+                || path.startsWith(ADMIN_PREFIX)
+                || path.startsWith(AUTHORING_PREFIX)
+                || SESSION_PATH.equals(path));
     }
 
     @Override
@@ -86,8 +92,10 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Valid gateway identity is required");
             return;
         }
-        if (request.getRequestURI().startsWith(MCP_PREFIX) && !adminUserIds.contains(userId.trim())) {
-            response.sendError(HttpServletResponse.SC_FORBIDDEN, "MCP administration requires an admin identity");
+        boolean administrator = adminUserIds.contains(userId.trim());
+        if ((request.getRequestURI().startsWith(MCP_PREFIX) || request.getRequestURI().startsWith(ADMIN_PREFIX))
+                && !administrator) {
+            response.sendError(HttpServletResponse.SC_FORBIDDEN, "Administrator access is required");
             return;
         }
         if (request.getRequestURI().startsWith(A2A_PREFIX) && !a2aCallerIds.contains(userId.trim())) {
@@ -95,6 +103,7 @@ public class GatewayIdentityFilter extends OncePerRequestFilter {
             return;
         }
         request.setAttribute(RequestIdentity.USER_ID_ATTRIBUTE, userId.trim());
+        request.setAttribute(RequestIdentity.ADMIN_ATTRIBUTE, administrator);
         filterChain.doFilter(request, response);
     }
 

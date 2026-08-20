@@ -1,0 +1,24 @@
+openapi: 3.0.3
+info:
+  title: Engineering Authoring Coach API
+  version: v1
+paths:
+  /api/session:
+    get: {summary: Return the signed user and STUDENT or ADMIN role, responses: {'200': {description: Session}}}
+  /api/authoring/courses:
+    get: {summary: List published courses, responses: {'200': {description: Courses}}}
+  /api/authoring/projects:
+    get: {summary: List current student's projects, responses: {'200': {description: Projects}}}
+    post: {summary: Create a course-scoped project, responses: {'200': {description: Project}}}
+  /api/authoring/artifacts/{artifactId}/draft:
+    patch: {summary: Optimistically save a structured draft, responses: {'200': {description: Artifact}, '409': {description: Version conflict}}}
+  /api/authoring/artifacts/{artifactId}/revisions:
+    get: {summary: List immutable revisions, responses: {'200': {description: Revisions}}}
+    post: {summary: Create an immutable revision, responses: {'200': {description: Revision}}}
+  /api/authoring/revisions/{revisionId}/reviews:
+    get: {summary: List coaching reviews, responses: {'200': {description: Reviews}}}
+    post: {summary: Run mandatory course-scoped RAG coaching, responses: {'200': {description: Review}, '400': {description: Materials not ready}}}
+  /api/authoring/artifacts/{artifactId}/compare:
+    get: {summary: Compare two revisions, responses: {'200': {description: Comparison}}}
+  /api/authoring/reviews/{reviewId}/rating:
+    post: {summary: Submit formative review ratings, responses: {'204': {description: Saved}}}
