@@ -52,6 +52,15 @@ export default defineConfig({
       '/api/traces': {
         ...signedProxy('http://127.0.0.1:28083'),
       },
+      '/api/session': {
+        ...signedProxy('http://127.0.0.1:28083'),
+      },
+      '/api/authoring': {
+        ...signedProxy('http://127.0.0.1:28083'),
+      },
+      '/api/admin': {
+        ...signedProxy('http://127.0.0.1:28083'),
+      },
       '/api': {
         ...signedProxy('http://127.0.0.1:28081'),
       },
