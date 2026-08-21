@@ -3,7 +3,9 @@ package com.example.ragagent.authoring;
 import static com.example.ragagent.authoring.AuthoringDtos.*;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -56,6 +58,9 @@ class AuthoringCoachServiceTests {
         assertThat(request.getValue().retrievalMode()).isEqualTo("hybrid");
         assertThat(request.getValue().queryExpansionEnabled()).isTrue();
         assertThat(request.getValue().queryExpansionCount()).isEqualTo(3);
+        verify(authoringService).startReviewRun(anyString(), eq("revision-1"), eq("user-1"), anyString());
+        verify(authoringService, atLeastOnce()).checkpointReviewRun(anyString(), anyString(), any(), any());
+        verify(authoringService).finishReviewRun(anyString(), any());
     }
 
     @Test

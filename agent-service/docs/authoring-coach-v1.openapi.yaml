@@ -17,7 +17,9 @@ paths:
     post: {summary: Create an immutable revision, responses: {'200': {description: Revision}}}
   /api/authoring/revisions/{revisionId}/reviews:
     get: {summary: List coaching reviews, responses: {'200': {description: Reviews}}}
-    post: {summary: Run mandatory course-scoped RAG coaching, responses: {'200': {description: Review}, '400': {description: Materials not ready}}}
+    post: {summary: Run mandatory course-scoped RAG coaching, responses: {'200': {description: Review}}}
+  /api/authoring/revisions/{revisionId}/reviews/recover:
+    post: {summary: Restart a failed or stale coaching run from its immutable revision, responses: {'200': {description: Recovered review}, '409': {description: No recoverable run}}}
   /api/authoring/artifacts/{artifactId}/compare:
     get: {summary: Compare two revisions, responses: {'200': {description: Comparison}}}
   /api/authoring/reviews/{reviewId}/rating:

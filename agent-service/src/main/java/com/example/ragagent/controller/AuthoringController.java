@@ -77,6 +77,13 @@ public class AuthoringController {
     @PostMapping("/revisions/{revisionId}/reviews")
     public Review review(HttpServletRequest request, @PathVariable String revisionId) { return coachService.review(revisionId, RequestIdentity.requiredUserId(request)); }
 
+    @PostMapping("/revisions/{revisionId}/reviews/recover")
+    public Review recoverReview(HttpServletRequest request, @PathVariable String revisionId) {
+        String userId = RequestIdentity.requiredUserId(request);
+        service.requireRecoverableReviewRun(revisionId, userId);
+        return coachService.review(revisionId, userId);
+    }
+
     @GetMapping("/artifacts/{artifactId}/compare")
     public RevisionComparison compare(HttpServletRequest request, @PathVariable String artifactId,
                                       @RequestParam String from, @RequestParam String to) {

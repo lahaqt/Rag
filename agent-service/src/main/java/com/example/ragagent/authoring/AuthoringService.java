@@ -302,6 +302,41 @@ public class AuthoringService {
         return review(reviewId, userId);
     }
 
+    public void startReviewRun(String runId, String revisionId, String userId, String traceId) {
+        revision(revisionId, userId);
+        jdbcTemplate.update("""
+                INSERT INTO authoring_review_runs (id, revision_id, user_id, status, trace_id, current_phase, state_json, trace_json)
+                VALUES (?, ?, ?, 'RUNNING', ?, 'created', '{}', '[]')
+                """, runId, revisionId, userId, safe(traceId));
+    }
+
+    public void checkpointReviewRun(String runId, String phase, Map<String, Object> state, List<AgentTraceStep> trace) {
+        jdbcTemplate.update("""
+                UPDATE authoring_review_runs SET current_phase=?, state_json=?, trace_json=?, updated_at=now() WHERE id=?
+                """, safe(phase), json(state), json(trace), runId);
+    }
+
+    public void finishReviewRun(String runId, Review review) {
+        jdbcTemplate.update("""
+                UPDATE authoring_review_runs SET status=?, review_id=?, trace_id=?, failure_reason=?, updated_at=now() WHERE id=?
+                """, review.status().name(), safe(review.id()), safe(review.traceId()), safe(review.failureReason()), runId);
+    }
+
+    public void requireRecoverableReviewRun(String revisionId, String userId) {
+        revision(revisionId, userId);
+        List<ReviewRunRow> runs = jdbcTemplate.query("""
+                SELECT status, updated_at FROM authoring_review_runs WHERE revision_id=? AND user_id=?
+                ORDER BY started_at DESC LIMIT 1
+                """, (rs, row) -> new ReviewRunRow(rs.getString("status"), instant(rs, "updated_at")), revisionId, userId);
+        if (runs.isEmpty()) throw new ResponseStatusException(HttpStatus.CONFLICT, "No interrupted coaching run is available");
+        ReviewRunRow latest = runs.get(0);
+        boolean staleRunning = "RUNNING".equals(latest.status()) && latest.updatedAt() != null
+                && latest.updatedAt().isBefore(Instant.now().minusSeconds(120));
+        if (!"FAILED".equals(latest.status()) && !staleRunning) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "The latest coaching run is not recoverable");
+        }
+    }
+
     public List<Review> listReviews(String revisionId, String userId) {
         revision(revisionId, userId);
         return jdbcTemplate.query("SELECT * FROM authoring_reviews WHERE revision_id=? ORDER BY created_at", (rs, row) -> review(rs), revisionId);
@@ -466,6 +501,14 @@ public class AuthoringService {
         jdbcTemplate.execute("ALTER TABLE authoring_reviews ADD COLUMN IF NOT EXISTS tool_observations_json TEXT NOT NULL DEFAULT '[]'");
         jdbcTemplate.execute("ALTER TABLE authoring_reviews ADD COLUMN IF NOT EXISTS trace_json TEXT NOT NULL DEFAULT '[]'");
         jdbcTemplate.execute("""
+                CREATE TABLE IF NOT EXISTS authoring_review_runs (
+                    id VARCHAR(128) PRIMARY KEY, revision_id VARCHAR(128) NOT NULL REFERENCES authoring_revisions(id) ON DELETE CASCADE,
+                    user_id VARCHAR(200) NOT NULL, status VARCHAR(64) NOT NULL, trace_id VARCHAR(128) NOT NULL DEFAULT '',
+                    current_phase VARCHAR(128) NOT NULL DEFAULT '', state_json TEXT NOT NULL DEFAULT '{}', trace_json TEXT NOT NULL DEFAULT '[]',
+                    failure_reason TEXT NOT NULL DEFAULT '', review_id VARCHAR(128) NOT NULL DEFAULT '',
+                    started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(), updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now())
+                """);
+        jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS authoring_review_ratings (
                     id VARCHAR(128) PRIMARY KEY, review_id VARCHAR(128) NOT NULL REFERENCES authoring_reviews(id) ON DELETE CASCADE,
                     user_id VARCHAR(128) NOT NULL, pertinence INT NOT NULL, actionability INT NOT NULL, educational_value INT NOT NULL,
@@ -592,4 +635,5 @@ public class AuthoringService {
     private Object[] concat(String first, List<String> values) { Object[] result = new Object[values.size() + 1]; result[0] = first; for (int i = 0; i < values.size(); i++) result[i + 1] = values.get(i); return result; }
     private String placeholders(int count) { return String.join(",", java.util.Collections.nCopies(count, "?")); }
     private record CourseRow(String id, String code, String name, String description, String knowledgeBaseId, boolean published, boolean archived) { }
+    private record ReviewRunRow(String status, Instant updatedAt) { }
 }

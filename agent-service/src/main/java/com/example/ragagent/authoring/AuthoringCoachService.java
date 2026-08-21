@@ -105,16 +105,20 @@ public class AuthoringCoachService {
         );
         activeContexts.put(runId, context);
         try {
+            authoringService.startReviewRun(runId, revisionId, userId, context.traceId);
             graph.invokeAndGetOutput(Map.of(KEY_RUN_ID, runId), RunnableConfig.builder().threadId(runId).build());
             if (context.review == null) throw new IllegalStateException("Authoring graph did not produce a review");
-            return authoringService.saveReview(revisionId, userId, context.review, context.trace);
+            Review saved = authoringService.saveReview(revisionId, userId, context.review, context.trace);
+            authoringService.finishReviewRun(runId, saved);
+            return saved;
         } catch (ResponseStatusException exception) {
             throw exception;
         } catch (Exception exception) {
             Review failed = new Review("", revisionId, ReviewStatus.FAILED, null, List.of(), List.of(), List.of(),
                     "The coaching run could not be completed. Retry this revision after checking the service configuration.",
                     context.traceId, safeFailure(exception), null);
-            authoringService.saveReview(revisionId, userId, failed, context.trace);
+            Review saved = authoringService.saveReview(revisionId, userId, failed, context.trace);
+            authoringService.finishReviewRun(runId, saved);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "Coaching review failed. The revision was preserved and can be retried.");
         } finally {
@@ -344,11 +348,13 @@ public class AuthoringCoachService {
             context.trace.add(new AgentTraceStep(++context.traceStep, phase, "authoring", toolName(context, phase),
                     "execute_node", observation(context, phase), "ok", elapsedMs(started), "",
                     snapshot[0].traceId(), snapshot[0].spanId(), Map.of("reflectionAttempt", context.reflectionAttempts)));
+            authoringService.checkpointReviewRun(context.runId, phase, checkpoint(context), context.trace);
             return result;
         } catch (RuntimeException exception) {
             context.trace.add(new AgentTraceStep(++context.traceStep, phase, "authoring", toolName(context, phase),
                     "execute_node", observation(context, phase), "error", elapsedMs(started), safeFailure(exception),
                     snapshot[0].traceId(), snapshot[0].spanId(), Map.of("reflectionAttempt", context.reflectionAttempts)));
+            authoringService.checkpointReviewRun(context.runId, phase, checkpoint(context), context.trace);
             throw exception;
         }
     }
@@ -370,6 +376,17 @@ public class AuthoringCoachService {
     private String toolName(ReviewContext context, String phase) {
         if (!"tool_retrieval".equals(phase) || context.toolObservations.isEmpty()) return "";
         return context.toolObservations.get(0).toolName();
+    }
+
+    private Map<String, Object> checkpoint(ReviewContext context) {
+        Map<String, Object> state = new LinkedHashMap<>();
+        state.put("evidenceCount", context.evidence.size());
+        state.put("toolObservationCount", context.toolObservations.size());
+        state.put("dimensionKeys", context.dimensions.stream().map(ReviewDimension::key).toList());
+        state.put("reflectionAttempts", context.reflectionAttempts);
+        state.put("insufficientEvidence", context.insufficientEvidence);
+        state.put("reviewStatus", context.review == null ? "" : context.review.status().name());
+        return state;
     }
 
     private long elapsedMs(long started) { return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started); }
