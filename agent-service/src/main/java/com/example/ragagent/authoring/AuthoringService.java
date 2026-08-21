@@ -2,6 +2,7 @@ package com.example.ragagent.authoring;
 
 import static com.example.ragagent.authoring.AuthoringDtos.*;
 
+import com.example.ragagent.dto.AgentTraceStep;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -286,13 +287,18 @@ public class AuthoringService {
     }
 
     public Review saveReview(String revisionId, String userId, Review review) {
+        return saveReview(revisionId, userId, review, List.of());
+    }
+
+    public Review saveReview(String revisionId, String userId, Review review, List<AgentTraceStep> trace) {
         revision(revisionId, userId);
         String reviewId = review == null || blank(review.id()) ? id("review") : review.id();
         jdbcTemplate.update("""
-                INSERT INTO authoring_reviews (id, revision_id, status, overall_score, dimensions_json, evidence_json, summary, trace_id, failure_reason)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO authoring_reviews (id, revision_id, status, overall_score, dimensions_json, evidence_json,
+                    tool_observations_json, summary, trace_id, trace_json, failure_reason)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, reviewId, revisionId, review.status().name(), review.overallScore(), json(review.dimensions()), json(review.evidence()),
-                safe(review.summary()), safe(review.traceId()), safe(review.failureReason()));
+                json(review.toolObservations()), safe(review.summary()), safe(review.traceId()), json(trace), safe(review.failureReason()));
         return review(reviewId, userId);
     }
 
@@ -309,6 +315,17 @@ public class AuthoringService {
                 """, (rs, row) -> review(rs), reviewId, userId);
         if (values.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Review not found");
         return values.get(0);
+    }
+
+    public ReviewTrace reviewTrace(String reviewId) {
+        List<ReviewTrace> traces = jdbcTemplate.query(
+                "SELECT id, trace_id, status, trace_json FROM authoring_reviews WHERE id=?",
+                (rs, row) -> new ReviewTrace(rs.getString("id"), rs.getString("trace_id"),
+                        ReviewStatus.valueOf(rs.getString("status")),
+                        value(rs.getString("trace_json"), new TypeReference<List<AgentTraceStep>>() {})),
+                reviewId);
+        if (traces.isEmpty()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Authoring review not found");
+        return traces.get(0);
     }
 
     public void saveRating(String reviewId, String userId, ReviewRatingRequest request) {
@@ -334,9 +351,29 @@ public class AuthoringService {
         changes.put("draftChanged", !from.draft().equals(to.draft()));
         changes.put("fromRevision", from.revisionNumber());
         changes.put("toRevision", to.revisionNumber());
+        Map<String, Object> fields = new LinkedHashMap<>();
+        java.util.Set<String> names = new java.util.LinkedHashSet<>();
+        from.draft().fieldNames().forEachRemaining(names::add);
+        to.draft().fieldNames().forEachRemaining(names::add);
+        for (String name : names) {
+            JsonNode before = from.draft().get(name);
+            JsonNode after = to.draft().get(name);
+            if (!java.util.Objects.equals(before, after)) {
+                fields.put(name, Map.of(
+                        "before", before == null ? objectMapper.nullNode() : before,
+                        "after", after == null ? objectMapper.nullNode() : after));
+            }
+        }
+        changes.put("changedFields", fields);
         List<Review> reviews = new ArrayList<>();
-        reviews.addAll(listReviews(from.id(), userId));
-        reviews.addAll(listReviews(to.id(), userId));
+        List<Review> fromReviews = listReviews(from.id(), userId);
+        List<Review> toReviews = listReviews(to.id(), userId);
+        reviews.addAll(fromReviews);
+        reviews.addAll(toReviews);
+        Double fromScore = latestScore(fromReviews);
+        Double toScore = latestScore(toReviews);
+        changes.put("scoreDelta", fromScore == null || toScore == null ? objectMapper.nullNode()
+                : Math.round((toScore - fromScore) * 100.0) / 100.0);
         return new RevisionComparison(from, to, changes, reviews);
     }
 
@@ -349,12 +386,22 @@ public class AuthoringService {
             List<Revision> revisions = listRevisions(artifact.id(), userId);
             Revision first = revisions.isEmpty() ? null : revisions.get(0);
             Revision latest = revisions.isEmpty() ? null : revisions.get(revisions.size() - 1);
+            Review firstReview = first == null ? null : listReviews(first.id(), userId).stream().reduce((a, b) -> b).orElse(null);
             Review latestReview = latest == null ? null : listReviews(latest.id(), userId).stream().reduce((a, b) -> b).orElse(null);
-            artifacts.add(new ArtifactOverview(artifact, first, latest, latestReview, revisions.size()));
+            Double scoreDelta = firstReview == null || latestReview == null
+                    || firstReview.overallScore() == null || latestReview.overallScore() == null
+                    ? null : Math.round((latestReview.overallScore() - firstReview.overallScore()) * 100.0) / 100.0;
+            artifacts.add(new ArtifactOverview(artifact, first, latest, firstReview, latestReview, revisions.size(), scoreDelta));
             revisionCount += revisions.size();
         }
-        Map<String, Object> metrics = Map.of("artifactCount", artifacts.size(), "revisionCount", revisionCount,
-                "courseMaterialsReady", listMaterials(course.id()).stream().filter(this::ready).count());
+        List<Double> deltas = artifacts.stream().map(ArtifactOverview::scoreDelta).filter(java.util.Objects::nonNull).toList();
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("artifactCount", artifacts.size());
+        metrics.put("revisionCount", revisionCount);
+        metrics.put("courseMaterialsReady", listMaterials(course.id()).stream().filter(this::ready).count());
+        metrics.put("reviewedArtifactCount", artifacts.stream().filter(item -> item.latestReview() != null).count());
+        metrics.put("averageScoreDelta", deltas.isEmpty() ? objectMapper.nullNode()
+                : Math.round(deltas.stream().mapToDouble(Double::doubleValue).average().orElse(0.0) * 100.0) / 100.0);
         return new ProjectOverview(project, courseSummary(course), artifacts, metrics);
     }
 
@@ -412,9 +459,12 @@ public class AuthoringService {
                 CREATE TABLE IF NOT EXISTS authoring_reviews (
                     id VARCHAR(128) PRIMARY KEY, revision_id VARCHAR(128) NOT NULL REFERENCES authoring_revisions(id) ON DELETE CASCADE,
                     status VARCHAR(64) NOT NULL, overall_score DOUBLE PRECISION, dimensions_json TEXT NOT NULL, evidence_json TEXT NOT NULL,
-                    summary TEXT NOT NULL DEFAULT '', trace_id VARCHAR(128) NOT NULL DEFAULT '', failure_reason TEXT NOT NULL DEFAULT '',
+                    tool_observations_json TEXT NOT NULL DEFAULT '[]', summary TEXT NOT NULL DEFAULT '',
+                    trace_id VARCHAR(128) NOT NULL DEFAULT '', trace_json TEXT NOT NULL DEFAULT '[]', failure_reason TEXT NOT NULL DEFAULT '',
                     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now())
                 """);
+        jdbcTemplate.execute("ALTER TABLE authoring_reviews ADD COLUMN IF NOT EXISTS tool_observations_json TEXT NOT NULL DEFAULT '[]'");
+        jdbcTemplate.execute("ALTER TABLE authoring_reviews ADD COLUMN IF NOT EXISTS trace_json TEXT NOT NULL DEFAULT '[]'");
         jdbcTemplate.execute("""
                 CREATE TABLE IF NOT EXISTS authoring_review_ratings (
                     id VARCHAR(128) PRIMARY KEY, review_id VARCHAR(128) NOT NULL REFERENCES authoring_reviews(id) ON DELETE CASCADE,
@@ -468,8 +518,13 @@ public class AuthoringService {
     private Review review(ResultSet rs) throws SQLException {
         return new Review(rs.getString("id"), rs.getString("revision_id"), ReviewStatus.valueOf(rs.getString("status")),
                 rs.getObject("overall_score", Double.class), value(rs.getString("dimensions_json"), new TypeReference<List<ReviewDimension>>() {}),
-                value(rs.getString("evidence_json"), new TypeReference<List<CourseEvidence>>() {}), rs.getString("summary"),
+                value(rs.getString("evidence_json"), new TypeReference<List<CourseEvidence>>() {}),
+                value(rs.getString("tool_observations_json"), new TypeReference<List<AuthoringToolObservation>>() {}), rs.getString("summary"),
                 rs.getString("trace_id"), rs.getString("failure_reason"), instant(rs, "created_at"));
+    }
+
+    private Double latestScore(List<Review> reviews) {
+        return reviews.stream().map(Review::overallScore).filter(java.util.Objects::nonNull).reduce((a, b) -> b).orElse(null);
     }
 
     private void upsertMaterial(String courseId, CourseKnowledgeClient.KnowledgeDocument document) {

@@ -2,7 +2,6 @@ package com.example.ragagent.authoring;
 
 import static com.example.ragagent.authoring.AuthoringDtos.*;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -21,7 +20,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
-import org.springframework.web.server.ResponseStatusException;
 
 class AuthoringCoachServiceTests {
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -36,7 +34,7 @@ class AuthoringCoachServiceTests {
         llmGateway = mock(LlmGateway.class);
         stubDomain(ArtifactType.TECHNICAL_INTERPRETATION,
                 objectMapper.readTree("{\"body\":\"Bernoulli relates pressure and velocity.\"}"), "READY");
-        when(authoringService.saveReview(eq("revision-1"), eq("user-1"), any()))
+        when(authoringService.saveReview(eq("revision-1"), eq("user-1"), any(), any()))
                 .thenAnswer(invocation -> invocation.getArgument(2));
     }
 
@@ -99,14 +97,16 @@ class AuthoringCoachServiceTests {
     }
 
     @Test
-    void rejectsReviewBeforeRetrievalCanBeTrustedWhenMaterialsAreNotReady() throws Exception {
+    void failsClosedWhenMaterialsAreNotReady() throws Exception {
         stubDomain(ArtifactType.SUPPLEMENTARY_MATERIAL,
                 objectMapper.readTree("{\"body\":\"Draft\"}"), "PROCESSING");
         when(retrievalClient.search(any())).thenReturn(new VectorSearchResponse(List.of(match("kb-1"))));
 
-        assertThatThrownBy(() -> service().review("revision-1", "user-1"))
-                .isInstanceOf(ResponseStatusException.class)
-                .hasMessageContaining("Course materials are not ready");
+        Review review = service().review("revision-1", "user-1");
+
+        assertThat(review.status()).isEqualTo(ReviewStatus.INSUFFICIENT_EVIDENCE);
+        assertThat(review.overallScore()).isNull();
+        assertThat(review.summary()).contains("not ready");
     }
 
     private AuthoringCoachService service() {

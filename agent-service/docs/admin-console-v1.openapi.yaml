@@ -25,3 +25,9 @@ paths:
     get: {summary: Return administration health summary, responses: {'200': {description: Health}}}
   /api/admin/audit-events:
     get: {summary: List administrator audit events, responses: {'200': {description: Events}}}
+  /api/admin/authoring/reviews/{reviewId}/trace:
+    get:
+      summary: Inspect the persisted node-level trace for an authoring review
+      parameters:
+        - {name: reviewId, in: path, required: true, schema: {type: string}}
+      responses: {'200': {description: Trace}, '404': {description: Review not found}}

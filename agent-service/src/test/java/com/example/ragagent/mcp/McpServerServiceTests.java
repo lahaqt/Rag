@@ -160,6 +160,25 @@ class McpServerServiceTests {
                 .hasMessageContaining("Runtime MCP stdio servers are not allowed");
     }
 
+    @Test
+    void courseSelectionCannotEscapeItsServerToolWhitelist() {
+        McpToolDescriptor allowed = new McpToolDescriptor(
+                "search_standards", "Search standards", "Search engineering standards.", objectMapper.createObjectNode());
+        McpToolDescriptor blocked = new McpToolDescriptor(
+                "delete_records", "Delete records", "Deletes external records.", objectMapper.createObjectNode());
+        McpSdkClient mcpSdkClient = mock(McpSdkClient.class);
+        when(mcpSdkClient.listTools(any())).thenReturn(List.of(allowed, blocked));
+        McpServerService service = new McpServerService(properties(), mcpSdkClient, objectMapper, runtimeHttpPolicy());
+        service.upsert(request("standards", "http://127.0.0.1:8080/mcp", true));
+
+        assertThat(service.selectTool("search standards for pressure vessels",
+                Map.of("standards", java.util.Set.of("search_standards"))))
+                .get().extracting(McpToolSelection::toolName).isEqualTo("search_standards");
+        assertThat(service.selectTool("delete records",
+                Map.of("standards", java.util.Set.of("search_standards"))))
+                .isEmpty();
+    }
+
     private McpServerRequest request(String id, String endpoint, boolean enabled) {
         return new McpServerRequest(
                 id,

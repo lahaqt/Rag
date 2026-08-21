@@ -1,5 +1,6 @@
 package com.example.ragagent.authoring;
 
+import com.example.ragagent.dto.AgentTraceStep;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.time.Instant;
 import java.util.List;
@@ -82,9 +83,16 @@ public final class AuthoringDtos {
                                  double score, String excerpt) {
     }
 
+    public record AuthoringToolObservation(String serverId, String toolName, boolean success, String content) {
+    }
+
     public record Review(String id, String revisionId, ReviewStatus status, Double overallScore,
                          List<ReviewDimension> dimensions, List<CourseEvidence> evidence,
+                         List<AuthoringToolObservation> toolObservations,
                          String summary, String traceId, String failureReason, Instant createdAt) {
+    }
+
+    public record ReviewTrace(String reviewId, String traceId, ReviewStatus status, List<AgentTraceStep> steps) {
     }
 
     public record ReviewRatingRequest(Integer pertinence, Integer actionability, Integer educationalValue, String comment) {
@@ -99,6 +107,6 @@ public final class AuthoringDtos {
     }
 
     public record ArtifactOverview(Artifact artifact, Revision firstRevision, Revision latestRevision,
-                                   Review latestReview, int revisionCount) {
+                                   Review firstReview, Review latestReview, int revisionCount, Double scoreDelta) {
     }
 }

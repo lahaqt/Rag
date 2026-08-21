@@ -6,10 +6,12 @@ import static com.example.ragagent.authoring.AuthoringDtos.*;
 import com.alibaba.cloud.ai.graph.CompiledGraph;
 import com.alibaba.cloud.ai.graph.OverAllState;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
+import com.example.ragagent.dto.AgentTraceStep;
 import com.example.ragagent.dto.VectorSearchMatch;
 import com.example.ragagent.dto.VectorSearchRequest;
 import com.example.ragagent.dto.VectorSearchResponse;
 import com.example.ragagent.observability.AgentStageTracer;
+import com.example.ragagent.observability.TraceContextSnapshot;
 import com.example.ragagent.service.LlmGateway;
 import com.example.ragagent.service.StorageRetrievalClient;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -45,6 +47,7 @@ public class AuthoringCoachService {
     private final ObjectMapper objectMapper;
     private final AuthoringCoachSettings settings;
     private final AgentStageTracer stageTracer;
+    private final CourseMcpToolService courseMcpToolService;
     private final CompiledGraph graph;
     private final Map<String, ReviewContext> activeContexts = new ConcurrentHashMap<>();
 
@@ -55,7 +58,8 @@ public class AuthoringCoachService {
             LlmGateway llmGateway,
             ObjectMapper objectMapper,
             AuthoringCoachSettings settings,
-            AgentStageTracer stageTracer
+            AgentStageTracer stageTracer,
+            CourseMcpToolService courseMcpToolService
     ) {
         this.authoringService = authoringService;
         this.retrievalClient = retrievalClient;
@@ -63,12 +67,14 @@ public class AuthoringCoachService {
         this.objectMapper = objectMapper;
         this.settings = settings;
         this.stageTracer = stageTracer;
+        this.courseMcpToolService = courseMcpToolService;
         this.graph = AuthoringCoachGraphFactory.compile(
                 settings.maxReflectionRetries(),
                 new AuthoringCoachGraphFactory.Nodes(
                         this::understandTask,
                         this::retrieveEvidence,
                         this::assessEvidence,
+                        this::retrieveSupplements,
                         this::rubricReview,
                         this::reflectReview,
                         this::aggregateResult
@@ -85,7 +91,7 @@ public class AuthoringCoachService {
             ObjectMapper objectMapper
     ) {
         this(authoringService, retrievalClient, llmGateway, objectMapper,
-                new AuthoringCoachSettings(2, 30, 6), null);
+                new AuthoringCoachSettings(2, 30, 6), null, null);
     }
 
     public Review review(String revisionId, String userId) {
@@ -101,14 +107,14 @@ public class AuthoringCoachService {
         try {
             graph.invokeAndGetOutput(Map.of(KEY_RUN_ID, runId), RunnableConfig.builder().threadId(runId).build());
             if (context.review == null) throw new IllegalStateException("Authoring graph did not produce a review");
-            return authoringService.saveReview(revisionId, userId, context.review);
+            return authoringService.saveReview(revisionId, userId, context.review, context.trace);
         } catch (ResponseStatusException exception) {
             throw exception;
         } catch (Exception exception) {
-            Review failed = new Review("", revisionId, ReviewStatus.FAILED, null, List.of(), List.of(),
+            Review failed = new Review("", revisionId, ReviewStatus.FAILED, null, List.of(), List.of(), List.of(),
                     "The coaching run could not be completed. Retry this revision after checking the service configuration.",
                     context.traceId, safeFailure(exception), null);
-            authoringService.saveReview(revisionId, userId, failed);
+            authoringService.saveReview(revisionId, userId, failed, context.trace);
             throw new ResponseStatusException(HttpStatus.BAD_GATEWAY,
                     "Coaching review failed. The revision was preserved and can be retried.");
         } finally {
@@ -159,17 +165,23 @@ public class AuthoringCoachService {
                 String status = material.status() == null ? "" : material.status().toUpperCase();
                 return status.contains("READY") || status.contains("INDEXED") || status.contains("COMPLETED");
             });
-            if (!materialsReady) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Course materials are not ready for coaching. Ask an administrator to complete processing.");
-            }
-            context.insufficientEvidence = context.evidence.isEmpty();
+            context.materialsReady = materialsReady;
+            context.insufficientEvidence = !materialsReady || context.evidence.isEmpty();
             return update(context);
         });
     }
 
     private String evidenceDecision(OverAllState state) {
         return context(state).insufficientEvidence ? EDGE_INSUFFICIENT : EDGE_REVIEW;
+    }
+
+    private Map<String, Object> retrieveSupplements(OverAllState state) {
+        ReviewContext context = context(state);
+        return traced(context, "tool_retrieval", () -> {
+            context.toolObservations = courseMcpToolService == null ? List.of()
+                    : courseMcpToolService.retrieve(context.course.id(), query(context.artifact, context.revision));
+            return update(context);
+        });
     }
 
     private Map<String, Object> rubricReview(OverAllState state) {
@@ -226,15 +238,17 @@ public class AuthoringCoachService {
         return traced(context, "result_aggregation", () -> {
             if (context.insufficientEvidence) {
                 context.review = new Review("", context.revisionId, ReviewStatus.INSUFFICIENT_EVIDENCE, null,
-                        fallbackDimensions(context.artifact, false), List.of(),
-                        "No sufficiently relevant course evidence was retrieved. Add or reindex authoritative course materials before relying on technical accuracy feedback.",
+                        fallbackDimensions(context.artifact, false), context.evidence, List.of(),
+                        context.materialsReady
+                                ? "No sufficiently relevant course evidence was retrieved. Add authoritative course materials or refine the draft topic before relying on technical accuracy feedback."
+                                : "Course materials are not ready or fully indexed. Complete material processing before requesting technical feedback.",
                         context.traceId, "", null);
                 return update(context);
             }
             double score = context.dimensions.stream().map(ReviewDimension::score).filter(java.util.Objects::nonNull)
                     .mapToInt(Integer::intValue).average().orElse(0.0);
             context.review = new Review("", context.revisionId, ReviewStatus.COMPLETED,
-                    Math.round(score * 100.0) / 100.0, context.dimensions, context.evidence,
+                    Math.round(score * 100.0) / 100.0, context.dimensions, context.evidence, context.toolObservations,
                     "Review generated from the selected course materials. Use the questions and strategies to revise your own work.",
                     context.traceId, "", null);
             return update(context);
@@ -256,6 +270,7 @@ public class AuthoringCoachService {
                 + "\nTitle: " + context.revision.title()
                 + "\nDraft:\n" + context.revision.draft()
                 + "\nCourse evidence:\n" + context.evidence
+                + (context.toolObservations.isEmpty() ? "" : "\nSupplemental course-approved tool observations (not authoritative course evidence):\n" + context.toolObservations)
                 + (context.reflectionHint.isBlank() ? "" : "\nReflection correction:\n" + context.reflectionHint);
         try {
             JsonNode nodes = objectMapper.readTree(llmGateway.complete(system, prompt, 0.2, 1400)).path("dimensions");
@@ -314,13 +329,50 @@ public class AuthoringCoachService {
     }
 
     private Map<String, Object> traced(ReviewContext context, String phase, java.util.function.Supplier<Map<String, Object>> action) {
-        if (stageTracer == null) return action.get();
-        return stageTracer.inSpan("authoring." + phase, Map.of(
-                "authoring.run_id", context.runId,
-                "authoring.revision_id", context.revisionId,
-                "authoring.phase", phase
-        ), action);
+        long started = System.nanoTime();
+        TraceContextSnapshot[] snapshot = {TraceContextSnapshot.empty()};
+        try {
+            Map<String, Object> result = stageTracer == null ? action.get() : stageTracer.inSpan("authoring." + phase, Map.of(
+                    "authoring.run_id", context.runId,
+                    "authoring.revision_id", context.revisionId,
+                    "authoring.phase", phase
+            ), () -> {
+                snapshot[0] = stageTracer.current();
+                return action.get();
+            });
+            if (snapshot[0].available()) context.traceId = snapshot[0].traceId();
+            context.trace.add(new AgentTraceStep(++context.traceStep, phase, "authoring", toolName(context, phase),
+                    "execute_node", observation(context, phase), "ok", elapsedMs(started), "",
+                    snapshot[0].traceId(), snapshot[0].spanId(), Map.of("reflectionAttempt", context.reflectionAttempts)));
+            return result;
+        } catch (RuntimeException exception) {
+            context.trace.add(new AgentTraceStep(++context.traceStep, phase, "authoring", toolName(context, phase),
+                    "execute_node", observation(context, phase), "error", elapsedMs(started), safeFailure(exception),
+                    snapshot[0].traceId(), snapshot[0].spanId(), Map.of("reflectionAttempt", context.reflectionAttempts)));
+            throw exception;
+        }
     }
+
+    private String observation(ReviewContext context, String phase) {
+        return switch (phase) {
+            case "task_understanding" -> "artifactType=" + (context.artifact == null ? "unknown" : context.artifact.type())
+                    + ", requiredDimensions=" + context.requiredDimensions.size();
+            case "evidence_retrieval", "evidence_assessment" -> "evidenceCount=" + context.evidence.size()
+                    + ", materialsReady=" + context.materialsReady;
+            case "tool_retrieval" -> "toolObservationCount=" + context.toolObservations.size();
+            case "rubric_review", "reflection" -> "dimensionCount=" + context.dimensions.size()
+                    + ", reviewInvalid=" + context.reviewInvalid;
+            case "result_aggregation" -> "status=" + (context.review == null ? "unknown" : context.review.status());
+            default -> "completed";
+        };
+    }
+
+    private String toolName(ReviewContext context, String phase) {
+        if (!"tool_retrieval".equals(phase) || context.toolObservations.isEmpty()) return "";
+        return context.toolObservations.get(0).toolName();
+    }
+
+    private long elapsedMs(long started) { return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started); }
 
     private Map<String, Object> update(ReviewContext context) {
         return Map.of(KEY_RUN_ID, context.runId, "phase", context.review == null ? "running" : context.review.status().name());
@@ -337,7 +389,7 @@ public class AuthoringCoachService {
     private String normalizeKey(String key) { return key == null ? "" : key.trim().toLowerCase().replace(' ', '_'); }
     private Integer boundedScore(Integer score) { return score == null ? null : Math.max(0, Math.min(4, score)); }
     private String excerpt(String content) { return limited(content == null ? "" : content.replaceAll("\\s+", " ").trim(), 360); }
-    private String safeFailure(Exception exception) {
+    private String safeFailure(Throwable exception) {
         Throwable current = exception;
         while (current.getCause() != null) current = current.getCause();
         return limited(current.getClass().getSimpleName() + ": " + (current.getMessage() == null ? "" : current.getMessage()), 300);
@@ -363,7 +415,7 @@ public class AuthoringCoachService {
         private final String runId;
         private final String revisionId;
         private final String userId;
-        private final String traceId;
+        private String traceId;
         private final long deadlineNanos;
         private Revision revision;
         private Artifact artifact;
@@ -372,7 +424,11 @@ public class AuthoringCoachService {
         private List<LearningOutcome> outcomes = List.of();
         private Set<String> requiredDimensions = Set.of();
         private List<CourseEvidence> evidence = List.of();
+        private List<AuthoringToolObservation> toolObservations = List.of();
         private List<ReviewDimension> dimensions = List.of();
+        private final List<AgentTraceStep> trace = new ArrayList<>();
+        private int traceStep;
+        private boolean materialsReady;
         private boolean insufficientEvidence;
         private boolean reviewInvalid;
         private int reflectionAttempts;

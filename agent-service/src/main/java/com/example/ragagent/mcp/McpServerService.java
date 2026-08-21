@@ -229,6 +229,37 @@ public class McpServerService {
         return bestScore > 0 ? Optional.of(bestSelection) : Optional.empty();
     }
 
+    /** Selects only tools explicitly allowed by a course binding. Explicit /mcp commands are not accepted here. */
+    public Optional<McpToolSelection> selectTool(String query, Map<String, java.util.Set<String>> allowedToolsByServer) {
+        String trimmed = query == null ? "" : query.trim();
+        if (trimmed.isBlank() || allowedToolsByServer == null || allowedToolsByServer.isEmpty()) {
+            return Optional.empty();
+        }
+        String normalizedQuery = normalize(trimmed);
+        McpToolSelection bestSelection = null;
+        int bestScore = 0;
+        for (ManagedMcpServer server : servers.values()) {
+            java.util.Set<String> allowedTools = allowedToolsByServer.get(server.definition().id());
+            if (!server.definition().enabled() || allowedTools == null || allowedTools.isEmpty()) {
+                continue;
+            }
+            for (McpToolDescriptor tool : server.tools()) {
+                if (!allowedTools.contains(tool.name())) {
+                    continue;
+                }
+                int score = scoreTool(normalizedQuery, tool);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestSelection = new McpToolSelection(
+                            server.definition().id(), tool.name(), tool, inferArguments(tool, trimmed),
+                            "course_tool_whitelist:" + tool.name()
+                    );
+                }
+            }
+        }
+        return bestScore > 0 ? Optional.of(bestSelection) : Optional.empty();
+    }
+
     /**
      * Finds a not-yet-executed tool whose identifier-shaped required input can
      * be supplied by a prior structured observation.

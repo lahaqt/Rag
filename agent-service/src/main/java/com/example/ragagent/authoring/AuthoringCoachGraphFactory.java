@@ -29,6 +29,7 @@ final class AuthoringCoachGraphFactory {
             graph.addNode("understand_task", AsyncNodeAction.node_async(nodes.understandTask()));
             graph.addNode("retrieve_evidence", AsyncNodeAction.node_async(nodes.retrieveEvidence()));
             graph.addNode("assess_evidence", AsyncNodeAction.node_async(nodes.assessEvidence()));
+            graph.addNode("retrieve_supplements", AsyncNodeAction.node_async(nodes.retrieveSupplements()));
             graph.addNode("rubric_review", AsyncNodeAction.node_async(nodes.rubricReview()));
             graph.addNode("reflect_review", AsyncNodeAction.node_async(nodes.reflectReview()));
             graph.addNode("aggregate_result", AsyncNodeAction.node_async(nodes.aggregateResult()));
@@ -38,8 +39,9 @@ final class AuthoringCoachGraphFactory {
             graph.addConditionalEdges(
                     "assess_evidence",
                     AsyncEdgeAction.edge_async(edges.evidenceDecision()),
-                    Map.of(EDGE_REVIEW, "rubric_review", EDGE_INSUFFICIENT, "aggregate_result")
+                    Map.of(EDGE_REVIEW, "retrieve_supplements", EDGE_INSUFFICIENT, "aggregate_result")
             );
+            graph.addEdge("retrieve_supplements", "rubric_review");
             graph.addEdge("rubric_review", "reflect_review");
             graph.addConditionalEdges(
                     "reflect_review",
@@ -60,6 +62,7 @@ final class AuthoringCoachGraphFactory {
             NodeAction understandTask,
             NodeAction retrieveEvidence,
             NodeAction assessEvidence,
+            NodeAction retrieveSupplements,
             NodeAction rubricReview,
             NodeAction reflectReview,
             NodeAction aggregateResult
