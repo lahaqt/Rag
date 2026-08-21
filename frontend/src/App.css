@@ -107,6 +107,7 @@ textarea { min-height: 92px; resize: vertical; }
 .timeline li > div { display: flex; justify-content: space-between; gap: 12px; }
 .timeline span { color: var(--muted); font-size: 13px; }
 .report-heading { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
+.report-artifacts { display: grid; gap: 12px; margin: 22px 0; }
 .subheading { margin-top: 35px; }
 .compact-form { display: grid; grid-template-columns: 90px minmax(0, 1fr) auto; gap: 8px; margin-top: 14px; }
 .upload-zone { display: grid; gap: 8px; padding: 16px; border: 1px dashed #7fb9b4; border-radius: 10px; color: var(--primary); font-weight: 700; }
