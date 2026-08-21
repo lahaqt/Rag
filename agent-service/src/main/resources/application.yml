@@ -94,6 +94,10 @@ rag:
         endpoint: https://mcp.deepwiki.com/mcp
         enabled: true
         read-only: true
+  authoring:
+    max-reflection-retries: 2
+    max-execution-seconds: 30
+    evidence-limit: 6
   agent:
     planner-enabled: true
     capability-priority: [web_search, mcp_tool, rag_retrieval]

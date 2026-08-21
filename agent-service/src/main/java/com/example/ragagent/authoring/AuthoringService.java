@@ -110,7 +110,7 @@ public class AuthoringService {
             jdbcTemplate.update("""
                     INSERT INTO authoring_course_outcomes (id, course_id, code, description, display_order, active)
                     VALUES (?, ?, ?, ?, ?, true)
-                    """, id("outcome"), required(outcome.code(), "Learning outcome code is required"),
+                    """, id("outcome"), courseId, required(outcome.code(), "Learning outcome code is required"),
                     required(outcome.description(), "Learning outcome description is required"), order++);
         }
         return listOutcomes(courseId, false);
