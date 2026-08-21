@@ -4,6 +4,7 @@ import argparse
 import json
 
 from .config import load_settings
+from .authoring_evaluator import evaluate_authoring_dataset, write_authoring_run
 from .evaluator import run_dataset_sync, write_run
 
 
@@ -16,6 +17,11 @@ def main() -> None:
     run_parser.add_argument("--agent-base-url", help="agent-service base URL.")
     run_parser.add_argument("--output", help="Path for the JSON result.")
     run_parser.add_argument("--ragas", action="store_true", help="Enable optional RAGAS metrics.")
+
+    authoring_parser = subparsers.add_parser("authoring", help="Evaluate original and revised authoring artifacts.")
+    authoring_parser.add_argument("--dataset", required=True, help="Path to the authoring JSONL dataset.")
+    authoring_parser.add_argument("--output", help="Path for the JSON result.")
+    authoring_parser.add_argument("--ragas", action="store_true", help="Enable optional evidence-grounding RAGAS metrics.")
 
     args = parser.parse_args()
     settings = load_settings()
@@ -30,8 +36,12 @@ def main() -> None:
         if args.output:
             write_run(run, args.output)
         print(json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2))
+    elif args.command == "authoring":
+        run = evaluate_authoring_dataset(args.dataset, run_ragas=args.ragas)
+        if args.output:
+            write_authoring_run(run, args.output)
+        print(json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
     main()
-

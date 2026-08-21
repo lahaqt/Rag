@@ -5,7 +5,7 @@ from typing import Any
 
 import httpx
 
-from .schemas import EvalCaseResult
+from .schemas import AuthoringCaseResult, EvalCaseResult
 
 
 class RagasUnavailableError(RuntimeError):
@@ -25,6 +25,26 @@ def evaluate_with_ragas(results: list[EvalCaseResult]) -> dict[str, Any]:
                 "reference": result.case.reference or "",
             }
         )
+    return _evaluate_rows(rows)
+
+
+def evaluate_authoring_with_ragas(results: list[AuthoringCaseResult]) -> dict[str, Any]:
+    rows = []
+    for result in results:
+        case = result.case
+        if not case.referenceFeedback:
+            continue
+        evidence = [str(item.get("excerpt") or item.get("content") or "") for item in case.revisedReview.evidence]
+        rows.append({
+            "user_input": json_text(case.revisedDraft),
+            "response": case.revisedReview.summary + "\n" + json_text(case.revisedReview.dimensions),
+            "retrieved_contexts": [item for item in evidence if item],
+            "reference": case.referenceFeedback,
+        })
+    return _evaluate_rows(rows)
+
+
+def _evaluate_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     if not rows:
         return {"scores": [], "summary": {}}
 
@@ -52,6 +72,12 @@ def evaluate_with_ragas(results: list[EvalCaseResult]) -> dict[str, Any]:
         "scores": dataframe.to_dict(orient="records"),
         "summary": _numeric_summary(dataframe.to_dict(orient="records")),
     }
+
+
+def json_text(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _build_evaluator_llm(chat_openai_class):

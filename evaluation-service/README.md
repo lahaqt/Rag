@@ -33,6 +33,18 @@ Enable RAGAS:
 rag-eval run --dataset datasets/sample_rag_eval.jsonl --output runs/latest.json --ragas
 ```
 
+Evaluate Authoring Coach revision pairs and human ratings:
+
+```bash
+rag-eval authoring --dataset datasets/sample_authoring_eval.jsonl --output runs/latest-authoring.json
+```
+
+Add `--ragas` to evaluate the revised coaching summary against its cited course
+evidence and reference feedback with Faithfulness, Context Precision, and
+Context Recall. The deterministic report always includes draft-change rate,
+formative score delta, Rubric coverage, citation validity, evidence utilization,
+and averages for pertinence, actionability, and educational value.
+
 Without activating the shell, call the venv entry point directly:
 
 ```powershell
