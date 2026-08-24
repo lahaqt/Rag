@@ -76,6 +76,28 @@ class AuthoringCoachServiceTests {
     }
 
     @Test
+    void deduplicatesAndCapsCourseEvidenceEvenWhenRetrievalOverReturns() {
+        when(llmGateway.isConfigured()).thenReturn(false);
+        when(retrievalClient.search(any())).thenReturn(new VectorSearchResponse(List.of(
+                match("kb-1", "chunk-1", 1),
+                match("kb-1", "chunk-1", 1),
+                match("kb-other", "cross-course", 2),
+                match("kb-1", "chunk-2", 2),
+                match("kb-1", "chunk-3", 3),
+                match("kb-1", "chunk-4", 4),
+                match("kb-1", "chunk-5", 5),
+                match("kb-1", "chunk-6", 6),
+                match("kb-1", "chunk-7", 7)
+        )));
+
+        Review review = service().review("revision-1", "user-1");
+
+        assertThat(review.evidence()).hasSize(6);
+        assertThat(review.evidence()).extracting(CourseEvidence::index).containsExactly(1, 2, 3, 4, 5, 6);
+        assertThat(review.evidence()).extracting(CourseEvidence::chunkId).doesNotHaveDuplicates();
+    }
+
+    @Test
     void retriesInvalidMcqRubricAndConvergesWithAllSpecializedDimensions() throws Exception {
         stubDomain(ArtifactType.MULTIPLE_CHOICE_QUESTION,
                 objectMapper.readTree("{\"stem\":\"Which statement is valid?\",\"options\":[{\"key\":\"A\",\"text\":\"A\"},{\"key\":\"B\",\"text\":\"B\"}],\"correctOptionKey\":\"A\",\"answerRationale\":\"Evidence supports A\",\"intendedDifficulty\":\"MEDIUM\"}"),
@@ -99,6 +121,28 @@ class AuthoringCoachServiceTests {
                 .contains("mcq_answer_correctness", "distractor_quality", "difficulty_alignment");
         assertThat(review.dimensions().stream().filter(item -> item.key().equals("mcq_answer_correctness"))
                 .findFirst().orElseThrow().evidenceRefs()).containsExactly(1);
+    }
+
+    @Test
+    void retriesAnswerDisclosingMcqFeedbackBeforeReturningReview() throws Exception {
+        stubDomain(ArtifactType.MULTIPLE_CHOICE_QUESTION,
+                objectMapper.readTree("{\"stem\":\"Which statement is valid?\",\"options\":[{\"key\":\"A\",\"text\":\"A\"},{\"key\":\"B\",\"text\":\"B\"}],\"correctOptionKey\":\"A\",\"answerRationale\":\"Evidence supports A\",\"intendedDifficulty\":\"MEDIUM\"}"),
+                "INDEXED");
+        when(retrievalClient.search(any())).thenReturn(new VectorSearchResponse(List.of(match("kb-1"))));
+        when(llmGateway.isConfigured()).thenReturn(true);
+        AtomicInteger calls = new AtomicInteger();
+        when(llmGateway.complete(any(), any(), any(Double.class), any(Integer.class))).thenAnswer(invocation ->
+                calls.getAndIncrement() == 0
+                        ? completeMcqRubric().replace("Review finding", "The correct answer is A")
+                        : completeMcqRubric());
+
+        Review review = service().review("revision-1", "user-1");
+
+        assertThat(calls.get()).isEqualTo(2);
+        assertThat(review.status()).isEqualTo(ReviewStatus.COMPLETED);
+        assertThat(review.dimensions()).hasSize(7);
+        assertThat(review.dimensions()).allSatisfy(dimension ->
+                assertThat(dimension.finding()).doesNotContainIgnoringCase("correct answer is"));
     }
 
     @Test
@@ -134,7 +178,11 @@ class AuthoringCoachServiceTests {
     }
 
     private VectorSearchMatch match(String knowledgeBaseId) {
-        return new VectorSearchMatch(knowledgeBaseId, "document-1", "chunk-1", 0,
+        return match(knowledgeBaseId, "chunk-1", 0);
+    }
+
+    private VectorSearchMatch match(String knowledgeBaseId, String chunkId, int chunkIndex) {
+        return new VectorSearchMatch(knowledgeBaseId, "document-1", chunkId, chunkIndex,
                 "lecture.pdf", "Pressure and velocity are related through conservation of energy.", 0.5);
     }
 

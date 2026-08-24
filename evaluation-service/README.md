@@ -41,9 +41,11 @@ rag-eval authoring --dataset datasets/sample_authoring_eval.jsonl --output runs/
 
 Add `--ragas` to evaluate the revised coaching summary against its cited course
 evidence and reference feedback with Faithfulness, Context Precision, and
-Context Recall. The deterministic report always includes draft-change rate,
-formative score delta, Rubric coverage, citation validity, evidence utilization,
-and averages for pertinence, actionability, and educational value.
+Context Recall. The deterministic report always includes review completion and
+draft-change rates, formative score delta, Rubric coverage, citation validity,
+evidence utilization, and averages for pertinence, actionability, and
+educational value. A completed review that retrieved evidence but cited none is
+counted as zero citation validity instead of being excluded from the average.
 
 Without activating the shell, call the venv entry point directly:
 

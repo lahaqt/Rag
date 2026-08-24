@@ -75,11 +75,13 @@ def _metrics(case: AuthoringEvalCase) -> AuthoringCaseMetrics:
     revised_score = case.revisedReview.overallScore
     return AuthoringCaseMetrics(
         draft_changed=case.originalDraft != case.revisedDraft,
+        review_completed=case.revisedReview.status == "COMPLETED",
         original_score=original_score,
         revised_score=revised_score,
         score_delta=None if original_score is None or revised_score is None else round(revised_score - original_score, 6),
         rubric_coverage=round(len(required & keys) / len(required), 6),
-        citation_validity=None if not references else round(len(valid_references) / len(references), 6),
+        citation_validity=(None if evidence_count == 0 else 0.0) if not references
+        else round(len(valid_references) / len(references), 6),
         evidence_utilization=None if evidence_count == 0 else round(cited_evidence / evidence_count, 6),
         pertinence=case.humanRatings.pertinence,
         actionability=case.humanRatings.actionability,
@@ -95,6 +97,7 @@ def _summary(results: list[AuthoringCaseResult]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "case_count": len(results),
         "draft_change_rate": round(sum(result.metrics.draft_changed for result in results) / len(results), 6),
+        "review_completion_rate": round(sum(result.metrics.review_completed for result in results) / len(results), 6),
     }
     for field in fields:
         values = [getattr(result.metrics, field) for result in results if getattr(result.metrics, field) is not None]

@@ -105,6 +105,7 @@ class AuthoringEvalCase(BaseModel):
 
 class AuthoringCaseMetrics(BaseModel):
     draft_changed: bool
+    review_completed: bool
     original_score: float | None = None
     revised_score: float | None = None
     score_delta: float | None = None

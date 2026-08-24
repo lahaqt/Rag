@@ -25,6 +25,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -39,6 +40,16 @@ public class AuthoringCoachService {
     );
     private static final Set<String> MCQ_DIMENSIONS = Set.of(
             "mcq_answer_correctness", "distractor_quality", "difficulty_alignment"
+    );
+    private static final Pattern REPLACEMENT_ANSWER = Pattern.compile(
+            "\\b(here\\s+is\\s+(?:a|the)\\s+revised|model\\s+answer\\s*:|replacement\\s+answer\\s*:|"
+                    + "replace\\s+your\\s+(?:draft|answer)\\s+with|use\\s+the\\s+following\\s+answer)\\b",
+            Pattern.CASE_INSENSITIVE
+    );
+    private static final Pattern MCQ_ANSWER_DISCLOSURE = Pattern.compile(
+            "\\b(correct\\s+(?:answer|option)\\s+is|answer\\s*[:=-]\\s*[a-z0-9]+|"
+                    + "option\\s+[a-z0-9]+\\s+is\\s+correct)\\b",
+            Pattern.CASE_INSENSITIVE
     );
 
     private final AuthoringService authoringService;
@@ -150,12 +161,18 @@ public class AuthoringCoachService {
                     context.course.knowledgeBaseId(), query(context.artifact, context.revision),
                     settings.evidenceLimit(), 0.0, "hybrid", true, 3));
             List<CourseEvidence> evidence = new ArrayList<>();
+            Set<String> evidenceKeys = new LinkedHashSet<>();
             for (VectorSearchMatch match : result == null ? List.<VectorSearchMatch>of() : result.safeMatches()) {
                 if (!context.course.knowledgeBaseId().equals(match.knowledgeBaseId())) continue;
                 String excerpt = excerpt(match.content());
                 if (excerpt.isBlank()) continue;
+                String evidenceKey = match.chunkId() != null && !match.chunkId().isBlank()
+                        ? "chunk:" + match.chunkId()
+                        : "document:" + match.documentId() + ":" + match.chunkIndex() + ":" + excerpt;
+                if (!evidenceKeys.add(evidenceKey)) continue;
                 evidence.add(new CourseEvidence(evidence.size() + 1, match.documentName(), match.documentId(),
                         match.chunkId(), match.chunkIndex(), match.score(), excerpt));
+                if (evidence.size() >= settings.evidenceLimit()) break;
             }
             context.evidence = List.copyOf(evidence);
             return update(context);
@@ -202,15 +219,22 @@ public class AuthoringCoachService {
         ReviewContext context = context(state);
         return traced(context, "reflection", () -> {
             Set<String> present = new LinkedHashSet<>();
+            Set<String> blocked = new LinkedHashSet<>();
             List<ReviewDimension> normalized = new ArrayList<>();
             for (ReviewDimension dimension : context.dimensions) {
                 String key = normalizeKey(dimension.key());
-                if (!context.requiredDimensions.contains(key) || !present.add(key)) continue;
+                if (!context.requiredDimensions.contains(key) || present.contains(key)) continue;
                 List<Integer> refs = dimension.evidenceRefs().stream()
                         .filter(ref -> ref != null && ref >= 1 && ref <= context.evidence.size()).distinct().toList();
-                normalized.add(new ReviewDimension(key, label(key), boundedScore(dimension.score()),
+                ReviewDimension candidate = new ReviewDimension(key, label(key), boundedScore(dimension.score()),
                         limited(dimension.finding(), 420), refs,
-                        limitedStrings(dimension.reflectiveQuestions()), limitedStrings(dimension.revisionStrategies())));
+                        limitedStrings(dimension.reflectiveQuestions()), limitedStrings(dimension.revisionStrategies()));
+                if (violatesGuidanceGuardrails(candidate, context.artifact.type())) {
+                    blocked.add(key);
+                    continue;
+                }
+                present.add(key);
+                normalized.add(candidate);
             }
             context.dimensions = List.copyOf(normalized);
             Set<String> missing = new LinkedHashSet<>(context.requiredDimensions);
@@ -221,7 +245,8 @@ public class AuthoringCoachService {
             context.reviewInvalid = !missing.isEmpty() || technicalEvidenceMissing;
             if (context.reviewInvalid && context.reflectionAttempts < settings.maxReflectionRetries()) {
                 context.reflectionAttempts++;
-                context.reflectionHint = "Return every required rubric key exactly once and cite valid evidence numbers for technical claims. Missing=" + missing;
+                context.reflectionHint = "Return every required rubric key exactly once and cite valid evidence numbers for technical claims. "
+                        + "Do not provide replacement prose or disclose an MCQ answer. Missing=" + missing + ", blocked=" + blocked;
             } else if (context.reviewInvalid) {
                 Map<String, ReviewDimension> values = new LinkedHashMap<>();
                 for (ReviewDimension dimension : context.dimensions) values.put(dimension.key(), dimension);
@@ -404,6 +429,15 @@ public class AuthoringCoachService {
     }
 
     private String normalizeKey(String key) { return key == null ? "" : key.trim().toLowerCase().replace(' ', '_'); }
+    private boolean violatesGuidanceGuardrails(ReviewDimension dimension, ArtifactType artifactType) {
+        String text = String.join(" ", java.util.stream.Stream.concat(
+                        java.util.stream.Stream.of(dimension.finding()),
+                        java.util.stream.Stream.concat(dimension.reflectiveQuestions().stream(), dimension.revisionStrategies().stream()))
+                .filter(java.util.Objects::nonNull)
+                .toList());
+        if (REPLACEMENT_ANSWER.matcher(text).find()) return true;
+        return artifactType == ArtifactType.MULTIPLE_CHOICE_QUESTION && MCQ_ANSWER_DISCLOSURE.matcher(text).find();
+    }
     private Integer boundedScore(Integer score) { return score == null ? null : Math.max(0, Math.min(4, score)); }
     private String excerpt(String content) { return limited(content == null ? "" : content.replaceAll("\\s+", " ").trim(), 360); }
     private String safeFailure(Throwable exception) {
