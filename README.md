@@ -18,7 +18,9 @@ flowchart LR
     E[evaluation-service] -. black-box review evaluation .-> A
 ```
 
-The browser never calls `content-service`. `authoring-service` owns identity, course and project data, immutable revisions, review orchestration, configuration, audit, and the administrator facade. `content-service` owns course material ingestion and hybrid retrieval and accepts only course-semantic internal requests.
+The browser never calls `content-service`. `authoring-service` owns identity, course and project data, immutable revisions, domain-specific Learning Context projections, review orchestration, configuration, audit, and the administrator facade. `content-service` owns course material ingestion and single-course hybrid retrieval and accepts only course-semantic internal requests.
+
+Reviews search the active course first. Only when its evidence is insufficient does Authoring expand through administrator-approved related-course, program, and school scopes. Weighted RRF and per-tier quotas keep the active course dominant; related-course material is explicitly `SUPPLEMENTAL` and cannot independently support technical-accuracy or MCQ-correctness scores.
 
 ## Modules
 

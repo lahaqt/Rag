@@ -6,14 +6,14 @@ import { ApplicationShell } from '../shared/ApplicationShell'
 import { AdminContent } from '../admin/AdminDashboard'
 import { RevisionHistory } from '../student/RevisionHistory'
 export type Outcome = { id: string; code: string; description: string; displayOrder: number; active: boolean }
-export type Material = { id: string; fileName: string; contentType: string; size: number; status: string; chunkCount: number; errorMessage: string; uploadedAt?: string }
+export type Material = { id?: string; fileName: string; contentType?: string; size?: number; status: string; chunkCount: number; errorMessage?: string; uploadedAt?: string }
 export type Course = { id: string; code: string; name: string; description: string; published: boolean; materialCount: number; outcomeCount: number }
 export type CourseDetail = Course & { archived?: boolean; outcomes: Outcome[]; materials: Material[] }
 type Project = { id: string; courseId: string; title: string; description: string; learningOutcomeIds: string[]; createdAt: string; updatedAt: string }
 type ArtifactType = 'TECHNICAL_INTERPRETATION' | 'SUPPLEMENTARY_MATERIAL' | 'MULTIPLE_CHOICE_QUESTION'
 type Artifact = { id: string; projectId: string; type: ArtifactType; title: string; draft: Record<string, unknown>; draftVersion: number; createdAt: string; updatedAt: string }
 export type Revision = { id: string; artifactId: string; revisionNumber: number; title: string; draft: Record<string, unknown>; createdAt: string }
-type Evidence = { index: number; documentName: string; materialId: string; excerpt: string; score: number }
+type Evidence = { index: number; documentName: string; excerpt: string; score: number; sourceCourseCode: string; authority: 'AUTHORITATIVE' | 'SUPPLEMENTAL' }
 type Dimension = { key: string; label: string; score: number | null; finding: string; evidenceRefs: number[]; reflectiveQuestions: string[]; revisionStrategies: string[] }
 type ToolObservation = { serverId: string; toolName: string; success: boolean; content: string }
 export type Review = { id: string; revisionId: string; status: 'COMPLETED' | 'INSUFFICIENT_EVIDENCE' | 'FAILED'; overallScore: number | null; dimensions: Dimension[]; evidence: Evidence[]; toolObservations: ToolObservation[]; summary: string; failureReason: string; createdAt: string }
@@ -29,6 +29,9 @@ export type CourseForm = { code: string; name: string; description: string; publ
 export type OutcomeForm = { code: string; description: string }
 export type ModelForm = { name: string; protocol: string; baseUrl: string; model: string; apiKey: string; temperature: number; maxTokens: number; enabled: boolean }
 export type McpForm = { name: string; endpoint: string; enabled: boolean }
+export type CourseRelation = { anchorCourseId: string; relatedCourseId: string; relatedCourseCode: string; relatedCourseName: string; relationType: CourseRelationType; scopeWeight: number; enabled: boolean }
+export type CourseRelationType = 'PREREQUISITE' | 'COREQUISITE' | 'EQUIVALENT' | 'PROGRAM' | 'DEPARTMENT' | 'INSTITUTION'
+export type CourseRelationForm = { relatedCourseId: string; relationType: CourseRelationType; scopeWeight: number; enabled: boolean }
 
 const defaultDraft = (type: ArtifactType): Record<string, unknown> => type === 'MULTIPLE_CHOICE_QUESTION'
   ? { stem: '', options: [{ key: 'A', text: '' }, { key: 'B', text: '' }, { key: 'C', text: '' }, { key: 'D', text: '' }], correctOptionKey: 'A', answerRationale: '', intendedDifficulty: 'MEDIUM' }
@@ -70,6 +73,8 @@ function CoachWorkspace({ adminRoute, accessToken, userId, roles, onUnauthorized
   const [reviewTrace, setReviewTrace] = useState('')
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([])
   const [newMcp, setNewMcp] = useState<McpForm>({ name: '', endpoint: '', enabled: true })
+  const [courseRelations, setCourseRelations] = useState<CourseRelation[]>([])
+  const [newCourseRelation, setNewCourseRelation] = useState<CourseRelationForm>({ relatedCourseId: '', relationType: 'PROGRAM', scopeWeight: 0.5, enabled: true })
 
   const activeProject = projects.find(project => project.id === activeProjectId) ?? null
   const activeCourse = selectedCourse ?? null
@@ -144,7 +149,13 @@ function CoachWorkspace({ adminRoute, accessToken, userId, roles, onUnauthorized
   const selectCourse = async (courseId: string, admin = false) => {
     try {
       const path = admin ? `/api/v1/admin/courses/${courseId}` : `/api/v1/courses/${courseId}`
-      setSelectedCourse(await api<CourseDetail>(path))
+      if (admin) {
+        const [course, relations] = await Promise.all([
+          api<CourseDetail>(path),
+          api<CourseRelation[]>(`/api/v1/admin/courses/${courseId}/retrieval-relations`),
+        ])
+        setSelectedCourse(course); setCourseRelations(relations)
+      } else setSelectedCourse(await api<CourseDetail>(path))
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Unable to load course.') }
   }
 
@@ -319,6 +330,29 @@ function CoachWorkspace({ adminRoute, accessToken, userId, roles, onUnauthorized
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Unable to upload material.') }
   }
 
+  const addCourseRelation = async (event: FormEvent) => {
+    event.preventDefault()
+    if (!selectedCourse || !newCourseRelation.relatedCourseId) return
+    try {
+      const payload = [...courseRelations.filter(item => item.relatedCourseId !== newCourseRelation.relatedCourseId), newCourseRelation]
+        .map(item => ({ relatedCourseId: item.relatedCourseId, relationType: item.relationType, scopeWeight: item.scopeWeight, enabled: item.enabled }))
+      const saved = await api<CourseRelation[]>(`/api/v1/admin/courses/${selectedCourse.id}/retrieval-relations`, { method: 'PUT', body: JSON.stringify(payload) })
+      setCourseRelations(saved)
+      setNewCourseRelation({ relatedCourseId: '', relationType: 'PROGRAM', scopeWeight: 0.5, enabled: true })
+      setStatus('Approved retrieval sources updated.')
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Unable to update retrieval sources.') }
+  }
+
+  const removeCourseRelation = async (relatedCourseId: string) => {
+    if (!selectedCourse) return
+    try {
+      const payload = courseRelations.filter(item => item.relatedCourseId !== relatedCourseId)
+        .map(item => ({ relatedCourseId: item.relatedCourseId, relationType: item.relationType, scopeWeight: item.scopeWeight, enabled: item.enabled }))
+      setCourseRelations(await api<CourseRelation[]>(`/api/v1/admin/courses/${selectedCourse.id}/retrieval-relations`, { method: 'PUT', body: JSON.stringify(payload) }))
+      setStatus('Retrieval source removed.')
+    } catch (error) { setStatus(error instanceof Error ? error.message : 'Unable to remove retrieval source.') }
+  }
+
   const createModel = async (event: FormEvent) => {
     event.preventDefault()
     try {
@@ -359,6 +393,8 @@ function CoachWorkspace({ adminRoute, accessToken, userId, roles, onUnauthorized
     return <AdminContent page={adminPage} courses={courses} selected={selectedCourse} courseForm={newCourse} setCourseForm={setNewCourse}
       outcomeForm={newOutcome} setOutcomeForm={setNewOutcome} onCreateCourse={createCourse} onSelectCourse={id => void selectCourse(id, true)}
       onAddOutcome={addOutcome} onUpload={uploadMaterial} models={models} modelForm={newModel} setModelForm={setNewModel}
+      relations={courseRelations} relationForm={newCourseRelation} setRelationForm={setNewCourseRelation}
+      onAddRelation={addCourseRelation} onRemoveRelation={id => void removeCourseRelation(id)}
       onCreateModel={createModel} onActivateModel={activateModel} servers={mcpServers} mcpForm={newMcp} setMcpForm={setNewMcp}
       onCreateMcp={createMcp} runs={adminReviewRuns} trace={reviewTrace} onTrace={id => void inspectReviewTrace(id)} auditEvents={auditEvents} />
   }
@@ -386,7 +422,7 @@ function CoursePage({ project, course, onLoad }: { project: Project | null; cour
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { onLoad() }, [project?.courseId])
   if (!project || !course) return <section className="empty-state"><h2>Select a project</h2><p>Choose a project to see its course evidence and learning outcomes.</p></section>
-  return <section className="page-section"><p className="section-kicker">Course evidence</p><h2>{course.code} · {course.name}</h2><p className="lead">{course.description || 'This course provides the authoritative evidence used in coaching reviews.'}</p><div className="metric-grid"><article><span>Learning outcomes</span><strong>{course.outcomes.filter(item => item.active).length}</strong></article><article><span>Course materials</span><strong>{course.materials.length}</strong></article><article><span>Ready for review</span><strong>{course.materials.some(material => /ready|indexed|completed/i.test(material.status)) ? 'Yes' : 'Not yet'}</strong></article></div><div className="split-panels"><div><h3>Learning outcomes</h3>{course.outcomes.filter(item => item.active).map(outcome => <p className="outcome-item" key={outcome.id}><b>{outcome.code}</b>{outcome.description}</p>)}</div><div><h3>Course materials</h3>{course.materials.length ? course.materials.map(material => <div className="material-row" key={material.id}><div><strong>{material.fileName}</strong><span>{material.chunkCount} chunks</span></div><span className="status-badge">{material.status}</span></div>) : <p className="muted">Your administrator has not indexed course materials yet.</p>}</div></div></section>
+  return <section className="page-section"><p className="section-kicker">Course evidence</p><h2>{course.code} · {course.name}</h2><p className="lead">{course.description || 'This course provides the authoritative evidence used in coaching reviews.'}</p><div className="metric-grid"><article><span>Learning outcomes</span><strong>{course.outcomes.filter(item => item.active).length}</strong></article><article><span>Course materials</span><strong>{course.materials.length}</strong></article><article><span>Ready for review</span><strong>{course.materials.some(material => /ready|indexed|completed/i.test(material.status)) ? 'Yes' : 'Not yet'}</strong></article></div><div className="split-panels"><div><h3>Learning outcomes</h3>{course.outcomes.filter(item => item.active).map(outcome => <p className="outcome-item" key={outcome.id}><b>{outcome.code}</b>{outcome.description}</p>)}</div><div><h3>Course materials</h3>{course.materials.length ? course.materials.map((material, index) => <div className="material-row" key={`${material.fileName}:${index}`}><div><strong>{material.fileName}</strong><span>{material.chunkCount} chunks</span></div><span className="status-badge">{material.status}</span></div>) : <p className="muted">Your administrator has not indexed course materials yet.</p>}</div></div></section>
 }
 
 function WorkspacePage({ project, artifacts, artifact, busy, review, onSelect, onCreate, onDraft, onTitle, onReview, onRate }: { project: Project | null; artifacts: Artifact[]; artifact: Artifact | null; busy: boolean; review?: Review; onSelect: (artifact: Artifact) => void; onCreate: (type: ArtifactType) => void; onDraft: (draft: Record<string, unknown>) => void; onTitle: (title: string) => void; onReview: () => void; onRate: (review: Review, rating: number) => void }) {
@@ -403,7 +439,7 @@ function ArtifactEditor({ artifact, onDraft }: { artifact: Artifact; onDraft: (d
 
 function ReviewPanel({ review, onRate }: { review?: Review; onRate: (review: Review, rating: number) => void }) {
   if (!review) return <aside className="review-panel empty"><h3>Coaching review</h3><p>Request a review to receive evidence-grounded questions and revision strategies.</p></aside>
-  return <aside className="review-panel"><div className="review-heading"><div><p className="section-kicker">Coaching review</p><h3>{review.status.replace('_', ' ')}</h3></div><strong className="score">{review.overallScore ?? '—'}<small>/ 4</small></strong></div><p>{review.summary}</p><div className="dimension-list">{review.dimensions.map(dimension => <article className="dimension-card" key={dimension.key}><header><h4>{dimension.label}</h4><span>{dimension.score ?? 'Evidence needed'}</span></header><p>{dimension.finding}</p>{dimension.reflectiveQuestions.length > 0 && <><b>Reflect</b><ul>{dimension.reflectiveQuestions.map(question => <li key={question}>{question}</li>)}</ul></>}{dimension.revisionStrategies.length > 0 && <><b>Try next</b><ul>{dimension.revisionStrategies.map(strategy => <li key={strategy}>{strategy}</li>)}</ul></>}</article>)}</div>{review.evidence.length > 0 && <div className="evidence-block"><h4>Course evidence</h4>{review.evidence.map(item => <details key={item.index}><summary>[{item.index}] {item.documentName}</summary><p>{item.excerpt}</p></details>)}</div>}<div className="rating-row"><span>Was this coaching useful?</span>{[1, 2, 3, 4, 5].map(rating => <button key={rating} aria-label={`Rate coaching ${rating} out of 5`} onClick={() => onRate(review, rating)}>{rating}</button>)}</div></aside>
+  return <aside className="review-panel"><div className="review-heading"><div><p className="section-kicker">Coaching review</p><h3>{review.status.replace('_', ' ')}</h3></div><strong className="score">{review.overallScore ?? '—'}<small>/ 4</small></strong></div><p>{review.summary}</p><div className="dimension-list">{review.dimensions.map(dimension => <article className="dimension-card" key={dimension.key}><header><h4>{dimension.label}</h4><span>{dimension.score ?? 'Evidence needed'}</span></header><p>{dimension.finding}</p>{dimension.reflectiveQuestions.length > 0 && <><b>Reflect</b><ul>{dimension.reflectiveQuestions.map(question => <li key={question}>{question}</li>)}</ul></>}{dimension.revisionStrategies.length > 0 && <><b>Try next</b><ul>{dimension.revisionStrategies.map(strategy => <li key={strategy}>{strategy}</li>)}</ul></>}</article>)}</div>{review.evidence.length > 0 && <div className="evidence-block"><h4>Review evidence</h4>{review.evidence.map(item => <details key={item.index}><summary>[{item.index}] {item.documentName} · {item.sourceCourseCode} · {item.authority === 'AUTHORITATIVE' ? 'Current course' : 'Approved related course'}</summary><p>{item.excerpt}</p>{item.authority === 'SUPPLEMENTAL' && <small>Supplemental evidence informs reflection but does not independently support technical scoring.</small>}</details>)}</div>}<div className="rating-row"><span>Was this coaching useful?</span>{[1, 2, 3, 4, 5].map(rating => <button key={rating} aria-label={`Rate coaching ${rating} out of 5`} onClick={() => onRate(review, rating)}>{rating}</button>)}</div></aside>
 }
 
 function formatDelta(value: number | null | undefined) { return value == null ? 'Not available' : `${value >= 0 ? '+' : ''}${value.toFixed(2)}` }
