@@ -175,6 +175,25 @@ paths:
       summary: Replace bindings using discovered read-only tools
       parameters: [{$ref: '#/components/parameters/courseId'}]
       responses: {'200': {description: MCP bindings}}
+  /api/v1/admin/courses/{courseId}/retrieval-relations:
+    get:
+      summary: List approved related-course retrieval scopes
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Retrieval relations}, '403': {description: ADMIN role required}}
+    put:
+      summary: Replace approved related-course retrieval scopes and weights
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items: {$ref: '#/components/schemas/CourseRetrievalRelationRequest'}
+      responses:
+        '200': {description: Retrieval relations}
+        '400': {description: Invalid self-reference, archived source, or scope weight}
+        '403': {description: ADMIN role required}
   /api/v1/admin/courses/{courseId}/materials/{materialId}/retry:
     post:
       summary: Explicitly retry parsing a failed material
@@ -273,6 +292,29 @@ components:
     modelId: {in: path, name: modelId, required: true, schema: {type: string, format: uuid}}
     serverId: {in: path, name: serverId, required: true, schema: {type: string}}
   schemas:
+    EvidenceAuthority:
+      type: string
+      enum: [AUTHORITATIVE, SUPPLEMENTAL]
+    CourseEvidence:
+      type: object
+      required: [index, documentName, score, excerpt, sourceCourseCode, authority]
+      properties:
+        index: {type: integer, minimum: 1}
+        documentName: {type: string}
+        score: {type: number}
+        excerpt: {type: string}
+        sourceCourseCode: {type: string}
+        authority: {$ref: '#/components/schemas/EvidenceAuthority'}
+    CourseRetrievalRelationRequest:
+      type: object
+      required: [relatedCourseId, relationType, scopeWeight]
+      properties:
+        relatedCourseId: {type: string}
+        relationType:
+          type: string
+          enum: [PREREQUISITE, COREQUISITE, EQUIVALENT, PROGRAM, DEPARTMENT, INSTITUTION]
+        scopeWeight: {type: number, exclusiveMinimum: 0, maximum: 1}
+        enabled: {type: boolean, default: true}
     ReviewRun:
       type: object
       required: [id, revisionId, status, currentPhase]

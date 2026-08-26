@@ -3,6 +3,8 @@ package com.example.authoringcoach.authoring;
 import static com.example.authoringcoach.authoring.AuthoringDtos.*;
 
 import com.example.authoringcoach.dto.AgentTraceStep;
+import com.example.authoringcoach.learning.LearningContext;
+import com.example.authoringcoach.learning.LearningContextService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,13 +31,15 @@ public class AuthoringService {
     private final CourseContentClient knowledgeClient;
     private final ObjectMapper objectMapper;
     private final ReviewRunEventBroker eventBroker;
+    private final LearningContextService learningContextService;
 
     public AuthoringService(JdbcTemplate jdbcTemplate, CourseContentClient knowledgeClient, ObjectMapper objectMapper,
-                            ReviewRunEventBroker eventBroker) {
+                            ReviewRunEventBroker eventBroker, LearningContextService learningContextService) {
         this.jdbcTemplate = jdbcTemplate;
         this.knowledgeClient = knowledgeClient;
         this.objectMapper = objectMapper;
         this.eventBroker = eventBroker;
+        this.learningContextService = learningContextService;
     }
 
     @Transactional
@@ -85,7 +89,10 @@ public class AuthoringService {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Published course not found");
         }
         return new StudentCourseDetails(row.id(), row.code(), row.name(), row.description(), row.published(),
-                listOutcomes(courseId, true), listMaterials(courseId));
+                listOutcomes(courseId, true), listMaterials(courseId).stream()
+                .map(material -> new StudentCourseMaterial(material.fileName(), material.status(),
+                        material.chunkCount(), material.uploadedAt()))
+                .toList());
     }
 
     public CourseDetails updateCourse(String courseId, UpdateCourseRequest request) {
@@ -140,6 +147,53 @@ public class AuthoringService {
                 new CourseMcpBinding(courseId, rs.getString("server_id"),
                         value(rs.getString("allowed_tools_json"), new TypeReference<List<String>>() {}), true,
                         rs.getBoolean("enabled")), courseId);
+    }
+
+    @Transactional
+    public List<CourseRetrievalRelation> replaceRetrievalRelations(
+            String courseId,
+            List<CourseRetrievalRelationRequest> relations
+    ) {
+        courseRow(courseId, false);
+        jdbcTemplate.update("DELETE FROM course_retrieval_relations WHERE anchor_course_id=?", courseId);
+        for (CourseRetrievalRelationRequest relation : relations == null
+                ? List.<CourseRetrievalRelationRequest>of() : relations) {
+            String relatedCourseId = required(relation.relatedCourseId(), "Related course id is required");
+            if (courseId.equals(relatedCourseId)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "A course cannot retrieve from itself as a related course");
+            }
+            CourseRow related = courseRow(relatedCourseId, false);
+            if (related.archived()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Archived courses cannot be retrieval sources");
+            }
+            CourseRelationType type = relation.relationType() == null ? CourseRelationType.PROGRAM : relation.relationType();
+            double weight = relation.scopeWeight() == null ? defaultScopeWeight(type) : relation.scopeWeight();
+            if (!Double.isFinite(weight) || weight <= 0.0 || weight > 1.0) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Retrieval scope weight must be greater than 0 and at most 1");
+            }
+            jdbcTemplate.update("""
+                    INSERT INTO course_retrieval_relations
+                        (anchor_course_id, related_course_id, relation_type, scope_weight, enabled)
+                    VALUES (?, ?, ?, ?, ?)
+                    """, courseId, relatedCourseId, type.name(), weight, !Boolean.FALSE.equals(relation.enabled()));
+        }
+        return listRetrievalRelations(courseId);
+    }
+
+    public List<CourseRetrievalRelation> listRetrievalRelations(String courseId) {
+        courseRow(courseId, false);
+        return jdbcTemplate.query("""
+                SELECT r.anchor_course_id, r.related_course_id, r.relation_type, r.scope_weight, r.enabled,
+                       c.code related_course_code, c.name related_course_name
+                FROM course_retrieval_relations r
+                JOIN courses c ON c.id=r.related_course_id
+                WHERE r.anchor_course_id=? AND c.archived=false
+                ORDER BY r.scope_weight DESC, c.code
+                """, (rs, row) -> new CourseRetrievalRelation(
+                rs.getString("anchor_course_id"), rs.getString("related_course_id"),
+                rs.getString("related_course_code"), rs.getString("related_course_name"),
+                CourseRelationType.valueOf(rs.getString("relation_type")), rs.getDouble("scope_weight"),
+                rs.getBoolean("enabled")), courseId);
     }
 
     public List<CourseMaterial> listMaterials(String courseId) {
@@ -251,13 +305,17 @@ public class AuthoringService {
     @Transactional
     public Revision createRevision(String artifactId, String userId) {
         Artifact artifact = artifact(artifactId, userId);
+        Project project = project(artifact.projectId(), userId);
         Integer revisionNumber = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(revision_number), 0) + 1 FROM revisions WHERE artifact_id=?", Integer.class, artifactId);
         String revisionId = id("revision");
         jdbcTemplate.update("""
                 INSERT INTO revisions (id, artifact_id, revision_number, title, draft_json)
                 VALUES (?, ?, ?, ?, ?)
                 """, revisionId, artifactId, revisionNumber == null ? 1 : revisionNumber, artifact.title(), json(artifact.draft()));
-        return revision(revisionId, userId);
+        Revision revision = revision(revisionId, userId);
+        learningContextService.recordRevision(new LearningContext.RevisionRecorded(
+                userId, project.id(), revisionId, List.of(), List.of(), Instant.now()));
+        return revision;
     }
 
     public List<Revision> listRevisions(String artifactId, String userId) {
@@ -292,16 +350,38 @@ public class AuthoringService {
         return saveReview(revisionId, userId, review, List.of());
     }
 
+    @Transactional
     public Review saveReview(String revisionId, String userId, Review review, List<AgentTraceStep> trace) {
-        revision(revisionId, userId);
+        Revision revision = revision(revisionId, userId);
+        Artifact artifact = artifact(revision.artifactId(), userId);
+        Project project = project(artifact.projectId(), userId);
         String reviewId = review == null || blank(review.id()) ? id("review") : review.id();
-        jdbcTemplate.update("""
+        int inserted = jdbcTemplate.update("""
                 INSERT INTO reviews (id, revision_id, status, overall_score, dimensions_json, evidence_json,
                     tool_observations_json, summary, trace_id, trace_json, failure_reason)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (id) DO NOTHING
                 """, reviewId, revisionId, review.status().name(), review.overallScore(), json(review.dimensions()), json(review.evidence()),
                 json(review.toolObservations()), safe(review.summary()), safe(review.traceId()), json(trace), safe(review.failureReason()));
+        if (inserted == 1 && review.status() == ReviewStatus.COMPLETED) {
+            List<LearningContext.Feedback> feedback = review.dimensions().stream()
+                    .filter(item -> !blank(item.finding()))
+                    .map(item -> new LearningContext.Feedback(
+                            project.id() + ":" + item.key(), item.finding(), confidence(item.score())))
+                    .toList();
+            List<LearningContext.ConceptObservation> concepts = review.dimensions().stream()
+                    .filter(item -> !blank(item.finding()))
+                    .map(item -> new LearningContext.ConceptObservation(
+                            item.key(), item.finding(), confidence(item.score())))
+                    .toList();
+            List<String> patterns = review.dimensions().stream()
+                    .filter(item -> item.evidenceRefs() == null || item.evidenceRefs().isEmpty())
+                    .map(item -> "uncited-" + item.key()).toList();
+            learningContextService.recordReview(new LearningContext.ReviewRecorded(
+                    userId, project.id(), revisionId, reviewId, feedback, concepts,
+                    project.learningOutcomeIds(), new LearningContext.BehaviorObservation(patterns, evidencePractice(review)),
+                    Instant.now()));
+        }
         return review(reviewId, userId);
     }
 
@@ -309,7 +389,12 @@ public class AuthoringService {
         jdbcTemplate.update("""
                 UPDATE review_runs SET current_phase=?, state_json=?, trace_json=?, updated_at=now() WHERE id=?
                 """, safe(phase), json(state), json(trace), runId);
-        publishRunEvent(runId, "PHASE_COMPLETED", safe(phase), objectMapper.valueToTree(state));
+        JsonNode publicProgress = objectMapper.createObjectNode()
+                .put("phase", safe(phase))
+                .put("evidenceCount", numericState(state, "evidenceCount"))
+                .put("toolObservationCount", numericState(state, "toolObservationCount"))
+                .put("reflectionAttempts", numericState(state, "reflectionAttempts"));
+        publishRunEvent(runId, "PHASE_COMPLETED", safe(phase), publicProgress);
     }
 
     public void finishReviewRun(String runId, Review review) {
@@ -361,16 +446,29 @@ public class AuthoringService {
         return traces.get(0);
     }
 
+    @Transactional
     public void saveRating(String reviewId, String userId, ReviewRatingRequest request) {
-        review(reviewId, userId);
+        Review review = review(reviewId, userId);
         validateRating(request == null ? null : request.pertinence());
         validateRating(request == null ? null : request.actionability());
         validateRating(request == null ? null : request.educationalValue());
-        jdbcTemplate.update("DELETE FROM review_ratings WHERE review_id=? AND user_id=?", reviewId, userId);
+        String ratingId = jdbcTemplate.query("SELECT id FROM review_ratings WHERE review_id=? AND user_id=?",
+                rs -> rs.next() ? rs.getString(1) : id("rating"), reviewId, userId);
         jdbcTemplate.update("""
                 INSERT INTO review_ratings (id, review_id, user_id, pertinence, actionability, educational_value, comment)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, id("rating"), reviewId, userId, request.pertinence(), request.actionability(), request.educationalValue(), safe(request.comment()));
+                ON CONFLICT (review_id, user_id) DO UPDATE SET
+                    pertinence=EXCLUDED.pertinence,
+                    actionability=EXCLUDED.actionability,
+                    educational_value=EXCLUDED.educational_value,
+                    comment=EXCLUDED.comment
+                """, ratingId, reviewId, userId, request.pertinence(), request.actionability(), request.educationalValue(), safe(request.comment()));
+        Revision revision = revision(review.revisionId(), userId);
+        Artifact artifact = artifact(revision.artifactId(), userId);
+        Project project = project(artifact.projectId(), userId);
+        learningContextService.recordRating(new LearningContext.RatingRecorded(
+                userId, project.id(), revision.id(), reviewId, ratingId, request.actionability(),
+                feedbackPreference(request.comment()), Instant.now()));
     }
 
     public RevisionComparison compare(String artifactId, String userId, String fromId, String toId) {
@@ -538,18 +636,45 @@ public class AuthoringService {
     private void validateRating(Integer value) {
         if (value == null || value < 1 || value > 5) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Ratings must be between 1 and 5");
     }
+    private double confidence(Integer score) {
+        return score == null ? 0.5 : Math.max(0.0, Math.min(1.0, score / 4.0));
+    }
+    private Double evidencePractice(Review review) {
+        if (review.dimensions() == null || review.dimensions().isEmpty()) return null;
+        long cited = review.dimensions().stream()
+                .filter(item -> item.evidenceRefs() != null && !item.evidenceRefs().isEmpty()).count();
+        return cited / (double) review.dimensions().size();
+    }
+    private String feedbackPreference(String comment) {
+        if (blank(comment)) return "";
+        return safe(comment).length() <= 80 ? safe(comment) : safe(comment).substring(0, 80);
+    }
 
     private boolean ready(CourseMaterial material) {
         return "READY".equalsIgnoreCase(material.status());
     }
 
     private int projectCount(String courseId) { return jdbcTemplate.queryForObject("SELECT COUNT(*) FROM projects WHERE course_id=?", Integer.class, courseId); }
+    private double defaultScopeWeight(CourseRelationType type) {
+        return switch (type) {
+            case EQUIVALENT -> 0.90;
+            case PREREQUISITE -> 0.75;
+            case COREQUISITE -> 0.70;
+            case PROGRAM -> 0.50;
+            case DEPARTMENT -> 0.35;
+            case INSTITUTION -> 0.20;
+        };
+    }
     private String id(String prefix) { return prefix + "-" + UUID.randomUUID(); }
     private String required(String value, String message) { requireText(value, message); return value.trim(); }
     private void requireText(String value, String message) { if (blank(value)) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, message); }
     private boolean blank(String value) { return value == null || value.isBlank(); }
     private String safe(String value) { return value == null ? "" : value; }
     private String json(Object value) { try { return objectMapper.writeValueAsString(value); } catch (Exception exception) { throw new IllegalArgumentException("Unable to serialize authoring data", exception); } }
+    private int numericState(Map<String, Object> state, String key) {
+        Object value = state == null ? null : state.get(key);
+        return value instanceof Number number ? number.intValue() : 0;
+    }
     private void publishRunEvent(String runId, String type, String phase, JsonNode payload) {
         Long eventId = jdbcTemplate.queryForObject("""
                 INSERT INTO review_run_events(run_id, event_type, phase, payload_json)

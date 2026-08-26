@@ -15,6 +15,7 @@ import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.core.DelegatingOAuth2TokenValidator;
 import org.springframework.security.oauth2.core.OAuth2TokenValidator;
+import org.springframework.security.oauth2.core.OAuth2TokenValidatorResult;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.jwt.JwtValidators;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
@@ -39,13 +40,19 @@ public class SecurityConfig {
     JwtDecoder jwtDecoder(
             @Value("${security.oidc.issuer-uri}") String issuer,
             @Value("${security.oidc.jwk-set-uri}") String jwkSetUri,
-            @Value("${security.oidc.audience:content-service}") String audience
+            @Value("${security.oidc.audience:content-service}") String audience,
+            @Value("${security.oidc.authorized-client-id:authoring-service}") String authorizedClientId
     ) {
         var decoder = org.springframework.security.oauth2.jwt.NimbusJwtDecoder.withJwkSetUri(jwkSetUri).build();
         OAuth2TokenValidator<Jwt> audienceValidator = new JwtClaimValidator<List<String>>("aud",
                 audiences -> audiences != null && audiences.contains(audience));
+        OAuth2TokenValidator<Jwt> clientValidator = token -> authorizedClientId.equals(token.getClaimAsString("azp"))
+                || authorizedClientId.equals(token.getClaimAsString("client_id"))
+                ? OAuth2TokenValidatorResult.success()
+                : OAuth2TokenValidatorResult.failure(new org.springframework.security.oauth2.core.OAuth2Error(
+                        "invalid_token", "Token is not authorized for the Authoring service client", null));
         decoder.setJwtValidator(new DelegatingOAuth2TokenValidator<>(
-                JwtValidators.createDefaultWithIssuer(issuer), audienceValidator));
+                JwtValidators.createDefaultWithIssuer(issuer), audienceValidator, clientValidator));
         return decoder;
     }
 

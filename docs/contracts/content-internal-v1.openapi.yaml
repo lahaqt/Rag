@@ -46,6 +46,20 @@ paths:
     post:
       summary: Hybrid search over READY materials in one course
       parameters: [{$ref: '#/components/parameters/courseId'}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: {type: string, maxLength: 4096}
+                topK: {type: integer, minimum: 1, maximum: 20, default: 6}
+                similarityThreshold: {type: number, minimum: 0, maximum: 1, default: 0}
+                retrievalMode: {type: string, enum: [hybrid, vector, lexical], default: hybrid}
+                queryExpansionEnabled: {type: boolean, default: true}
+                queryExpansionCount: {type: integer, minimum: 0, maximum: 5, default: 3}
       responses:
         '200':
           description: Course-isolated matches

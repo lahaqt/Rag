@@ -14,6 +14,8 @@ public final class AuthoringDtos {
     public enum ArtifactType { TECHNICAL_INTERPRETATION, SUPPLEMENTARY_MATERIAL, MULTIPLE_CHOICE_QUESTION }
     public enum ReviewStatus { COMPLETED, INSUFFICIENT_EVIDENCE, FAILED }
     public enum ReviewRunStatus { QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED }
+    public enum CourseRelationType { PREREQUISITE, COREQUISITE, EQUIVALENT, PROGRAM, DEPARTMENT, INSTITUTION }
+    public enum EvidenceAuthority { AUTHORITATIVE, SUPPLEMENTAL }
 
     public record CourseSummary(String id, String code, String name, String description, boolean published,
                                 int materialCount, int outcomeCount) {
@@ -26,8 +28,10 @@ public final class AuthoringDtos {
 
     /** Student-safe course view. Internal knowledge-base identifiers never leave the authoring boundary. */
     public record StudentCourseDetails(String id, String code, String name, String description, boolean published,
-                                       List<LearningOutcome> outcomes, List<CourseMaterial> materials) {
+                                       List<LearningOutcome> outcomes, List<StudentCourseMaterial> materials) {
     }
+
+    public record StudentCourseMaterial(String fileName, String status, int chunkCount, Instant uploadedAt) { }
 
     public record LearningOutcome(String id, String code, String description, int displayOrder, boolean active) {
     }
@@ -50,6 +54,15 @@ public final class AuthoringDtos {
     }
 
     public record CourseMcpBindingRequest(String serverId, List<String> allowedToolNames, Boolean enabled) {
+    }
+
+    public record CourseRetrievalRelation(String anchorCourseId, String relatedCourseId, String relatedCourseCode,
+                                          String relatedCourseName, CourseRelationType relationType,
+                                          double scopeWeight, boolean enabled) {
+    }
+
+    public record CourseRetrievalRelationRequest(String relatedCourseId, CourseRelationType relationType,
+                                                 Double scopeWeight, Boolean enabled) {
     }
 
     public record Project(String id, String courseId, String title, String description, List<String> learningOutcomeIds,
@@ -80,8 +93,9 @@ public final class AuthoringDtos {
                                   List<String> reflectiveQuestions, List<String> revisionStrategies) {
     }
 
-    public record CourseEvidence(int index, String documentName, String materialId, String chunkId, int chunkIndex,
-                                 double score, String excerpt) {
+    /** Student-safe citation. Internal material, chunk, and course identifiers remain in retrieval checkpoints only. */
+    public record CourseEvidence(int index, String documentName, double score, String excerpt,
+                                 String sourceCourseCode, EvidenceAuthority authority) {
     }
 
     public record AuthoringToolObservation(String serverId, String toolName, boolean success, String content) {

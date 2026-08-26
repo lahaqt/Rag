@@ -78,7 +78,8 @@ public class CourseContentController {
                 .map(CourseMaterial::getId)
                 .collect(java.util.stream.Collectors.toUnmodifiableSet());
         List<SearchMatch> matches = search.search(courseId, body.query(), body.normalizedTopK(),
-                        body.normalizedThreshold(), "hybrid", true, 3).stream()
+                        body.normalizedThreshold(), body.normalizedMode(), body.expansionEnabled(),
+                        body.normalizedExpansionCount()).stream()
                 .filter(value -> readyMaterials.contains(value.materialId()))
                 .map(value -> match(courseId, value)).toList();
         return new SearchResponse(matches);
@@ -99,9 +100,19 @@ public class CourseContentController {
     public record CourseSpaceResponse(String courseId, String status) { }
     public record MaterialResponse(String id, String fileName, String contentType, long size, String status,
                                    int chunkCount, String errorMessage, Instant uploadedAt, Instant parsedAt) { }
-    public record SearchRequest(@NotBlank @Size(max = 4096) String query, Integer topK, Double similarityThreshold) {
+    public record SearchRequest(@NotBlank @Size(max = 4096) String query, Integer topK, Double similarityThreshold,
+                                String retrievalMode, Boolean queryExpansionEnabled, Integer queryExpansionCount) {
         int normalizedTopK() { return topK == null ? 6 : Math.max(1, Math.min(topK, 20)); }
         double normalizedThreshold() { return similarityThreshold == null ? 0.0 : similarityThreshold; }
+        String normalizedMode() {
+            if (retrievalMode == null || retrievalMode.isBlank()) return "hybrid";
+            String mode = retrievalMode.trim().toLowerCase(java.util.Locale.ROOT);
+            return switch (mode) { case "hybrid", "vector", "lexical" -> mode; default -> "hybrid"; };
+        }
+        boolean expansionEnabled() { return queryExpansionEnabled == null || queryExpansionEnabled; }
+        int normalizedExpansionCount() {
+            return queryExpansionCount == null ? 3 : Math.max(0, Math.min(queryExpansionCount, 5));
+        }
     }
     public record SearchMatch(String courseId, String materialId, String chunkId, int chunkIndex, String documentName,
                               String content, double score) { }

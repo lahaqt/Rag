@@ -38,7 +38,8 @@ public class HttpStorageRetrievalClient implements StorageRetrievalClient {
         return restClient.post()
                 .uri("/internal/v1/courses/{courseId}/search", request.courseId())
                 .contentType(MediaType.APPLICATION_JSON)
-                .body(new SearchBody(request.query(), request.topK(), request.similarityThreshold()))
+                .body(new SearchBody(request.query(), request.topK(), request.similarityThreshold(),
+                        request.retrievalMode(), request.queryExpansionEnabled(), request.queryExpansionCount()))
                 .retrieve()
                 .body(VectorSearchResponse.class);
     }
@@ -52,5 +53,6 @@ public class HttpStorageRetrievalClient implements StorageRetrievalClient {
         return factory;
     }
 
-    private record SearchBody(String query, Integer topK, Double similarityThreshold) { }
+    private record SearchBody(String query, Integer topK, Double similarityThreshold, String retrievalMode,
+                              Boolean queryExpansionEnabled, Integer queryExpansionCount) { }
 }

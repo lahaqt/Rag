@@ -68,6 +68,24 @@ public class AdminCourseController {
         return value;
     }
 
+    @GetMapping("/{courseId}/retrieval-relations")
+    public List<CourseRetrievalRelation> retrievalRelations(HttpServletRequest request, @PathVariable String courseId) {
+        RequestIdentity.requireAdmin(request);
+        return service.listRetrievalRelations(courseId);
+    }
+
+    @PutMapping("/{courseId}/retrieval-relations")
+    public List<CourseRetrievalRelation> replaceRetrievalRelations(
+            HttpServletRequest request,
+            @PathVariable String courseId,
+            @RequestBody List<CourseRetrievalRelationRequest> body
+    ) {
+        String admin = RequestIdentity.requireAdmin(request);
+        List<CourseRetrievalRelation> value = service.replaceRetrievalRelations(courseId, body);
+        audit.record(admin, "COURSE_RETRIEVAL_RELATIONS_UPDATED", "COURSE", courseId, "SUCCESS");
+        return value;
+    }
+
     @GetMapping("/{courseId}/materials")
     public List<CourseMaterial> materials(HttpServletRequest request, @PathVariable String courseId) { RequestIdentity.requireAdmin(request); return service.listMaterials(courseId); }
 
