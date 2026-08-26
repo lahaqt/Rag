@@ -1,7 +1,7 @@
 [project]
-name = "rag-evaluation-service"
+name = "authoring-evaluation-service"
 version = "0.1.0"
-description = "Standalone RAGAS evaluation module for the Rag workspace."
+description = "Black-box and offline evaluation for Engineering Authoring Coach reviews."
 requires-python = ">=3.10"
 dependencies = [
     "fastapi>=0.115.0",
@@ -23,7 +23,7 @@ test = [
 ]
 
 [project.scripts]
-rag-eval = "evaluation_service.cli:main"
+authoring-eval = "evaluation_service.cli:main"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

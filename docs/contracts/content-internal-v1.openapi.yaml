@@ -1,0 +1,72 @@
+openapi: 3.0.3
+info:
+  title: Engineering Authoring Coach Content Internal API
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:28081
+security:
+  - serviceBearer: []
+paths:
+  /internal/v1/courses/{courseId}:
+    put:
+      summary: Idempotently provision a course content space
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Ready course space}}
+  /internal/v1/courses/{courseId}/materials:
+    get:
+      summary: List course materials and lifecycle states
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Materials}}
+    post:
+      summary: Idempotently upload and queue a material
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'202': {description: Accepted material}}
+  /internal/v1/courses/{courseId}/materials/{materialId}/reindex:
+    post:
+      summary: Queue explicit reindex
+      parameters:
+        - {$ref: '#/components/parameters/courseId'}
+        - {$ref: '#/components/parameters/materialId'}
+      responses: {'202': {description: Accepted}}
+  /internal/v1/courses/{courseId}/materials/{materialId}/reparse:
+    post:
+      summary: Explicitly retry a failed material from its retained source file
+      parameters:
+        - {$ref: '#/components/parameters/courseId'}
+        - {$ref: '#/components/parameters/materialId'}
+      responses: {'200': {description: Queued material}}
+  /internal/v1/courses/{courseId}/materials/{materialId}:
+    delete:
+      summary: Mark a material deleted and exclude it from retrieval
+      parameters:
+        - {$ref: '#/components/parameters/courseId'}
+        - {$ref: '#/components/parameters/materialId'}
+      responses: {'204': {description: Deleted}}
+  /internal/v1/courses/{courseId}/search:
+    post:
+      summary: Hybrid search over READY materials in one course
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses:
+        '200':
+          description: Course-isolated matches
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  matches:
+                    type: array
+                    items:
+                      type: object
+                      required: [courseId, materialId, content, score]
+                      properties:
+                        courseId: {type: string, format: uuid}
+                        materialId: {type: string, format: uuid}
+                        content: {type: string}
+                        score: {type: number, format: double}
+components:
+  securitySchemes:
+    serviceBearer: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    courseId: {in: path, name: courseId, required: true, schema: {type: string, format: uuid}}
+    materialId: {in: path, name: materialId, required: true, schema: {type: string, format: uuid}}

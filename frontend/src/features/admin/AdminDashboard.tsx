@@ -1,0 +1,52 @@
+import type { FormEvent } from 'react'
+import type { AdminReviewRun, AuditEvent, Course, CourseDetail, CourseForm, McpForm, McpServer, ModelForm, ModelProfile, OutcomeForm } from '../coach/CoachWorkspace'
+
+type AdminPage = 'dashboard' | 'courses' | 'models' | 'mcp' | 'reviews' | 'audit'
+type AdminContentProps = {
+  page: AdminPage; courses: Course[]; selected: CourseDetail | null
+  courseForm: CourseForm; setCourseForm: (value: CourseForm) => void
+  outcomeForm: OutcomeForm; setOutcomeForm: (value: OutcomeForm) => void
+  onCreateCourse: (event: FormEvent) => void; onSelectCourse: (id: string) => void
+  onAddOutcome: (event: FormEvent) => void; onUpload: (file?: File) => void
+  models: ModelProfile[]; modelForm: ModelForm; setModelForm: (value: ModelForm) => void
+  onCreateModel: (event: FormEvent) => void; onActivateModel: (model: ModelProfile) => void
+  servers: McpServer[]; mcpForm: McpForm; setMcpForm: (value: McpForm) => void
+  onCreateMcp: (event: FormEvent) => void; runs: AdminReviewRun[]; trace: string
+  onTrace: (reviewId: string) => void; auditEvents: AuditEvent[]
+}
+
+export function AdminContent(props: AdminContentProps) {
+  if (props.page === 'courses') return <CoursesPage {...props} />
+  if (props.page === 'models') return <ModelsPage {...props} />
+  if (props.page === 'mcp') return <McpPage {...props} />
+  if (props.page === 'reviews') return <ReviewOperationsPage {...props} />
+  if (props.page === 'audit') return <AuditPage events={props.auditEvents} />
+  return <Dashboard courses={props.courses} models={props.models} servers={props.servers} />
+}
+
+function Dashboard({ courses, models, servers }: Pick<AdminContentProps, 'courses' | 'models' | 'servers'>) {
+  return <section className="page-section"><p className="section-kicker">Overview</p><h2>Administration dashboard</h2><div className="metric-grid"><article><span>Published courses</span><strong>{courses.filter(course => course.published).length}</strong></article><article><span>Active model</span><strong>{models.find(model => model.active)?.name ?? 'Environment default'}</strong></article><article><span>Online MCP servers</span><strong>{servers.filter(server => server.status === 'online').length}</strong></article></div><div className="split-panels"><div><h3>Course content health</h3><p className="muted">Manage each course's materials and indexing lifecycle from Courses.</p></div><div><h3>Security posture</h3><p className="muted">Runtime API keys and MCP secrets are encrypted server-side and never displayed in this console.</p></div></div></section>
+}
+
+function CoursesPage(props: AdminContentProps) {
+  const { courses, selected, courseForm: form, setCourseForm: setForm, outcomeForm: outcome, setOutcomeForm: setOutcome, onCreateCourse, onSelectCourse, onAddOutcome, onUpload } = props
+  return <div className="admin-grid"><section className="page-section"><h2>Create course</h2><form className="form-grid" onSubmit={onCreateCourse}><label>Course code<input required value={form.code} onChange={event => setForm({ ...form, code: event.target.value })} placeholder="ENGR-210" /></label><label>Course name<input required value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="Engineering mechanics" /></label><label className="full">Description<textarea value={form.description} onChange={event => setForm({ ...form, description: event.target.value })} /></label><label className="check-row full"><input type="checkbox" checked={form.published} onChange={event => setForm({ ...form, published: event.target.checked })} /> Publish for students</label><button className="primary-button full">Create course</button></form><h3 className="subheading">Courses</h3><div className="project-list">{courses.map(course => <button key={course.id} className={course.id === selected?.id ? 'project-card selected' : 'project-card'} onClick={() => onSelectCourse(course.id)}><strong>{course.code} · {course.name}</strong><span>{course.published ? 'Published' : 'Draft'} · {course.materialCount} materials</span></button>)}</div></section><section className="page-section">{!selected ? <div className="empty-inline">Select a course to manage learning outcomes and materials.</div> : <><p className="section-kicker">{selected.code}</p><h2>{selected.name}</h2><div className="admin-split"><div><h3>Learning outcomes</h3>{selected.outcomes.map(item => <p className="outcome-item" key={item.id}><b>{item.code}</b>{item.description}</p>)}<form className="compact-form" onSubmit={onAddOutcome}><input required value={outcome.code} onChange={event => setOutcome({ ...outcome, code: event.target.value })} placeholder="LO-1" /><input required value={outcome.description} onChange={event => setOutcome({ ...outcome, description: event.target.value })} placeholder="Outcome description" /><button className="secondary-button">Add outcome</button></form></div><div><h3>Course materials</h3><label className="upload-zone">Upload course material<input type="file" onChange={event => onUpload(event.target.files?.[0])} /></label>{selected.materials.map(material => <div className="material-row" key={material.id}><div><strong>{material.fileName}</strong><span>{material.chunkCount} chunks</span></div><span className="status-badge">{material.status}</span></div>)}</div></div></>}</section></div>
+}
+
+function ModelsPage(props: AdminContentProps) {
+  const { models, modelForm: form, setModelForm: setForm, onCreateModel, onActivateModel } = props
+  return <div className="admin-grid"><section className="page-section"><h2>New model profile</h2><form className="form-grid" onSubmit={onCreateModel}><label>Name<input required value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label><label>Protocol<select value={form.protocol} onChange={event => setForm({ ...form, protocol: event.target.value })}><option>OPENAI_COMPATIBLE</option><option>ANTHROPIC_COMPATIBLE</option></select></label><label className="full">Base URL<input required type="url" value={form.baseUrl} onChange={event => setForm({ ...form, baseUrl: event.target.value })} placeholder="https://api.example.com/v1" /></label><label>Model<input required value={form.model} onChange={event => setForm({ ...form, model: event.target.value })} /></label><label>API key<input required type="password" autoComplete="off" value={form.apiKey} onChange={event => setForm({ ...form, apiKey: event.target.value })} /></label><label>Temperature<input type="number" min="0" max="1.5" step="0.1" value={form.temperature} onChange={event => setForm({ ...form, temperature: Number(event.target.value) })} /></label><label>Max tokens<input type="number" min="128" max="8000" value={form.maxTokens} onChange={event => setForm({ ...form, maxTokens: Number(event.target.value) })} /></label><button className="primary-button full">Save profile</button></form></section><section className="page-section"><h2>Configured models</h2>{models.map(model => <article className="model-card" key={model.id}><div><strong>{model.name}</strong><span>{model.model} · {model.protocol}</span><small>{model.apiKeyHint}</small></div>{model.active ? <span className="status-badge">Active</span> : <button className="secondary-button" onClick={() => onActivateModel(model)}>Activate</button>}</article>)}{models.length === 0 && <p className="muted">The environment model remains active until a runtime profile is configured.</p>}</section></div>
+}
+
+function McpPage(props: AdminContentProps) {
+  const { servers, mcpForm: form, setMcpForm: setForm, onCreateMcp } = props
+  return <div className="admin-grid"><section className="page-section"><h2>Connect an MCP server</h2><p className="muted">Only approved runtime HTTP hosts can be registered. Secrets are never returned to the browser.</p><form className="form-grid" onSubmit={onCreateMcp}><label>Display name<input required value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></label><label>Streamable HTTP endpoint<input required type="url" value={form.endpoint} onChange={event => setForm({ ...form, endpoint: event.target.value })} placeholder="https://mcp.example.com/mcp" /></label><button className="primary-button full">Validate and connect</button></form></section><section className="page-section"><h2>Registered MCP servers</h2>{servers.map(server => <article className="model-card" key={server.id}><div><strong>{server.name}</strong><span>{server.transport} · {server.tools.length} tools</span><small>{server.endpoint || server.command}</small></div><span className={server.status === 'online' ? 'status-badge success' : 'status-badge'}>{server.status}</span></article>)}{servers.length === 0 && <p className="muted">No MCP servers are connected.</p>}</section></div>
+}
+
+function ReviewOperationsPage({ runs, trace, onTrace }: Pick<AdminContentProps, 'runs' | 'trace' | 'onTrace'>) {
+  return <div className="admin-grid"><section className="page-section"><p className="section-kicker">Review operations</p><h2>Asynchronous review runs</h2>{runs.length === 0 ? <p className="muted">No review runs have been created.</p> : runs.map(run => <article className="model-card" key={run.id}><div><strong>{run.status} · {run.currentPhase.replaceAll('_', ' ')}</strong><span>{run.id}</span><small>Attempt {run.attemptCount} · Updated {new Date(run.updatedAt).toLocaleString()}</small>{run.failureReason && <small>{run.failureReason}</small>}</div>{run.reviewId && <button className="secondary-button" onClick={() => onTrace(run.reviewId)}>Inspect trace</button>}</article>)}</section><section className="page-section"><h2>Selected review trace</h2>{trace ? <pre className="trace-output">{trace}</pre> : <p className="muted">Select a completed review to inspect its persisted phases. Secrets and student drafts are excluded from operational summaries.</p>}</section></div>
+}
+
+function AuditPage({ events }: { events: AuditEvent[] }) {
+  return <section className="page-section"><p className="section-kicker">Audit</p><h2>Administrative activity</h2><p className="muted">Operational changes are recorded without request secrets.</p>{events.length === 0 ? <p className="empty-inline">No administrative changes have been recorded.</p> : events.map(event => <article className="model-card" key={event.id}><div><strong>{event.action}</strong><span>{event.targetType} · {event.targetId}</span><small>{event.adminUserId} · {new Date(event.createdAt).toLocaleString()}</small></div><span className="status-badge">{event.result}</span></article>)}</section>
+}

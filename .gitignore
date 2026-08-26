@@ -17,8 +17,8 @@ dist/
 dist-ssr/
 
 # Local runtime data
-knowledge-service/data/
-knowledge-service/tmp/
+content-service/data/
+content-service/tmp/
 *.pid
 evaluation-service/.venv/
 evaluation-service/runs/
@@ -52,24 +52,23 @@ Thumbs.db
 *.md
 !README.md
 !MODULES.md
-!agent-service/README.md
-!query-analysis-service/README.md
-!knowledge-service/README.md
+!authoring-service/README.md
+!content-service/README.md
 !frontend/README.md
 !evaluation-service/README.md
 docs/
 !docs/
 !docs/contracts/
 !docs/contracts/README.md
+!docs/contracts/*.openapi.yaml
 !docs/architecture.md
 documents/
-knowledge-service/docs/
+content-service/docs/
 test/
 tests/
-!agent-service/src/test/
-!agent-service/src/test/resources/
-!agent-service/src/test/resources/application.yml
-agent-service/src/test/java/
+!authoring-service/src/test/
+!content-service/src/test/
+!evaluation-service/tests/
 /.playwright-mcp
 rag-home.png
 /.claude
@@ -77,6 +76,4 @@ rag-home.png
 .worktrees/
 /.superpowers
 /.codex-run
-evaluation-service/datasets/sample_rag_eval.jsonl
-evaluation-service/datasets/documents_generated_eval.jsonl
 /!

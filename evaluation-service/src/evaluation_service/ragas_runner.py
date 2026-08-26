@@ -5,27 +5,11 @@ from typing import Any
 
 import httpx
 
-from .schemas import AuthoringCaseResult, EvalCaseResult
+from .schemas import AuthoringCaseResult
 
 
 class RagasUnavailableError(RuntimeError):
     pass
-
-
-def evaluate_with_ragas(results: list[EvalCaseResult]) -> dict[str, Any]:
-    rows = []
-    for result in results:
-        if result.error:
-            continue
-        rows.append(
-            {
-                "user_input": result.case.question,
-                "response": result.output.answer,
-                "retrieved_contexts": [context.content for context in result.output.contexts if context.content],
-                "reference": result.case.reference or "",
-            }
-        )
-    return _evaluate_rows(rows)
 
 
 def evaluate_authoring_with_ragas(results: list[AuthoringCaseResult]) -> dict[str, Any]:

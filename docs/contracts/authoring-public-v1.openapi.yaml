@@ -1,0 +1,286 @@
+openapi: 3.0.3
+info:
+  title: Engineering Authoring Coach API
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:28083
+security:
+  - bearerAuth: []
+paths:
+  /api/v1/session:
+    get:
+      summary: Read the authenticated subject and mapped roles
+      responses: {'200': {description: Session identity}}
+  /api/v1/courses:
+    get:
+      summary: List published courses
+      responses: {'200': {description: Courses}}
+  /api/v1/courses/{courseId}:
+    get:
+      summary: Read a published course without internal content identifiers
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Student course details}}
+  /api/v1/projects:
+    get:
+      summary: List projects owned by the JWT subject
+      responses: {'200': {description: Projects}}
+    post:
+      summary: Create a course-scoped project
+      responses: {'200': {description: Project}}
+  /api/v1/projects/{projectId}:
+    get:
+      summary: Read a project owned by the JWT subject
+      parameters: [{$ref: '#/components/parameters/projectId'}]
+      responses: {'200': {description: Project}, '404': {description: Not found or not owned}}
+    patch:
+      summary: Update a project owned by the JWT subject
+      parameters: [{$ref: '#/components/parameters/projectId'}]
+      responses: {'200': {description: Updated project}, '404': {description: Not found or not owned}}
+  /api/v1/projects/{projectId}/artifacts:
+    get:
+      summary: List structured artifacts in an owned project
+      parameters: [{$ref: '#/components/parameters/projectId'}]
+      responses: {'200': {description: Artifacts}}
+    post:
+      summary: Create a structured artifact in an owned project
+      parameters: [{$ref: '#/components/parameters/projectId'}]
+      responses: {'200': {description: Artifact}}
+  /api/v1/projects/{projectId}/overview:
+    get:
+      summary: Read project progress and report metrics
+      parameters: [{$ref: '#/components/parameters/projectId'}]
+      responses: {'200': {description: Project overview}}
+  /api/v1/artifacts/{artifactId}:
+    get:
+      summary: Read an owned artifact
+      parameters: [{$ref: '#/components/parameters/artifactId'}]
+      responses: {'200': {description: Artifact}}
+  /api/v1/artifacts/{artifactId}/draft:
+    patch:
+      summary: Optimistically save a structured draft
+      parameters:
+        - {$ref: '#/components/parameters/artifactId'}
+      responses:
+        '200': {description: Saved artifact}
+        '409': {description: Draft version conflict}
+  /api/v1/artifacts/{artifactId}/revisions:
+    get:
+      summary: List immutable revisions for an owned artifact
+      parameters:
+        - {$ref: '#/components/parameters/artifactId'}
+      responses: {'200': {description: Revisions}}
+    post:
+      summary: Freeze an immutable revision
+      parameters:
+        - {$ref: '#/components/parameters/artifactId'}
+      responses: {'200': {description: Revision}}
+  /api/v1/artifacts/{artifactId}/compare:
+    get:
+      summary: Compare two immutable revisions
+      parameters:
+        - {$ref: '#/components/parameters/artifactId'}
+        - {in: query, name: from, required: true, schema: {type: string, format: uuid}}
+        - {in: query, name: to, required: true, schema: {type: string, format: uuid}}
+      responses: {'200': {description: Revision comparison}}
+  /api/v1/revisions/{revisionId}/reviews:
+    get:
+      summary: List evidence-grounded reviews for an owned revision
+      parameters: [{$ref: '#/components/parameters/revisionId'}]
+      responses: {'200': {description: Reviews}}
+  /api/v1/revisions/{revisionId}/review-runs:
+    post:
+      summary: Queue an asynchronous evidence-grounded review
+      parameters:
+        - {$ref: '#/components/parameters/revisionId'}
+        - {in: header, name: Idempotency-Key, schema: {type: string}}
+      responses:
+        '202':
+          description: Queued or existing idempotent run
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewRun'}
+  /api/v1/review-runs/{runId}:
+    get:
+      summary: Read run status and terminal result
+      parameters:
+        - {$ref: '#/components/parameters/runId'}
+      responses:
+        '200':
+          description: Review run
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/ReviewRun'}
+  /api/v1/review-runs/{runId}/events:
+    get:
+      summary: Subscribe to persisted review events
+      parameters:
+        - {$ref: '#/components/parameters/runId'}
+        - {in: header, name: Last-Event-ID, schema: {type: integer, format: int64}}
+      responses:
+        '200': {description: text/event-stream}
+  /api/v1/review-runs/{runId}/retry:
+    post:
+      summary: Retry a recoverable failed run
+      parameters:
+        - {$ref: '#/components/parameters/runId'}
+      responses: {'202': {description: Queued retry}}
+  /api/v1/reviews/{reviewId}/rating:
+    post:
+      summary: Rate formative feedback
+      parameters:
+        - {in: path, name: reviewId, required: true, schema: {type: string, format: uuid}}
+      responses: {'200': {description: Saved}}
+  /api/v1/admin/courses:
+    get:
+      summary: List courses for administration
+      responses: {'200': {description: Courses}, '403': {description: ADMIN role required}}
+    post:
+      summary: Create a course and queue content provisioning
+      responses: {'200': {description: Course in PROVISIONING state}, '403': {description: ADMIN role required}}
+  /api/v1/admin/courses/{courseId}/materials:
+    get:
+      summary: List course materials through the Authoring facade
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Materials}, '403': {description: ADMIN role required}}
+    post:
+      summary: Upload a course material through the Authoring facade
+      parameters:
+        - {$ref: '#/components/parameters/courseId'}
+        - {in: header, name: Idempotency-Key, schema: {type: string}}
+      responses: {'200': {description: Material}, '403': {description: ADMIN role required}}
+  /api/v1/admin/courses/{courseId}:
+    get:
+      summary: Read a course for administration
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Course details}}
+    patch:
+      summary: Update course publication and metadata
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Updated course}}
+  /api/v1/admin/courses/{courseId}/learning-outcomes:
+    get:
+      summary: List course learning outcomes
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Learning outcomes}}
+    put:
+      summary: Replace course learning outcomes
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: Learning outcomes}}
+  /api/v1/admin/courses/{courseId}/mcp-bindings:
+    get:
+      summary: List read-only MCP bindings for a course
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: MCP bindings}}
+    put:
+      summary: Replace bindings using discovered read-only tools
+      parameters: [{$ref: '#/components/parameters/courseId'}]
+      responses: {'200': {description: MCP bindings}}
+  /api/v1/admin/courses/{courseId}/materials/{materialId}/retry:
+    post:
+      summary: Explicitly retry parsing a failed material
+      parameters: [{$ref: '#/components/parameters/courseId'}, {$ref: '#/components/parameters/materialId'}]
+      responses: {'200': {description: Material}}
+  /api/v1/admin/courses/{courseId}/materials/{materialId}/reindex:
+    post:
+      summary: Explicitly queue material reindexing
+      parameters: [{$ref: '#/components/parameters/courseId'}, {$ref: '#/components/parameters/materialId'}]
+      responses: {'200': {description: Accepted}}
+  /api/v1/admin/courses/{courseId}/materials/{materialId}:
+    delete:
+      summary: Soft-delete a course material
+      parameters: [{$ref: '#/components/parameters/courseId'}, {$ref: '#/components/parameters/materialId'}]
+      responses: {'200': {description: Deleted}}
+  /api/v1/admin/models:
+    get:
+      summary: List model profiles with masked credentials
+      responses: {'200': {description: Model profiles}}
+    post:
+      summary: Create an encrypted model profile
+      responses: {'200': {description: Model profile with masked credential hint}}
+  /api/v1/admin/models/{modelId}:
+    patch:
+      summary: Update an encrypted model profile
+      parameters: [{$ref: '#/components/parameters/modelId'}]
+      responses: {'200': {description: Model profile with masked credential hint}}
+    delete:
+      summary: Delete an inactive model profile
+      parameters: [{$ref: '#/components/parameters/modelId'}]
+      responses: {'200': {description: Deleted}}
+  /api/v1/admin/models/{modelId}/test:
+    post:
+      summary: Test a model profile
+      parameters: [{$ref: '#/components/parameters/modelId'}]
+      responses: {'200': {description: Test result}}
+  /api/v1/admin/models/{modelId}/activate:
+    post:
+      summary: Activate a model profile for future review snapshots
+      parameters: [{$ref: '#/components/parameters/modelId'}]
+      responses: {'200': {description: Active model profile}}
+  /api/v1/admin/mcp/servers:
+    get:
+      summary: List read-only MCP servers with masked secrets
+      responses: {'200': {description: MCP servers}}
+    post:
+      summary: Register an allowlisted runtime MCP server
+      responses: {'200': {description: MCP server with masked environment values}}
+  /api/v1/admin/mcp/servers/{serverId}:
+    put:
+      summary: Update an MCP server without exposing secrets
+      parameters: [{$ref: '#/components/parameters/serverId'}]
+      responses: {'200': {description: MCP server}}
+    delete:
+      summary: Delete an MCP server
+      parameters: [{$ref: '#/components/parameters/serverId'}]
+      responses: {'204': {description: Deleted}}
+  /api/v1/admin/mcp/servers/{serverId}/test:
+    post:
+      summary: Validate and discover MCP tools
+      parameters: [{$ref: '#/components/parameters/serverId'}]
+      responses: {'200': {description: Refreshed MCP server}}
+  /api/v1/admin/mcp/servers/{serverId}/refresh:
+    post:
+      summary: Refresh MCP health and discovered tools
+      parameters: [{$ref: '#/components/parameters/serverId'}]
+      responses: {'200': {description: Refreshed MCP server}}
+  /api/v1/admin/health:
+    get:
+      summary: Read authoring and content dependency health
+      responses: {'200': {description: Health status}, '403': {description: ADMIN role required}}
+  /api/v1/admin/review-runs:
+    get:
+      summary: List recent asynchronous review operations
+      responses: {'200': {description: Review runs}, '403': {description: ADMIN role required}}
+  /api/v1/admin/reviews/{reviewId}/trace:
+    get:
+      summary: Inspect a persisted review trace
+      parameters:
+        - {in: path, name: reviewId, required: true, schema: {type: string}}
+      responses: {'200': {description: Review trace}, '403': {description: ADMIN role required}}
+  /api/v1/admin/audit-events:
+    get:
+      summary: List secret-free administrator audit events
+      responses: {'200': {description: Audit events}, '403': {description: ADMIN role required}}
+components:
+  securitySchemes:
+    bearerAuth: {type: http, scheme: bearer, bearerFormat: JWT}
+  parameters:
+    courseId: {in: path, name: courseId, required: true, schema: {type: string, format: uuid}}
+    projectId: {in: path, name: projectId, required: true, schema: {type: string, format: uuid}}
+    artifactId: {in: path, name: artifactId, required: true, schema: {type: string, format: uuid}}
+    revisionId: {in: path, name: revisionId, required: true, schema: {type: string, format: uuid}}
+    runId: {in: path, name: runId, required: true, schema: {type: string}}
+    materialId: {in: path, name: materialId, required: true, schema: {type: string, format: uuid}}
+    modelId: {in: path, name: modelId, required: true, schema: {type: string, format: uuid}}
+    serverId: {in: path, name: serverId, required: true, schema: {type: string}}
+  schemas:
+    ReviewRun:
+      type: object
+      required: [id, revisionId, status, currentPhase]
+      properties:
+        id: {type: string}
+        revisionId: {type: string, format: uuid}
+        status: {type: string, enum: [QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED]}
+        currentPhase: {type: string}
+        failureReason: {type: string}
+        recoverable: {type: boolean}
+        review: {type: object, nullable: true}

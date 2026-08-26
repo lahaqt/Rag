@@ -1,14 +1,8 @@
-# Service Contracts
+# API contracts
 
-These OpenAPI documents are the source of truth for synchronous calls made by
-`agent-service`. Providers must preserve the documented request and response
-shapes within a major version; consumers verify compatibility with HTTP client
-tests rather than sharing Java business DTOs.
+These OpenAPI files are the contract source for the refactored system:
 
-- `query-analysis-v1.openapi.yaml`: `agent-service -> query-analysis-service`.
-- `knowledge-retrieval-v1.openapi.yaml`: `agent-service -> knowledge-service`.
+- `authoring-public-v1.openapi.yaml`: browser-facing student and administrator APIs. OIDC access tokens identify owners by `sub`; administrator operations require `ADMIN`.
+- `content-internal-v1.openapi.yaml`: Authoring-to-Content client-credentials API. Every resource is scoped by `courseId` and the token must contain the Content audience.
 
-The query service owns semantic analysis (`intent`, `route`, rewritten and
-retrieval queries, and capability constraints). The agent service owns tool
-policy, execution, retries, and answer composition. A capability in the query
-response is declarative; it is not permission to bypass the agent's policy.
+The services do not publish compatibility endpoints for the former chat, query-analysis, or generic knowledge platform.

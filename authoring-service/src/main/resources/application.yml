@@ -1,0 +1,66 @@
+server:
+  port: 28083
+
+spring:
+  application:
+    name: authoring-service
+  datasource:
+    url: ${AUTHORING_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:25432/authoring}
+    username: ${AUTHORING_POSTGRES_USER:}
+    password: ${AUTHORING_POSTGRES_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      initialization-fail-timeout: -1
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+security:
+  oidc:
+    issuer-uri: ${AUTHORING_OIDC_ISSUER_URI:${OIDC_ISSUER_URI:http://127.0.0.1:28090/realms/authoring}}
+    jwk-set-uri: ${AUTHORING_OIDC_JWK_SET_URI:${OIDC_JWK_SET_URI:http://127.0.0.1:28090/realms/authoring/protocol/openid-connect/certs}}
+    audience: ${AUTHORING_OIDC_AUDIENCE:authoring-service}
+
+management:
+  tracing:
+    sampling:
+      probability: ${OTEL_TRACES_SAMPLER_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+
+authoring:
+  downstream:
+    content-base-url: ${CONTENT_SERVICE_BASE_URL:http://127.0.0.1:28081}
+    content-timeout-seconds: 20
+  service-client:
+    token-uri: ${AUTHORING_CONTENT_TOKEN_URI:${OIDC_TOKEN_URI:http://127.0.0.1:28090/realms/authoring/protocol/openid-connect/token}}
+    client-id: ${AUTHORING_CONTENT_CLIENT_ID:authoring-service}
+    client-secret: ${AUTHORING_CONTENT_CLIENT_SECRET:}
+    audience: ${CONTENT_OIDC_AUDIENCE:content-service}
+  review:
+    max-reflection-retries: 2
+    max-execution-seconds: 30
+    evidence-limit: 6
+    worker-delay-millis: 500
+  llm:
+    provider: ${AUTHORING_LLM_PROVIDER:openai-compatible}
+    model: ${AUTHORING_LLM_MODEL:}
+    api-key: ${AUTHORING_LLM_API_KEY:}
+    temperature: 0.2
+    max-tokens: 2400
+    openai-compatible:
+      base-url: ${AUTHORING_LLM_BASE_URL:}
+    anthropic-compatible:
+      base-url: ${AUTHORING_ANTHROPIC_BASE_URL:}
+  mcp:
+    enabled: true
+    timeout-seconds: 8
+    runtime-registration-enabled: false
+    runtime-allowed-http-hosts: ${AUTHORING_MCP_ALLOWED_HOSTS:}
+    direct-tool-call-enabled: false
+    servers: []
+  cors:
+    allowed-origins:
+      - http://127.0.0.1:5173
+      - http://localhost:5173

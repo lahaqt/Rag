@@ -17,17 +17,16 @@
     </parent>
 
     <groupId>com.example</groupId>
-    <artifactId>rag-platform</artifactId>
+    <artifactId>engineering-authoring-coach</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <packaging>pom</packaging>
 
-    <name>rag-platform</name>
-    <description>Build aggregator for independently deployable RAG platform services.</description>
+    <name>engineering-authoring-coach</name>
+    <description>Build aggregator for the Engineering Authoring Coach services.</description>
 
     <modules>
-        <module>knowledge-service</module>
-        <module>query-analysis-service</module>
-        <module>agent-service</module>
+        <module>content-service</module>
+        <module>authoring-service</module>
     </modules>
 
     <properties>

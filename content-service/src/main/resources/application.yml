@@ -1,0 +1,92 @@
+server:
+  port: 28081
+
+spring:
+  application:
+    name: content-service
+  datasource:
+    url: ${CONTENT_DATASOURCE_URL:jdbc:postgresql://127.0.0.1:25432/authoring_content}
+    username: ${CONTENT_POSTGRES_USER:}
+    password: ${CONTENT_POSTGRES_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+  data:
+    redis:
+      host: localhost
+      port: 26380
+      password: ${CONTENT_REDIS_PASSWORD:}
+  servlet:
+    multipart:
+      max-file-size: 20MB
+      max-request-size: 25MB
+
+security:
+  oidc:
+    issuer-uri: ${CONTENT_OIDC_ISSUER_URI:${OIDC_ISSUER_URI:http://127.0.0.1:28090/realms/authoring}}
+    jwk-set-uri: ${CONTENT_OIDC_JWK_SET_URI:${OIDC_JWK_SET_URI:http://127.0.0.1:28090/realms/authoring/protocol/openid-connect/certs}}
+    audience: ${CONTENT_OIDC_AUDIENCE:content-service}
+
+management:
+  tracing:
+    sampling:
+      probability: ${OTEL_TRACES_SAMPLER_PROBABILITY:1.0}
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:http://localhost:4318/v1/traces}
+
+content:
+  storage-dir: data/course-materials
+  chunk-size: 500
+  chunk-overlap: 50
+  chunking:
+    strategy: recursive
+    chunk-size: 500
+    chunk-overlap: 50
+    min-chunk-size: 120
+    separators:
+      - "\n\n"
+      - "\n"
+      - "\u3002"
+      - "\uff01"
+      - "\uff1f"
+      - ";"
+      - "\uff1b"
+      - "."
+      - ","
+      - "\uff0c"
+      - " "
+      - ""
+  metadata:
+    provider: postgres
+  object-storage:
+    provider: rustfs
+    endpoint: ${CONTENT_RUSTFS_ENDPOINT:http://127.0.0.1:29100}
+    access-key: ${CONTENT_RUSTFS_ACCESS_KEY:}
+    secret-key: ${CONTENT_RUSTFS_SECRET_KEY:}
+    bucket: authoring-course-materials
+  queue:
+    provider: redis
+    stream: course-material-indexing
+    consumer-group: content-indexers
+    consumer-name: content-service-1
+  vector:
+    embedding:
+      provider: siliconflow
+      base-url: https://api.siliconflow.cn/v1
+      api-key: ${SILICONFLOW_API_KEY:}
+      model: Qwen/Qwen3-Embedding-8B
+      dimensions: 1024
+    store:
+      provider: pgvector
+      collection: course_content_chunks
+      connection-url: jdbc:postgresql://localhost:25432/authoring_content
+  lexical:
+    provider: elasticsearch
+    endpoint: http://localhost:29200
+    username: ${ELASTICSEARCH_USERNAME:elastic}
+    password: ${ELASTICSEARCH_PASSWORD:${CONTENT_ELASTIC_PASSWORD:}}
+    index-name: course_content_lexical
+  cors:
+    allowed-origins:
+      - http://127.0.0.1:5173
+      - http://localhost:5173
+
