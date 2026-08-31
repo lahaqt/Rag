@@ -11,6 +11,8 @@ public record TieredEvidence(
         String content,
         double sourceScore,
         double fusedScore,
+        Double rerankerScore,
+        double rankingScore,
         RetrievalScopeTier scopeTier,
         EvidenceAuthority authority,
         List<String> contributingCourseIds

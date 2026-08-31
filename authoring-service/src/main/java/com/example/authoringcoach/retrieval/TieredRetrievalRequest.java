@@ -4,7 +4,7 @@ import java.util.Objects;
 
 public record TieredRetrievalRequest(
         RetrievalScopePlan scopePlan,
-        String query,
+        RetrievalQueryPlan queryPlan,
         int topKPerCourse,
         double similarityThreshold,
         String retrievalMode,
@@ -13,11 +13,8 @@ public record TieredRetrievalRequest(
 ) {
     public TieredRetrievalRequest {
         scopePlan = Objects.requireNonNull(scopePlan, "scopePlan");
-        query = Objects.requireNonNull(query, "query").trim();
+        queryPlan = Objects.requireNonNull(queryPlan, "queryPlan");
         retrievalMode = retrievalMode == null || retrievalMode.isBlank() ? "hybrid" : retrievalMode;
-        if (query.isEmpty()) {
-            throw new IllegalArgumentException("query must not be blank");
-        }
         if (topKPerCourse < 1) {
             throw new IllegalArgumentException("topKPerCourse must be positive");
         }
@@ -28,4 +25,13 @@ public record TieredRetrievalRequest(
             throw new IllegalArgumentException("queryExpansionCount must not be negative");
         }
     }
+
+    public TieredRetrievalRequest(RetrievalScopePlan scopePlan, String query, int topKPerCourse,
+                                  double similarityThreshold, String retrievalMode,
+                                  boolean queryExpansionEnabled, int queryExpansionCount) {
+        this(scopePlan, RetrievalQueryPlan.originalOnly(query), topKPerCourse, similarityThreshold,
+                retrievalMode, queryExpansionEnabled, queryExpansionCount);
+    }
+
+    public String query() { return queryPlan.originalQuery(); }
 }

@@ -43,6 +43,18 @@ authoring:
     max-execution-seconds: 30
     evidence-limit: 6
     worker-delay-millis: 500
+  retrieval:
+    llm-multi-query-enabled: ${AUTHORING_RETRIEVAL_MULTI_QUERY_ENABLED:true}
+    hyde-enabled: ${AUTHORING_RETRIEVAL_HYDE_ENABLED:true}
+    max-query-variants: ${AUTHORING_RETRIEVAL_MAX_QUERY_VARIANTS:3}
+    hyde-max-characters: ${AUTHORING_RETRIEVAL_HYDE_MAX_CHARACTERS:700}
+  reranker:
+    enabled: ${AUTHORING_RERANKER_ENABLED:false}
+    base-url: ${AUTHORING_RERANKER_BASE_URL:}
+    path: ${AUTHORING_RERANKER_PATH:/rerank}
+    model: ${AUTHORING_RERANKER_MODEL:}
+    bearer-token: ${AUTHORING_RERANKER_BEARER_TOKEN:}
+    timeout-seconds: ${AUTHORING_RERANKER_TIMEOUT_SECONDS:5}
   llm:
     provider: ${AUTHORING_LLM_PROVIDER:openai-compatible}
     model: ${AUTHORING_LLM_MODEL:}

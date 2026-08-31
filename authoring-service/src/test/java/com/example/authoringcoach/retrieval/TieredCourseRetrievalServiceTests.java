@@ -146,6 +146,65 @@ class TieredCourseRetrievalServiceTests {
         assertThat(result.sufficient()).isFalse();
     }
 
+    @Test
+    void searchesEveryPlannedQueryViewAndFusesRepeatedEvidence() {
+        RecordingGateway gateway = new RecordingGateway(Map.of("anchor", List.of(
+                match("anchor", "material", "shared", 0, "shared evidence", 0.9))));
+        RetrievalQueryPlan queryPlan = new RetrievalQueryPlan("beam", List.of(
+                new RetrievalQueryPlan.QueryVariant(RetrievalQueryPlan.QueryKind.ORIGINAL, "beam"),
+                new RetrievalQueryPlan.QueryVariant(RetrievalQueryPlan.QueryKind.MULTI_QUERY, "bending stress"),
+                new RetrievalQueryPlan.QueryVariant(RetrievalQueryPlan.QueryKind.HYDE, "neutral axis passage")));
+        TieredRetrievalRequest request = new TieredRetrievalRequest(
+                new RetrievalScopePlanner((courseId, query) -> List.of()).plan("anchor", "beam", 6, 1),
+                queryPlan, 6, 0.0, "hybrid", false, 0);
+
+        TieredRetrievalResult result = service(gateway).retrieve(request);
+
+        assertThat(gateway.requests).extracting(VectorSearchRequest::query)
+                .containsExactly("beam", "bending stress", "neutral axis passage");
+        assertThat(result.queryVariantCount()).isEqualTo(3);
+        assertThat(result.evidence()).singleElement()
+                .satisfies(evidence -> assertThat(evidence.fusedScore()).isGreaterThan(2.0 / 61.0));
+    }
+
+    @Test
+    void crossEncoderReranksCandidatePoolAndFailureFallsBackToRrf() {
+        RecordingGateway gateway = new RecordingGateway(Map.of("anchor", List.of(
+                match("anchor", "material", "first", 0, "generic beam evidence", 0.95),
+                match("anchor", "material", "second", 1, "specific torsional buckling evidence", 0.85))));
+        CrossEncoderReranker reranker = new CrossEncoderReranker() {
+            @Override public boolean enabled() { return true; }
+            @Override public List<RerankScore> rerank(String query, List<RerankDocument> documents) {
+                return List.of(new RerankScore(documents.get(0).id(), 0.1),
+                        new RerankScore(documents.get(1).id(), 0.95));
+            }
+        };
+
+        TieredRetrievalResult reranked = new TieredCourseRetrievalService(gateway, reranker, Runnable::run)
+                .retrieve(new TieredRetrievalRequest(
+                        new RetrievalScopePlanner((courseId, query) -> List.of()).plan("anchor", "buckling", 6, 1),
+                        "buckling", 6, 0.0, "hybrid", false, 0));
+
+        assertThat(reranked.rerankerApplied()).isTrue();
+        assertThat(reranked.evidence()).extracting(TieredEvidence::chunkId)
+                .startsWith("second");
+
+        CrossEncoderReranker failing = new CrossEncoderReranker() {
+            @Override public boolean enabled() { return true; }
+            @Override public List<RerankScore> rerank(String query, List<RerankDocument> documents) {
+                throw new IllegalStateException("reranker timeout");
+            }
+        };
+        TieredRetrievalResult fallback = new TieredCourseRetrievalService(gateway, failing, Runnable::run)
+                .retrieve(new TieredRetrievalRequest(
+                        new RetrievalScopePlanner((courseId, query) -> List.of()).plan("anchor", "buckling", 6, 1),
+                        "buckling", 6, 0.0, "hybrid", false, 0));
+
+        assertThat(fallback.rerankerApplied()).isFalse();
+        assertThat(fallback.rerankerFailure()).contains("reranker timeout");
+        assertThat(fallback.evidence()).extracting(TieredEvidence::chunkId).startsWith("first");
+    }
+
     private TieredCourseRetrievalService service(CourseSearchGateway gateway) {
         return new TieredCourseRetrievalService(gateway, Runnable::run);
     }

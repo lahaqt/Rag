@@ -4,6 +4,7 @@ import com.example.authoringcoach.dto.VectorSearchMatch;
 import com.example.authoringcoach.dto.VectorSearchRequest;
 import com.example.authoringcoach.dto.VectorSearchResponse;
 import com.example.authoringcoach.retrieval.TieredRetrievalResult.CourseSearchFailure;
+import com.example.authoringcoach.retrieval.CrossEncoderReranker.RerankDocument;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumMap;
@@ -25,14 +26,21 @@ public final class TieredCourseRetrievalService {
     private static final int RRF_RANK_CONSTANT = 60;
 
     private final CourseSearchGateway searchGateway;
+    private final CrossEncoderReranker reranker;
     private final Executor executor;
 
     public TieredCourseRetrievalService(CourseSearchGateway searchGateway) {
-        this(searchGateway, ForkJoinPool.commonPool());
+        this(searchGateway, CrossEncoderReranker.disabled(), ForkJoinPool.commonPool());
     }
 
     public TieredCourseRetrievalService(CourseSearchGateway searchGateway, Executor executor) {
+        this(searchGateway, CrossEncoderReranker.disabled(), executor);
+    }
+
+    public TieredCourseRetrievalService(CourseSearchGateway searchGateway,
+                                        CrossEncoderReranker reranker, Executor executor) {
         this.searchGateway = Objects.requireNonNull(searchGateway, "searchGateway");
+        this.reranker = Objects.requireNonNull(reranker, "reranker");
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 
@@ -62,14 +70,17 @@ public final class TieredCourseRetrievalService {
                     collected.addAll(outcome.matches());
                 }
             }
-            selected = selectEvidence(collected, request.scopePlan());
+            selected = selectEvidence(collected, request.scopePlan(), request.query(), false).evidence();
             if (isSufficient(selected, request.scopePlan())) {
                 break;
             }
         }
 
+        Selection finalSelection = selectEvidence(collected, request.scopePlan(), request.query(), true);
+        selected = finalSelection.evidence();
         return new TieredRetrievalResult(selected, searchedCourseIds, failures,
-                isSufficient(selected, request.scopePlan()));
+                isSufficient(selected, request.scopePlan()), finalSelection.rerankerApplied(),
+                finalSelection.rerankerFailure(), request.queryPlan().variants().size());
     }
 
     private boolean isSufficient(List<TieredEvidence> evidence, RetrievalScopePlan plan) {
@@ -86,21 +97,19 @@ public final class TieredCourseRetrievalService {
 
     private SearchOutcome searchCourse(RetrievalScope scope, TieredRetrievalRequest request) {
         try {
-            VectorSearchResponse response = searchGateway.search(new VectorSearchRequest(
-                    scope.courseId(), request.query(), request.topKPerCourse(), request.similarityThreshold(),
-                    request.retrievalMode(), request.queryExpansionEnabled(), request.queryExpansionCount()));
-            List<VectorSearchMatch> safeMatches = response == null ? List.of() : response.safeMatches();
             List<RankedMatch> matches = new ArrayList<>();
-            int rank = 0;
-            for (VectorSearchMatch match : safeMatches) {
-                if (match == null || !scope.courseId().equals(match.courseId())) {
-                    continue;
+            for (RetrievalQueryPlan.QueryVariant variant : request.queryPlan().variants()) {
+                VectorSearchResponse response = searchGateway.search(new VectorSearchRequest(
+                        scope.courseId(), variant.text(), request.topKPerCourse(), request.similarityThreshold(),
+                        request.retrievalMode(), request.queryExpansionEnabled(), request.queryExpansionCount()));
+                List<VectorSearchMatch> safeMatches = response == null ? List.of() : response.safeMatches();
+                int rank = 0;
+                for (VectorSearchMatch match : safeMatches) {
+                    if (match == null || !scope.courseId().equals(match.courseId())) continue;
+                    rank++;
+                    if (rank > request.topKPerCourse()) break;
+                    matches.add(new RankedMatch(scope, match, rank, variant.kind()));
                 }
-                rank++;
-                if (rank > request.topKPerCourse()) {
-                    break;
-                }
-                matches.add(new RankedMatch(scope, match, rank));
             }
             return new SearchOutcome(scope, matches, null, null);
         } catch (RuntimeException exception) {
@@ -118,7 +127,8 @@ public final class TieredCourseRetrievalService {
         return grouped;
     }
 
-    private List<TieredEvidence> selectEvidence(List<RankedMatch> rankedMatches, RetrievalScopePlan plan) {
+    private Selection selectEvidence(List<RankedMatch> rankedMatches, RetrievalScopePlan plan,
+                                     String query, boolean applyReranker) {
         Map<String, EvidenceAccumulator> accumulators = new LinkedHashMap<>();
         for (RankedMatch ranked : rankedMatches) {
             String key = deduplicationKey(ranked.match());
@@ -129,16 +139,49 @@ public final class TieredCourseRetrievalService {
                     .add(ranked, contribution);
         }
 
-        List<EvidenceAccumulator> ordered = new ArrayList<>(accumulators.values());
-        ordered.sort(Comparator.comparingDouble(EvidenceAccumulator::fusedScore).reversed()
-                .thenComparing((EvidenceAccumulator accumulator) -> accumulator.representative().scope().authority())
-                .thenComparing(accumulator -> accumulator.representative().match().courseId())
-                .thenComparing(accumulator -> accumulator.representative().match().chunkId(),
-                        Comparator.nullsLast(String::compareTo)));
+        List<Candidate> ordered = accumulators.entrySet().stream()
+                .map(entry -> new Candidate(entry.getKey(), entry.getValue(), null, entry.getValue().fusedScore()))
+                .sorted(Comparator.comparingDouble(Candidate::rankingScore).reversed()
+                        .thenComparing((Candidate candidate) -> candidate.accumulator().representative().scope().authority())
+                        .thenComparing(candidate -> candidate.accumulator().representative().match().courseId())
+                        .thenComparing(candidate -> candidate.accumulator().representative().match().chunkId(),
+                                Comparator.nullsLast(String::compareTo)))
+                .toList();
+
+        boolean rerankerApplied = false;
+        String rerankerFailure = "";
+        if (applyReranker && reranker.enabled() && !ordered.isEmpty()) {
+            int poolSize = Math.min(ordered.size(), Math.max(plan.maximumResults(), plan.maximumResults() * 4));
+            List<Candidate> pool = ordered.subList(0, poolSize);
+            try {
+                Map<String, Double> scores = new LinkedHashMap<>();
+                reranker.rerank(query, pool.stream().map(candidate -> new RerankDocument(
+                                candidate.key(), candidate.accumulator().representative().match().content())).toList())
+                        .forEach(score -> scores.put(score.id(), score.relevanceScore()));
+                if (!scores.isEmpty()) {
+                    rerankerApplied = true;
+                    double maxRrf = ordered.stream().mapToDouble(item -> item.accumulator().fusedScore()).max().orElse(1.0);
+                    List<Candidate> rescored = new ArrayList<>();
+                    for (Candidate candidate : ordered) {
+                        Double crossScore = scores.get(candidate.key());
+                        double normalizedRrf = maxRrf <= 0.0 ? 0.0 : candidate.accumulator().fusedScore() / maxRrf;
+                        double rankingScore = crossScore == null ? 0.35 * normalizedRrf
+                                : 0.35 * normalizedRrf + 0.65 * clamp(crossScore) * policyWeight(candidate.accumulator());
+                        rescored.add(new Candidate(candidate.key(), candidate.accumulator(), crossScore, rankingScore));
+                    }
+                    ordered = rescored.stream().sorted(Comparator.comparingDouble(Candidate::rankingScore).reversed()
+                            .thenComparing(candidate -> candidate.accumulator().representative().scope().authority())
+                            .thenComparing(Candidate::key)).toList();
+                }
+            } catch (RuntimeException exception) {
+                rerankerFailure = safeReason(exception);
+            }
+        }
 
         Map<RetrievalScopeTier, Integer> tierCounts = new EnumMap<>(RetrievalScopeTier.class);
         List<TieredEvidence> result = new ArrayList<>();
-        for (EvidenceAccumulator accumulator : ordered) {
+        for (Candidate candidate : ordered) {
+            EvidenceAccumulator accumulator = candidate.accumulator();
             RankedMatch representative = accumulator.representative();
             RetrievalScopeTier tier = representative.scope().tier();
             int used = tierCounts.getOrDefault(tier, 0);
@@ -148,14 +191,27 @@ public final class TieredCourseRetrievalService {
             }
             VectorSearchMatch match = representative.match();
             result.add(new TieredEvidence(match.courseId(), match.materialId(), match.chunkId(), match.chunkIndex(),
-                    match.documentName(), match.content(), match.score(), accumulator.fusedScore(), tier,
+                    match.documentName(), match.content(), match.score(), accumulator.fusedScore(),
+                    candidate.rerankerScore(), candidate.rankingScore(), tier,
                     representative.scope().authority(), List.copyOf(accumulator.contributingCourseIds())));
             tierCounts.put(tier, used + 1);
             if (result.size() >= plan.maximumResults()) {
                 break;
             }
         }
-        return List.copyOf(result);
+        return new Selection(List.copyOf(result), rerankerApplied, rerankerFailure);
+    }
+
+    private double policyWeight(EvidenceAccumulator accumulator) {
+        RetrievalScope scope = accumulator.representative().scope();
+        return scope.authority().rankingWeight() * scope.rankingWeight();
+    }
+
+    private double clamp(double value) { return Math.max(0.0, Math.min(1.0, value)); }
+
+    private String safeReason(RuntimeException exception) {
+        String value = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
+        return value.length() <= 240 ? value : value.substring(0, 240);
     }
 
     private String deduplicationKey(VectorSearchMatch match) {
@@ -170,8 +226,14 @@ public final class TieredCourseRetrievalService {
         return value == null ? "" : value;
     }
 
-    private record RankedMatch(RetrievalScope scope, VectorSearchMatch match, int rank) {
+    private record RankedMatch(RetrievalScope scope, VectorSearchMatch match, int rank,
+                               RetrievalQueryPlan.QueryKind queryKind) {
     }
+
+    private record Candidate(String key, EvidenceAccumulator accumulator, Double rerankerScore,
+                             double rankingScore) { }
+
+    private record Selection(List<TieredEvidence> evidence, boolean rerankerApplied, String rerankerFailure) { }
 
     private record SearchOutcome(
             RetrievalScope scope,

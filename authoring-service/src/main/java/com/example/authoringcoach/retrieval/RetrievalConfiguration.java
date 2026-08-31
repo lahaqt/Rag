@@ -1,6 +1,9 @@
 package com.example.authoringcoach.retrieval;
 
 import com.example.authoringcoach.service.StorageRetrievalClient;
+import com.example.authoringcoach.service.LlmGateway;
+import com.example.authoringcoach.config.AuthoringProperties;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ThreadPoolExecutor;
 import org.springframework.context.annotation.Bean;
@@ -8,6 +11,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.web.client.RestClient;
 
 @Configuration
 public class RetrievalConfiguration {
@@ -19,6 +23,19 @@ public class RetrievalConfiguration {
     @Bean
     RetrievalScopePlanner retrievalScopePlanner(CourseRelationProvider relationProvider) {
         return new RetrievalScopePlanner(relationProvider);
+    }
+
+    @Bean
+    RetrievalQueryPlanner retrievalQueryPlanner(LlmGateway llmGateway, ObjectMapper objectMapper,
+                                                AuthoringProperties properties) {
+        return new LlmRetrievalQueryPlanner(llmGateway, objectMapper, properties.retrieval());
+    }
+
+    @Bean
+    CrossEncoderReranker crossEncoderReranker(AuthoringProperties properties, RestClient.Builder builder) {
+        return properties.reranker().enabled() && !properties.reranker().baseUrl().isBlank()
+                ? new HttpCrossEncoderReranker(properties.reranker(), builder)
+                : CrossEncoderReranker.disabled();
     }
 
     @Bean
@@ -41,8 +58,9 @@ public class RetrievalConfiguration {
     @Bean
     TieredCourseRetrievalService tieredCourseRetrievalService(
             CourseSearchGateway searchGateway,
+            CrossEncoderReranker reranker,
             @org.springframework.beans.factory.annotation.Qualifier("courseRetrievalExecutor") Executor executor
     ) {
-        return new TieredCourseRetrievalService(searchGateway, executor);
+        return new TieredCourseRetrievalService(searchGateway, reranker, executor);
     }
 }

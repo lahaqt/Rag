@@ -13,6 +13,8 @@ import com.example.authoringcoach.observability.AgentStageTracer;
 import com.example.authoringcoach.observability.TraceContextSnapshot;
 import com.example.authoringcoach.retrieval.RetrievalScopePlan;
 import com.example.authoringcoach.retrieval.RetrievalScopePlanner;
+import com.example.authoringcoach.retrieval.RetrievalQueryPlan;
+import com.example.authoringcoach.retrieval.RetrievalQueryPlanner;
 import com.example.authoringcoach.retrieval.TieredCourseRetrievalService;
 import com.example.authoringcoach.retrieval.TieredEvidence;
 import com.example.authoringcoach.retrieval.TieredRetrievalRequest;
@@ -61,6 +63,7 @@ public class AuthoringCoachService {
     private final AuthoringService authoringService;
     private final TieredCourseRetrievalService tieredRetrieval;
     private final RetrievalScopePlanner scopePlanner;
+    private final RetrievalQueryPlanner queryPlanner;
     private final LearningContextService learningContextService;
     private final LlmGateway llmGateway;
     private final ObjectMapper objectMapper;
@@ -75,6 +78,7 @@ public class AuthoringCoachService {
             AuthoringService authoringService,
             TieredCourseRetrievalService tieredRetrieval,
             RetrievalScopePlanner scopePlanner,
+            RetrievalQueryPlanner queryPlanner,
             LearningContextService learningContextService,
             LlmGateway llmGateway,
             ObjectMapper objectMapper,
@@ -85,6 +89,7 @@ public class AuthoringCoachService {
         this.authoringService = authoringService;
         this.tieredRetrieval = tieredRetrieval;
         this.scopePlanner = scopePlanner;
+        this.queryPlanner = queryPlanner;
         this.learningContextService = learningContextService;
         this.llmGateway = llmGateway;
         this.objectMapper = objectMapper;
@@ -115,7 +120,8 @@ public class AuthoringCoachService {
     ) {
         this(authoringService,
                 new TieredCourseRetrievalService(retrievalClient::search),
-                new RetrievalScopePlanner((courseId, query) -> List.of()), null,
+                new RetrievalScopePlanner((courseId, query) -> List.of()),
+                (query, outcomes) -> RetrievalQueryPlan.originalOnly(query), null,
                 llmGateway, objectMapper,
                 new AuthoringCoachSettings(2, 30, 6), null, null);
     }
@@ -187,6 +193,10 @@ public class AuthoringCoachService {
             context.scopePlan = scopePlanner.plan(context.course.id(), query(context.artifact, context.revision),
                     settings.evidenceLimit(), Math.min(3, settings.evidenceLimit()));
         }
+        if (context.queryPlan == null) {
+            context.queryPlan = queryPlanner.plan(query(context.artifact, context.revision), context.outcomes.stream()
+                    .map(outcome -> outcome.code() + " " + outcome.description()).toList());
+        }
         if (context.learningContext.isBlank() && learningContextService != null) {
             LearningContext.Snapshot snapshot = learningContextService.loadForReview(
                     context.userId, context.project.id(), context.project.learningOutcomeIds(), 6);
@@ -198,9 +208,9 @@ public class AuthoringCoachService {
         ReviewContext context = context(state);
         if (completedAtLeast(context, "evidence_retrieval")) return update(context);
         return traced(context, "evidence_retrieval", () -> {
-            String query = query(context.artifact, context.revision);
             TieredRetrievalResult result = tieredRetrieval.retrieve(new TieredRetrievalRequest(
-                    context.scopePlan, query, settings.evidenceLimit(), 0.0, "hybrid", true, 3));
+                    context.scopePlan, context.queryPlan, settings.evidenceLimit(), 0.0, "hybrid",
+                    context.queryPlan.variants().size() == 1, 3));
             Map<String, String> courseCodes = new LinkedHashMap<>();
             courseCodes.put(context.course.id(), context.course.code());
             authoringService.listRetrievalRelations(context.course.id()).forEach(relation ->
@@ -209,7 +219,7 @@ public class AuthoringCoachService {
             for (TieredEvidence match : result.evidence()) {
                 String excerpt = excerpt(match.content());
                 if (excerpt.isBlank()) continue;
-                evidence.add(new CourseEvidence(evidence.size() + 1, match.documentName(), match.fusedScore(), excerpt,
+                evidence.add(new CourseEvidence(evidence.size() + 1, match.documentName(), match.rankingScore(), excerpt,
                         courseCodes.getOrDefault(match.courseId(), "Approved related course"),
                         match.authority() == com.example.authoringcoach.retrieval.EvidenceAuthority.AUTHORITATIVE
                                 ? AuthoringDtos.EvidenceAuthority.AUTHORITATIVE
@@ -219,6 +229,8 @@ public class AuthoringCoachService {
             context.evidence = List.copyOf(evidence);
             context.retrievalSufficient = result.sufficient();
             context.relatedSearchFailures = result.failures().size();
+            context.rerankerApplied = result.rerankerApplied();
+            context.rerankerFailure = result.rerankerFailure();
             return update(context);
         });
     }
@@ -450,9 +462,12 @@ public class AuthoringCoachService {
             case "task_understanding" -> "artifactType=" + (context.artifact == null ? "unknown" : context.artifact.type())
                     + ", requiredDimensions=" + context.requiredDimensions.size();
             case "evidence_retrieval", "evidence_assessment" -> "evidenceCount=" + context.evidence.size()
+                    + ", queryVariantCount=" + (context.queryPlan == null ? 0 : context.queryPlan.variants().size())
                     + ", authoritativeEvidence=" + context.evidence.stream()
                     .filter(item -> item.authority() == AuthoringDtos.EvidenceAuthority.AUTHORITATIVE).count()
                     + ", relatedSearchFailures=" + context.relatedSearchFailures
+                    + ", rerankerApplied=" + context.rerankerApplied
+                    + ", rerankerFallback=" + !context.rerankerFailure.isBlank()
                     + ", materialsReady=" + context.materialsReady;
             case "tool_retrieval" -> "toolObservationCount=" + context.toolObservations.size();
             case "rubric_review", "reflection" -> "dimensionCount=" + context.dimensions.size()
@@ -484,6 +499,9 @@ public class AuthoringCoachService {
         state.put("retrievalSufficient", context.retrievalSufficient);
         state.put("learningContext", context.learningContext);
         state.put("retrievalScopePlan", context.scopePlan);
+        state.put("retrievalQueryPlan", context.queryPlan);
+        state.put("rerankerApplied", context.rerankerApplied);
+        state.put("rerankerFailure", context.rerankerFailure);
         state.put("reviewStatus", context.review == null ? "" : context.review.status().name());
         return state;
     }
@@ -505,6 +523,12 @@ public class AuthoringCoachService {
             try { context.scopePlan = objectMapper.convertValue(checkpoint.path("retrievalScopePlan"), RetrievalScopePlan.class); }
             catch (IllegalArgumentException ignored) { context.scopePlan = null; }
         }
+        if (checkpoint.path("retrievalQueryPlan").isObject()) {
+            try { context.queryPlan = objectMapper.convertValue(checkpoint.path("retrievalQueryPlan"), RetrievalQueryPlan.class); }
+            catch (IllegalArgumentException ignored) { context.queryPlan = null; }
+        }
+        context.rerankerApplied = checkpoint.path("rerankerApplied").asBoolean(false);
+        context.rerankerFailure = checkpoint.path("rerankerFailure").asText("");
     }
 
     private <T> List<T> convertList(JsonNode node, TypeReference<List<T>> type) {
@@ -638,6 +662,9 @@ public class AuthoringCoachService {
         private String reflectionHint = "";
         private String learningContext = "";
         private RetrievalScopePlan scopePlan;
+        private RetrievalQueryPlan queryPlan;
+        private boolean rerankerApplied;
+        private String rerankerFailure = "";
         private String completedPhase = "";
         private Review review;
 

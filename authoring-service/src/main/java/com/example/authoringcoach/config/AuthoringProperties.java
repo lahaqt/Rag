@@ -8,6 +8,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public record AuthoringProperties(
         Downstream downstream,
         Review review,
+        Retrieval retrieval,
+        Reranker reranker,
         Llm llm,
         Mcp mcp,
         ServiceClient serviceClient,
@@ -16,10 +18,34 @@ public record AuthoringProperties(
     public AuthoringProperties {
         downstream = downstream == null ? new Downstream(null, null) : downstream;
         review = review == null ? new Review(null, null, null, null) : review;
+        retrieval = retrieval == null ? new Retrieval(null, null, null, null) : retrieval;
+        reranker = reranker == null ? new Reranker(null, null, null, null, null, null) : reranker;
         llm = llm == null ? new Llm(null, null, null, null, null, null, null) : llm;
         mcp = mcp == null ? new Mcp(null, null, null) : mcp;
         serviceClient = serviceClient == null ? new ServiceClient(null, null, null, null) : serviceClient;
         cors = cors == null ? new Cors(null) : cors;
+    }
+
+    public record Retrieval(Boolean llmMultiQueryEnabled, Boolean hydeEnabled,
+                            Integer maxQueryVariants, Integer hydeMaxCharacters) {
+        public Retrieval {
+            llmMultiQueryEnabled = llmMultiQueryEnabled == null || llmMultiQueryEnabled;
+            hydeEnabled = hydeEnabled == null || hydeEnabled;
+            maxQueryVariants = maxQueryVariants == null ? 3 : Math.max(1, Math.min(maxQueryVariants, 4));
+            hydeMaxCharacters = hydeMaxCharacters == null ? 700 : Math.max(160, Math.min(hydeMaxCharacters, 1200));
+        }
+    }
+
+    public record Reranker(Boolean enabled, String baseUrl, String path, String model,
+                           String bearerToken, Integer timeoutSeconds) {
+        public Reranker {
+            baseUrl = baseUrl == null ? "" : baseUrl.strip();
+            path = blank(path) ? "/rerank" : path.strip();
+            model = model == null ? "" : model.strip();
+            bearerToken = bearerToken == null ? "" : bearerToken;
+            timeoutSeconds = timeoutSeconds == null ? 5 : Math.max(1, Math.min(timeoutSeconds, 30));
+            enabled = enabled != null ? enabled : !baseUrl.isBlank();
+        }
     }
 
     public record Downstream(String contentBaseUrl, Integer contentTimeoutSeconds) {
