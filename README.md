@@ -20,7 +20,7 @@ flowchart LR
 
 The browser never calls `content-service`. `authoring-service` owns identity, course and project data, immutable revisions, domain-specific Learning Context projections, review orchestration, configuration, audit, and the administrator facade. `content-service` owns course material ingestion and single-course hybrid retrieval and accepts only course-semantic internal requests.
 
-Reviews search the active course first. Only when its evidence is insufficient does Authoring expand through administrator-approved related-course, program, and school scopes. Weighted RRF and per-tier quotas keep the active course dominant; related-course material is explicitly `SUPPLEMENTAL` and cannot independently support technical-accuracy or MCQ-correctness scores.
+Reviews build bounded, learning-outcome-aware Multi-Query and HyDE search views from the run's immutable LLM snapshot. Content independently combines pgvector semantic recall with Elasticsearch BM25, while Authoring performs weighted RRF fusion across query views and optional Cross-Encoder reranking. Search starts in the active course and expands only when evidence is insufficient, following administrator-approved related-course, program, and school scopes. Authority weights, deduplication, per-tier quotas, and a six-item cap keep the active course dominant; broader-course material is explicitly `SUPPLEMENTAL` and cannot independently support technical-accuracy or MCQ-correctness scores. Query-planning or reranker failures degrade to the original query or weighted-RRF ordering without weakening course isolation.
 
 ## Modules
 
@@ -29,7 +29,7 @@ Reviews search the active course first. Only when its evidence is insufficient d
 | `authoring-service/` | `/api/v1` student API, `/api/v1/admin`, async review workers, StateGraph, model snapshots, MCP, audit |
 | `content-service/` | `/internal/v1/courses/{courseId}` material lifecycle and hybrid search |
 | `frontend/` | English React application split into `/app` and `/admin`, OIDC Authorization Code + PKCE |
-| `evaluation-service/` | Async review black-box client and offline authoring metrics with optional RAGAS |
+| `evaluation-service/` | Async review black-box client, authoring metrics, and retrieval ablation metrics with optional RAGAS |
 
 The root Maven reactor intentionally contains only the two production Java services.
 

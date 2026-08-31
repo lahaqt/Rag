@@ -18,6 +18,8 @@ Learning Context is not conversation history. Revision, completed-review, and ra
 
 Content continues to search exactly one `courseId` per request. Authoring builds an immutable plan from enabled administrator-approved relationships, searches `CURRENT` first, and expands progressively through `RELATED`, `PROGRAM`, and `SCHOOL`. Current-course evidence is `AUTHORITATIVE`; all broader sources are `SUPPLEMENTAL`.
 
+Each review also checkpoints a bounded retrieval query plan: the original student request, LLM Multi-Query views, and an optional search-only HyDE passage shaped by the selected learning outcomes. Content creates semantic and lexical candidates inside one course; Authoring fuses repeated hits with weighted RRF, optionally reranks a bounded pool with a Cross-Encoder, then applies authority weights, deduplication, scope quotas, and the global six-evidence limit. Generated HyDE text is never returned or cited as evidence. Planner and reranker failures fall back deterministically.
+
 ## Content lifecycle
 
 Course creation writes a provisioning outbox row in the same transaction. The worker provisions Content independently and records `PROVISIONING`, `READY`, or `FAILED`. Materials move through `UPLOADED`, `PARSING`, `INDEXING`, `READY`, `FAILED`, and `DELETED`; search only includes `READY` material.
